@@ -1,0 +1,15 @@
+[project]
+name = "comfyui-fbnodes"
+description = "Utility nodes for ComfyUI: video saving (H.264/H.265), universal switches, LoRA application, and animated latent preview."
+version = "1.0.0"
+license = "GPL-3.0"
+requires-python = ">=3.9"
+dependencies = ["av"]
+
+[project.urls]
+Repository = "https://github.com/FranckyB/ComfyUI-FBnodes"
+
+[tool.comfy]
+PublisherId = "franckyb"
+DisplayName = "ComfyUI-FBnodes"
+Icon = ""
