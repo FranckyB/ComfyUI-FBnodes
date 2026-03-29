@@ -11,6 +11,7 @@ from .nodes import (
     SwitchAny, SwitchAnyBool,
     PromptApplyLora,
     BetterImageLoader,
+    VACEClipJoiner,
     install_latent_preview_hook,
 )
 
@@ -26,6 +27,7 @@ NODE_CLASS_MAPPINGS = {
     "SwitchAnyBool": SwitchAnyBool,
     "PromptApplyLora": PromptApplyLora,
     "BetterImageLoader": BetterImageLoader,
+    "VACEClipJoiner": VACEClipJoiner,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -37,6 +39,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "SwitchAnyBool": "Switch Any (Boolean)",
     "PromptApplyLora": "Prompt Apply LoRA",
     "BetterImageLoader": "Better Image Loader",
+    "VACEClipJoiner": "VACE Clip Joiner",
 }
 
 WEB_DIRECTORY = "./js"
