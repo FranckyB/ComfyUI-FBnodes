@@ -15,7 +15,7 @@ If yuv444 is selected, will generate a preview clip, so it can still be seen in 
 - **Latent saving**: Optionally save the latent alongside the video for easy re-generation
 
 ### Better Image Loader:
-- **Lightweight Image/Video Loading**: Load images and video frames without metadata extraction or LoRA processing
+- **Image/Video Screenshot Loading**: Image loader, based on Prompt Extractor from [Prompt Manager](https://github.com/FranckyB/ComfyUI-Prompt-Manager)
 - **Input/Output Folder Switching**: Toggle between browsing your input or output folder directly from the node
 - **File Browser**: Same thumbnail browser as Prompt Extractor with subfolder navigation
 - **Video Frame Scrubbing**: Load any frame from a video using the frame position slider
@@ -24,7 +24,7 @@ If yuv444 is selected, will generate a preview clip, so it can still be seen in 
 - **Single IMAGE Output**: Outputs a single IMAGE tensor, ready to connect to any image input
 
 ### VACE Transition Builder
-Generate smooth AI-powered transitions between video clips using VACE conditioning and 2-stage sampling. Replaces a 132-node workflow with a single node featuring a built-in clip browser, drag-to-reorder list, and cached h265 intermediates for resumability.
+Generate smooth AI-powered transitions between video clips using VACE conditioning and 2-stage sampling. Replaces a complex workflow with a single node featuring a built-in clip browser, drag-to-reorder list, and cached h265 intermediates for resumability.
 
 - **File browser modal**: Browse input/output folders, multi-select clips, subfolder navigation
 - **Reorderable clip list**: Drag-to-reorder, enable/disable individual clips, hover thumbnails
@@ -34,6 +34,35 @@ Generate smooth AI-powered transitions between video clips using VACE conditioni
 - **Options node**: Connect a separate "VACE Transition Options" node to tune all parameters, or use sensible defaults
 
 Inspired by [__Bob__](https://civitai.com/user/__Bob__)'s [Wan VACE Clip Joiner workflow](https://civitai.com/models/2024299/wan-vace-clip-joiner-smooth-ai-video-transitions-for-wan-ltx-2-hunyuan-and-any-other-video-source) on CivitAI.
+
+[![VACE Transition Builder](docs/vace_transition_builder.png)](docs/vace_transition_builder.png)
+
+<details>
+<summary><strong>How to use VACE Transition Builder</strong></summary>
+
+#### Required Models
+
+You need **both** the high-noise and low-noise Wan 2.2 VACE models. Choose one format:
+
+**bf16 or fp8** (from Comfy-Org):
+- [`wan2.2_vace_i2v_high_noise_14B_bf16.safetensors`](https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/tree/main/split_files/diffusion_models)
+- [`wan2.2_vace_i2v_low_noise_14B_bf16.safetensors`](https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/tree/main/split_files/diffusion_models)
+
+or **GGUF** (from QuantStack):
+- [`Wan2.2-VACE-Fun-A14B-*.gguf`](https://huggingface.co/QuantStack/Wan2.2-VACE-Fun-A14B-GGUF/tree/main) (high + low noise variants)
+
+Place models in `/models/diffusion_models/` or '/models/unet' if GGUF
+
+#### Tips
+
+- Use a Wan 2.2 i2v‑distilled LoRA to lower the required step count.
+- **First run** generates and caches all transitions. Subsequent runs skip cached pairs.
+- **Delete Transitions** clears the cache so you can regenerate with different settings.
+- Without an **Options** node connected, the seed is random each run — just delete transitions and re-queue for a new result.
+- Connect a **VACE Transition Options** node to control context/replace frames, steps, sampler, crossfade, color matching, and more.
+- Disable clips in the list (uncheck) to skip them without removing.
+
+</details>
 
 ### Load Latent File
 Load a `.latent` file saved by Save Video H264/H265. Companion node for video+latent workflows.
