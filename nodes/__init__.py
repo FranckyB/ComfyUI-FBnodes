@@ -6,4 +6,4 @@ from .switch_any import SwitchAny, SwitchAnyBool
 from .prompt_apply_lora import PromptApplyLora
 from .latent_preview import install_latent_preview_hook
 from .better_image_loader import BetterImageLoader
-from .vace_transition_builder import FBVACETransitionBuilder, FBVACETransitionBuilderOptions
+from .vace_stitcher import VACEStitcher, VACEStitcher_Options

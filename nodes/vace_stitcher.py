@@ -348,7 +348,7 @@ def build_control_video_and_mask(
     return control_video, mask, total_frames
 
 
-class FBVACETransitionBuilderOptions:
+class VACEStitcher_Options:
     """Provides option overrides for the VACE Clip Joiner node."""
 
     @classmethod
@@ -415,7 +415,7 @@ class FBVACETransitionBuilderOptions:
     RETURN_NAMES = ("options",)
     FUNCTION = "execute"
     CATEGORY = "FBnodes"
-    DESCRIPTION = "Options for the VACE Clip Joiner node. Connect to the 'options' input."
+    DESCRIPTION = "Options for the VACE Stitcher node. Connect to the 'options' input."
 
     def execute(self, **kwargs):
         return (kwargs,)
@@ -440,7 +440,7 @@ _VACE_DEFAULTS = {
 }
 
 
-class FBVACETransitionBuilder:
+class VACEStitcher:
     """
     Loads video/latent clips, generates VACE transitions between
     consecutive clips, and stitches everything into one continuous output.

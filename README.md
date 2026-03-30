@@ -23,7 +23,7 @@ If yuv444 is selected, will generate a preview clip, so it can still be seen in 
 - **Image Preview**: Built-in preview with click-to-enlarge modal for images and videos
 - **Single IMAGE Output**: Outputs a single IMAGE tensor, ready to connect to any image input
 
-### VACE Transition Builder
+### VACE Stitcher
 Generate smooth AI-powered transitions between video clips using VACE conditioning and 2-stage sampling with a single node featuring a built-in clip browser, drag-to-reorder list, and cached h265 intermediates for resumability.
 
 - **File browser modal**: Browse input/output folders, multi-select clips, subfolder navigation
@@ -31,14 +31,14 @@ Generate smooth AI-powered transitions between video clips using VACE conditioni
 - **2-stage sampling**: High-noise + low-noise models for quality transitions
 - **Pixel-space stitching**: Crossfade with easing curves, optional color matching
 - **Cached transitions**: h265 yuv444p10le intermediates saved to temp — skip already-generated pairs on re-run
-- **Options node**: Connect a separate "VACE Transition Options" node to tune all parameters, or use sensible defaults
+- **Options node**: Connect a separate "VACE Stitcher Options" node to tune all parameters, or use sensible defaults
 
 Inspired by [__Bob__](https://civitai.com/user/__Bob__)'s [Wan VACE Clip Joiner workflow](https://civitai.com/models/2024299/wan-vace-clip-joiner-smooth-ai-video-transitions-for-wan-ltx-2-hunyuan-and-any-other-video-source) on CivitAI.
 
-[![VACE Transition Builder](docs/vace_transition_builder.png)](docs/vace_transition_builder.png)
+[![VACE Stitcher](docs/VACEStitcher.png)](docs/VACEStitcher.png)
 
 <details>
-<summary><strong>How to use VACE Transition Builder</strong></summary>
+<summary><strong>How to use VACE Stitcher</strong></summary>
 
 #### Required Models
 
@@ -58,7 +58,7 @@ Place models in `/models/diffusion_models/` or '/models/unet' if GGUF
 - **First run** generates and caches all transitions. Subsequent runs skip cached pairs.
 - **Delete Transitions** clears the cache so you can regenerate with different settings.
 - Without an **Options** node connected, the seed is random each run — just delete transitions and re-queue for a new result.
-- Connect a **VACE Transition Options** node to control context/replace frames, steps, sampler, crossfade, color matching, and more.
+- Connect a **VACE Stitcher Options** node to control context/replace frames, steps, sampler, crossfade, color matching, and more.
 - Disable clips in the list (uncheck) to skip them without removing.
 
 </details>
@@ -110,9 +110,13 @@ GPL-3.0
 
 ## Changelog
 
+### version 1.1.1
+- Renamed node from "VACE Transition Builder" to **VACE Stitcher**
+- Added Workflow example.
+
 ### version 1.1.0
-- Added **VACE Transition Builder** node — generates smooth AI transitions between video clips using VACE conditioning
-- Added **VACE Transition Options** node — optional parameter overrides for the transition builder
+- Added **VACE Stitcher** node — generates smooth AI transitions between video clips using VACE conditioning
+- Added **VACE Stitcher Options** node — optional parameter overrides for the stitcher
 - Credit to [__Bob__](https://civitai.com/user/__Bob__) for the [original workflow](https://civitai.com/models/2024299/wan-vace-clip-joiner-smooth-ai-video-transitions-for-wan-ltx-2-hunyuan-and-any-other-video-source)
 
 ### version 1.0.0

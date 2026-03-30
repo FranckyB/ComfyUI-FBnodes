@@ -376,10 +376,10 @@ function hideHoverThumbnail() {
 // ── Node extension ───────────────────────────────────────────────────────────
 
 app.registerExtension({
-    name: "FBnodes.FBVACETransitionBuilder",
+    name: "FBnodes.VACEStitcher",
 
     async beforeRegisterNodeDef(nodeType, nodeData, _app) {
-        if (nodeData.name !== "FBVACETransitionBuilder") return;
+        if (nodeData.name !== "VACEStitcher") return;
 
         const onNodeCreated = nodeType.prototype.onNodeCreated;
         nodeType.prototype.onNodeCreated = function () {
