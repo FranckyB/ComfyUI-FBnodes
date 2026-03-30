@@ -73,7 +73,7 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder) 
                 padding: 5px 12px;
                 cursor: pointer;
                 font-size: 12px;
-            ">Regenerate Cache</button>
+            ">\u267B\uFE0F Regenerate Cache</button>
             <button class="close-btn" style="
                 background: none;
                 border: none;

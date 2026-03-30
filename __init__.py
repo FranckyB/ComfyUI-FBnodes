@@ -2,7 +2,7 @@
 ComfyUI-FBnodes - Utility nodes for ComfyUI
 Video saving, universal switches, LoRA application, and animated latent preview.
 """
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 __author__ = "François Beaudry"
 __license__ = "GPL-3.0"
 
@@ -11,7 +11,8 @@ from .nodes import (
     SwitchAny, SwitchAnyBool,
     PromptApplyLora,
     BetterImageLoader,
-    VACEClipJoiner,
+    FBVACETransitionBuilder,
+    FBVACETransitionBuilderOptions,
     install_latent_preview_hook,
 )
 
@@ -27,7 +28,8 @@ NODE_CLASS_MAPPINGS = {
     "SwitchAnyBool": SwitchAnyBool,
     "PromptApplyLora": PromptApplyLora,
     "BetterImageLoader": BetterImageLoader,
-    "VACEClipJoiner": VACEClipJoiner,
+    "FBVACETransitionBuilder": FBVACETransitionBuilder,
+    "FBVACETransitionBuilderOptions": FBVACETransitionBuilderOptions,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -39,7 +41,8 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "SwitchAnyBool": "Switch Any (Boolean)",
     "PromptApplyLora": "Prompt Apply LoRA",
     "BetterImageLoader": "Better Image Loader",
-    "VACEClipJoiner": "VACE Clip Joiner",
+    "FBVACETransitionBuilder": "VACE Transition Builder",
+    "FBVACETransitionBuilderOptions": "VACE Transition Options",
 }
 
 WEB_DIRECTORY = "./js"

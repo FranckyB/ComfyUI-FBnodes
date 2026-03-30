@@ -1,34 +1,130 @@
 """
-VACE Clip Joiner Node
-Takes a directory of .latent files, generates VACE transitions between them,
-and stitches everything into a single continuous latent sequence.
+VACE Transition Builder Node
+Takes video clips (.mp4), generates VACE transitions between them,
+and stitches everything into a single continuous pixel sequence.
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
+import math
 import os
 import glob
+import logging
+import random
+import tempfile
+from concurrent.futures import ThreadPoolExecutor
+from fractions import Fraction
 import torch
-import safetensors.torch
+import numpy as np
+import av
 
 import comfy.sample
 import comfy.samplers
 import comfy.utils
 import comfy.model_management
 import comfy.model_sampling
-import comfy.latent_formats
-import node_helpers
 import folder_paths
+import node_helpers
+import server
 import latent_preview
 
 
-def load_latent_file(file_path: str) -> torch.Tensor:
-    """Load a .latent file and return the raw samples tensor."""
-    latent = safetensors.torch.load_file(file_path, device="cpu")
-    multiplier = 1.0
-    if "latent_format_version_0" not in latent:
-        multiplier = 1.0 / 0.18215
-    return latent["latent_tensor"].float() * multiplier
+def load_video_file(file_path: str) -> torch.Tensor:
+    """Load a video file and return pixel frames as (T, H, W, 3) float32 tensor in [0, 1]."""
+    frames = []
+    with av.open(file_path, mode='r') as container:
+        stream = container.streams.video[0]
+        stream.codec_context.thread_type = "AUTO"
+        for frame in container.decode(stream):
+            arr = frame.to_ndarray(format='rgb24')
+            frames.append(arr)
+    video = np.stack(frames, axis=0)  # (T, H, W, 3) uint8
+    return torch.from_numpy(video).float() / 255.0
+
+
+def save_video_444_10bit(file_path: str, pixels: torch.Tensor, fps: float = 24.0):
+    """Save pixel frames as h265 yuv444p10le MP4 for maximum quality intermediate storage."""
+    t, h, w, c = pixels.shape
+    with av.open(file_path, mode='w') as output:
+        stream = output.add_stream('libx265', rate=Fraction(round(fps * 1000), 1000))
+        stream.width = w
+        stream.height = h
+        stream.pix_fmt = 'yuv444p10le'
+        stream.options = {
+            'crf': '0',
+            'preset': 'fast',
+            'tag': 'hvc1',
+            'x265-params': 'log-level=error',
+        }
+        for i in range(t):
+            img = (pixels[i, :, :, :3] * 65535).clamp(0, 65535).to(torch.int16).cpu().numpy().astype('uint16')
+            frame = av.VideoFrame.from_ndarray(img, format='rgb48le')
+            frame = frame.reformat(format='yuv444p10le')
+            for packet in stream.encode(frame):
+                output.mux(packet)
+        for packet in stream.encode(None):
+            output.mux(packet)
+
+
+def _get_intermediates_dir(clip_files):
+    """Get a stable intermediates directory in temp based on the clip list hash."""
+    key_str = "|".join(os.path.abspath(f) for f in clip_files)
+    h = hashlib.md5(key_str.encode()).hexdigest()[:12]
+    temp_dir = folder_paths.get_temp_directory()
+    d = os.path.join(temp_dir, "_vace_transitions", h)
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _list_all_intermediates():
+    """List all intermediate transition directories in temp."""
+    temp_dir = folder_paths.get_temp_directory()
+    base = os.path.join(temp_dir, "_vace_transitions")
+    if not os.path.isdir(base):
+        return []
+    result = []
+    for name in os.listdir(base):
+        full = os.path.join(base, name)
+        if os.path.isdir(full):
+            mp4s = glob.glob(os.path.join(full, "*.mp4"))
+            result.append({"dir": full, "hash": name, "count": len(mp4s)})
+    return result
+
+
+# ---------------------------------------------------------------------------
+# API routes for VACE Clip Joiner
+# ---------------------------------------------------------------------------
+
+@server.PromptServer.instance.routes.post("/fbnodes/vace-delete-intermediates")
+async def vace_delete_intermediates(request):
+    """Delete all VACE transition intermediates from temp."""
+    import shutil
+    try:
+        temp_dir = folder_paths.get_temp_directory()
+        base = os.path.join(temp_dir, "_vace_transitions")
+        count = 0
+        if os.path.isdir(base):
+            for name in os.listdir(base):
+                full = os.path.join(base, name)
+                if os.path.isdir(full):
+                    shutil.rmtree(full, ignore_errors=True)
+                    count += 1
+        return server.web.json_response({"success": True, "deleted": count})
+    except Exception as e:
+        return server.web.json_response({"success": False, "error": str(e)}, status=500)
+
+
+@server.PromptServer.instance.routes.get("/fbnodes/vace-intermediates-info")
+async def vace_intermediates_info(request):
+    """Check if intermediates exist."""
+    try:
+        items = _list_all_intermediates()
+        total = sum(i["count"] for i in items)
+        return server.web.json_response({"exists": total > 0, "total_files": total, "dirs": len(items)})
+    except Exception as e:
+        return server.web.json_response({"exists": False, "total_files": 0, "error": str(e)})
 
 
 def apply_model_shift(model, shift: float):
@@ -44,12 +140,6 @@ def apply_model_shift(model, shift: float):
     model_sampling.set_parameters(shift=shift, multiplier=1000)
     m.add_object_patch("model_sampling", model_sampling)
     return m
-
-
-def encode_text(clip, text: str):
-    """Encode text using CLIP, returning conditioning."""
-    tokens = clip.tokenize(text)
-    return clip.encode_from_tokens_scheduled(tokens)
 
 
 def build_vace_conditioning(
@@ -201,89 +291,92 @@ def sample_two_stage(
     return {"samples": samples}
 
 
+def batched_vae_decode(vae, latent: torch.Tensor, frames_per_batch: int = 16) -> torch.Tensor:
+    """
+    Decode a latent tensor to pixel space in batches to manage memory.
+    latent: (1, 16, T, H, W) latent tensor
+    Returns: (N, H, W, 3) pixel tensor
+    """
+    total_latent_frames = latent.shape[2]
+    all_pixels = []
+
+    for start in range(0, total_latent_frames, frames_per_batch):
+        end = min(start + frames_per_batch, total_latent_frames)
+        batch_latent = latent[:, :, start:end, :, :]
+        pixels = vae.decode(batch_latent)
+        if pixels.ndim == 5:
+            pixels = pixels.squeeze(0)
+        all_pixels.append(pixels.cpu())
+        # Free GPU memory
+        del pixels
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    return torch.cat(all_pixels, dim=0)
+
+
 def build_control_video_and_mask(
-    frames_a: torch.Tensor, frames_b: torch.Tensor,
-    context_frames: int, new_frames: int,
+    context_a: torch.Tensor, context_b: torch.Tensor,
+    context_frames: int, replace_frames: int, new_frames: int,
 ):
     """
-    Build VACE control video and mask from two sets of pixel-space frames.
-    frames_a: context frames from end of clip A (N, H, W, 3)
-    frames_b: context frames from start of clip B (N, H, W, 3)
+    Build VACE control video and mask, matching WanVACEPrepBatch logic.
+    context_a: context frames from clip A (context_frames, H, W, 3)
+    context_b: context frames from clip B (context_frames, H, W, 3)
 
     Returns (control_video, control_mask, total_length)
     """
-    height, width, channels = frames_a.shape[1], frames_a.shape[2], frames_a.shape[3]
+    height, width, channels = context_a.shape[1], context_a.shape[2], context_a.shape[3]
 
-    # Wan generates 4n+1 frames, add 1 to ensure proper alignment
-    vace_count = new_frames + 1
+    # VACE generates replace zones + new frames + 1 alignment frame
+    vace_count = (replace_frames * 2) + new_frames + 1
 
     # Middle section: gray frames (unknown, to be generated)
     vace_frames = torch.full(
         (vace_count, height, width, channels), 0.5,
-        dtype=frames_a.dtype, device=frames_a.device,
+        dtype=context_a.dtype, device=context_a.device,
     )
 
-    # Concatenate: [context_A | unknown | context_B]
-    control_video = torch.cat([frames_a, vace_frames, frames_b], dim=0)
+    # Concatenate: [context_A | gray_zone | context_B]
+    control_video = torch.cat([context_a, vace_frames, context_b], dim=0)
 
     # Mask: 0 = keep (context), 1 = generate (middle)
     total_frames = control_video.shape[0]
-    mask = torch.zeros((total_frames, height, width), dtype=torch.float32, device=frames_a.device)
+    mask = torch.zeros((total_frames, height, width), dtype=torch.float32, device=context_a.device)
     mask[context_frames:context_frames + vace_count] = 1.0
 
     return control_video, mask, total_frames
 
 
-class VACEClipJoiner:
-    """
-    Loads .latent files from a directory, generates VACE transitions between
-    consecutive clips, and stitches everything into one continuous latent.
-    """
+class FBVACETransitionBuilderOptions:
+    """Provides option overrides for the VACE Clip Joiner node."""
 
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "model_high": ("MODEL", {
-                    "tooltip": "Model for high-noise sampling stage (first N steps). Connect LoRAs externally.",
-                }),
-                "model_low": ("MODEL", {
-                    "tooltip": "Model for low-noise sampling stage (remaining steps). Connect LoRAs externally.",
-                }),
-                "clip": ("CLIP", {}),
-                "vae": ("VAE", {}),
-                "latent_dir": ("STRING", {
-                    "default": "",
-                    "tooltip": "Directory containing .latent files (sorted alphabetically).",
-                }),
-                "positive_prompt": ("STRING", {
-                    "default": "",
-                    "multiline": True,
-                    "tooltip": "Positive text prompt for VACE generation.",
-                }),
-                "negative_prompt": ("STRING", {
-                    "default": "",
-                    "multiline": True,
-                    "tooltip": "Negative text prompt for VACE generation.",
-                }),
                 "context_frames": ("INT", {
-                    "default": 8, "min": 4, "max": 120, "step": 4,
-                    "tooltip": "Reference frames from each clip edge used as VACE context.",
+                    "default": 8, "min": 4, "max": 40, "step": 4,
+                    "tooltip": "Reference frames from each clip edge used as VACE context (kept unchanged).",
+                }),
+                "replace_frames": ("INT", {
+                    "default": 8, "min": 0, "max": 40, "step": 4,
+                    "tooltip": "Frames to regenerate at each clip edge for seamless blending.",
                 }),
                 "new_frames": ("INT", {
-                    "default": 8, "min": 0, "max": 240, "step": 4,
-                    "tooltip": "New transition frames to generate between clips.",
+                    "default": 0, "min": 0, "max": 40, "step": 4,
+                    "tooltip": "Brand new transition frames to generate between clips.",
                 }),
                 "steps_high": ("INT", {
-                    "default": 4, "min": 1, "max": 100,
+                    "default": 4, "min": 1, "max": 20,
                     "tooltip": "Sampling steps for high-noise stage.",
                 }),
                 "steps_low": ("INT", {
-                    "default": 4, "min": 1, "max": 100,
+                    "default": 4, "min": 1, "max": 20,
                     "tooltip": "Sampling steps for low-noise stage.",
                 }),
                 "cfg": ("FLOAT", {
-                    "default": 1.0, "min": 0.0, "max": 100.0, "step": 0.1,
+                    "default": 1.0, "min": 0.0, "max": 10.0, "step": 0.1,
                     "tooltip": "Classifier-free guidance scale.",
                 }),
                 "sampler_name": (comfy.samplers.KSampler.SAMPLERS, {
@@ -292,10 +385,6 @@ class VACEClipJoiner:
                 "scheduler": (comfy.samplers.KSampler.SCHEDULERS, {
                     "default": "simple",
                 }),
-                "shift": ("FLOAT", {
-                    "default": 5.0, "min": 0.0, "max": 100.0, "step": 0.01,
-                    "tooltip": "ModelSamplingSD3 shift value applied to both models.",
-                }),
                 "seed": ("INT", {
                     "default": 0, "min": 0, "max": 0xFFFFFFFFFFFFFFFF,
                 }),
@@ -303,129 +392,259 @@ class VACEClipJoiner:
                     "default": False,
                     "tooltip": "Generate a transition from last clip back to first clip.",
                 }),
-                "save_intermediates": ("BOOLEAN", {
-                    "default": True,
-                    "tooltip": "Save transition latents to a subfolder for resumability.",
-                }),
                 "vace_strength": ("FLOAT", {
                     "default": 1.0, "min": 0.0, "max": 10.0, "step": 0.01,
                     "tooltip": "VACE conditioning strength.",
                 }),
+                "crossfade": ("BOOLEAN", {
+                    "default": True,
+                    "tooltip": "Crossfade over context_frames between original clips and VACE transitions.",
+                }),
+                "color_match": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Color match VACE transitions to original clips using MKL method.",
+                }),
+                "decode_batch_size": ("INT", {
+                    "default": 160, "min": 1, "max": 640, "step": 1,
+                    "tooltip": "Frames per VAE decode batch. Lower = less memory, slower.",
+                }),
             },
         }
 
-    RETURN_TYPES = ("LATENT",)
-    RETURN_NAMES = ("latent",)
+    RETURN_TYPES = ("VACE_OPTIONS",)
+    RETURN_NAMES = ("options",)
+    FUNCTION = "execute"
+    CATEGORY = "FBnodes"
+    DESCRIPTION = "Options for the VACE Clip Joiner node. Connect to the 'options' input."
+
+    def execute(self, **kwargs):
+        return (kwargs,)
+
+
+# Default options used when no VACEClipJoinerOptions node is connected
+_VACE_DEFAULTS = {
+    "context_frames": 8,
+    "replace_frames": 8,
+    "new_frames": 0,
+    "steps_high": 4,
+    "steps_low": 4,
+    "cfg": 1.0,
+    "sampler_name": "euler",
+    "scheduler": "simple",
+    "seed": 0,
+    "seamless_loop": False,
+    "vace_strength": 1.0,
+    "crossfade": True,
+    "color_match": False,
+    "decode_batch_size": 160,
+}
+
+
+class FBVACETransitionBuilder:
+    """
+    Loads video/latent clips, generates VACE transitions between
+    consecutive clips, and stitches everything into one continuous output.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "model_high": ("MODEL", {
+                    "tooltip": "Model for high-noise sampling stage (first N steps).",
+                }),
+                "model_low": ("MODEL", {
+                    "tooltip": "Model for low-noise sampling stage (remaining steps).",
+                }),
+                "positive": ("CONDITIONING", {
+                    "tooltip": "Positive conditioning from a CLIP Text Encode node.",
+                }),
+                "negative": ("CONDITIONING", {
+                    "tooltip": "Negative conditioning from a CLIP Text Encode node.",
+                }),
+                "vae": ("VAE", {}),
+                "source_folder": (["input", "output"], {
+                    "tooltip": "Base folder for clip files (ComfyUI input or output directory).",
+                }),
+                "clip_list": ("STRING", {
+                    "default": "[]",
+                    "multiline": False,
+                    "tooltip": "JSON list of clips (managed by the UI browser widget).",
+                }),
+            },
+            "optional": {
+                "options": ("VACE_OPTIONS", {
+                    "tooltip": "Connect a VACE Clip Joiner Options node to override defaults.",
+                }),
+            },
+        }
+
+    RETURN_TYPES = ("IMAGE",)
+    RETURN_NAMES = ("images",)
     FUNCTION = "execute"
     OUTPUT_NODE = True
     CATEGORY = "FBnodes"
     DESCRIPTION = (
-        "Loads .latent files from a directory, generates VACE transitions between "
-        "consecutive clips using 2-stage sampling, and outputs a single stitched latent. "
-        "VAE decode the output to get the final video."
+        "Select video/latent clips via browser, reorder them, and generate VACE "
+        "transitions between consecutive clips using 2-stage sampling. "
+        "Intermediates saved to temp for resumability."
     )
+
+    @classmethod
+    def VALIDATE_INPUTS(cls, **kwargs):
+        return True
+
+    @classmethod
+    def IS_CHANGED(cls, **kwargs):
+        return float("nan")
 
     def execute(
         self,
-        model_high, model_low, clip, vae,
-        latent_dir, positive_prompt, negative_prompt,
-        context_frames, new_frames,
-        steps_high, steps_low, cfg, sampler_name, scheduler,
-        shift, seed, seamless_loop, save_intermediates, vace_strength,
+        model_high, model_low, positive, negative, vae,
+        source_folder, clip_list,
+        options=None,
     ):
-        # ── 1. Discover and load latent files ──
-        if not os.path.isdir(latent_dir):
-            raise FileNotFoundError(f"Latent directory not found: {latent_dir}")
+        # ── Merge options with defaults ──
+        opts = dict(_VACE_DEFAULTS)
+        if options is not None:
+            opts.update(options)
+        # Random seed when no Options node is connected (seed stays at 0)
+        if opts["seed"] == 0:
+            opts["seed"] = random.randint(1, 0xFFFFFFFFFFFFFFFF)
 
-        latent_files = sorted(glob.glob(os.path.join(latent_dir, "*.latent")))
-        if len(latent_files) < 2:
-            raise ValueError(f"Need at least 2 .latent files, found {len(latent_files)} in {latent_dir}")
+        context_frames = opts["context_frames"]
+        replace_frames = opts["replace_frames"]
+        new_frames = opts["new_frames"]
+        steps_high = opts["steps_high"]
+        steps_low = opts["steps_low"]
+        cfg = opts["cfg"]
+        sampler_name = opts["sampler_name"]
+        scheduler = opts["scheduler"]
+        seed = opts["seed"]
+        seamless_loop = opts["seamless_loop"]
+        vace_strength = opts["vace_strength"]
+        crossfade = opts["crossfade"]
+        color_match = opts["color_match"]
+        decode_batch_size = opts["decode_batch_size"]
 
-        print(f"[VACE Clip Joiner] Found {len(latent_files)} latent files")
-        latents = []
-        for f in latent_files:
-            print(f"[VACE Clip Joiner]   Loading: {os.path.basename(f)}")
-            latents.append(load_latent_file(f))
+        # ── 1. Parse clip list and resolve paths ──
+        try:
+            entries = json.loads(clip_list) if isinstance(clip_list, str) else clip_list
+        except (json.JSONDecodeError, TypeError):
+            entries = []
 
-        # ── 2. Apply shift to both models ──
-        model_high_shifted = apply_model_shift(model_high, shift)
-        model_low_shifted = apply_model_shift(model_low, shift)
+        if not isinstance(entries, list) or len(entries) < 2:
+            raise ValueError("Need at least 2 enabled clips. Use the Browse button to add clips.")
 
-        # ── 3. Encode prompts ──
-        positive_cond = encode_text(clip, positive_prompt)
-        negative_cond = encode_text(clip, negative_prompt)
+        # Filter to enabled clips only
+        enabled = [e for e in entries if e.get("enabled", True)]
+        if len(enabled) < 2:
+            raise ValueError(f"Need at least 2 enabled clips, got {len(enabled)}.")
+
+        # Resolve file paths
+        if source_folder == "output":
+            base_dir = folder_paths.get_output_directory()
+        else:
+            base_dir = folder_paths.get_input_directory()
+
+        clip_files = []
+        for entry in enabled:
+            rel = entry.get("file", "")
+            full = os.path.join(base_dir, rel) if not os.path.isabs(rel) else rel
+            if not os.path.isfile(full):
+                raise FileNotFoundError(f"Clip not found: {full}")
+            clip_files.append(full)
+
+        # Determine mode from file extensions
+        ext0 = os.path.splitext(clip_files[0])[1].lower()
+        if ext0 not in ('.mp4', '.webm', '.mov', '.avi'):
+            raise ValueError(f"Unsupported file type: {ext0}. Only video files (.mp4, .webm, .mov, .avi) are supported.")
+
+        print(f"[VACE Transition Builder] {len(clip_files)} clips")
+
+        # Load clips
+        clip_pixels = []
+        for f in clip_files:
+            print(f"[VACE Transition Builder]   Loading: {os.path.basename(f)}")
+            clip_pixels.append(load_video_file(f))
+
+        # ── 2. Use models directly (user applies shift externally if needed) ──
+        model_high_shifted = model_high
+        model_low_shifted = model_low
+
+        # ── 3. Use provided conditioning directly ──
+        positive_cond = positive
+        negative_cond = negative
 
         # ── 4. Build transition pairs ──
-        num_clips = len(latents)
+        num_clips = len(clip_files)
         pairs = []
         for i in range(num_clips - 1):
             pairs.append((i, i + 1))
         if seamless_loop:
             pairs.append((num_clips - 1, 0))
 
-        print(f"[VACE Clip Joiner] Generating {len(pairs)} transitions"
+        print(f"[VACE Transition Builder] Generating {len(pairs)} transitions"
               f"{' (seamless loop)' if seamless_loop else ''}")
 
-        # ── 5. Intermediates directory ──
-        intermediates_dir = None
-        if save_intermediates:
-            intermediates_dir = os.path.join(latent_dir, "_vace_transitions")
-            os.makedirs(intermediates_dir, exist_ok=True)
+        # ── 5. Intermediates directory (always save to temp) ──
+        intermediates_dir = _get_intermediates_dir(clip_files)
 
-        # ── 6. Determine clip dimensions from first latent ──
-        # Latent shape: (1, 16, T_latent, H_latent, W_latent)
-        sample_latent = latents[0]
-        _, _, _, h_latent, w_latent = sample_latent.shape
-        width = w_latent * 8
-        height = h_latent * 8
+        # ── 6. Determine clip dimensions ──
+        height = clip_pixels[0].shape[1]
+        width = clip_pixels[0].shape[2]
 
-        # Context frames in latent space: 4 pixel frames = 1 latent frame (roughly)
-        # But we need pixel-space context for VACE, so decode from latent
-        context_latent_frames = ((context_frames - 1) // 4) + 1
+        # Compute how many pixel frames we need from each clip edge
+        required_pixels = context_frames + replace_frames
+        print(f"[VACE Transition Builder] Context={context_frames}, Replace={replace_frames}, "
+              f"Required pixels per edge={required_pixels}")
+
+        # Convert pixel-frame batch size to latent frames for VAE decode
+        decode_latent_batch = max(1, ((decode_batch_size - 1) // 4) + 1)
 
         # ── 7. Generate all transitions ──
-        transition_latents = {}
+        transition_pixels = {}
         pbar = comfy.utils.ProgressBar(len(pairs))
 
         for pair_idx, (idx_a, idx_b) in enumerate(pairs):
             pair_key = f"{idx_a:03d}_to_{idx_b:03d}"
-            print(f"[VACE Clip Joiner] Transition {pair_idx + 1}/{len(pairs)}: "
+            print(f"[VACE Transition Builder] Transition {pair_idx + 1}/{len(pairs)}: "
                   f"clip {idx_a} -> clip {idx_b}")
 
-            # Check for cached intermediate
+            # Check for cached intermediate (MP4)
             if intermediates_dir:
-                cached_path = os.path.join(intermediates_dir, f"transition_{pair_key}.latent")
+                cached_path = os.path.join(intermediates_dir, f"transition_{pair_key}.mp4")
                 if os.path.exists(cached_path):
-                    print(f"[VACE Clip Joiner]   Using cached transition: {cached_path}")
-                    transition_latents[pair_key] = load_latent_file(cached_path)
+                    print(f"[VACE Transition Builder]   Using cached transition: {cached_path}")
+                    transition_pixels[pair_key] = load_video_file(cached_path)
                     pbar.update(1)
                     continue
 
-            latent_a = latents[idx_a]  # (1, 16, T, H, W)
-            latent_b = latents[idx_b]
+            # Use the already-decoded pixel frames directly (no second VAE decode!)
+            pixels_a = clip_pixels[idx_a]  # (T, H, W, 3)
+            pixels_b = clip_pixels[idx_b]
 
-            # Extract context frames from latent space (end of A, start of B)
-            context_a_latent = latent_a[:, :, -context_latent_frames:, :, :]
-            context_b_latent = latent_b[:, :, :context_latent_frames, :, :]
+            # Extract edge regions from pixel space
+            edge_a = pixels_a[-required_pixels:]  # last required_pixels from A
+            edge_b = pixels_b[:required_pixels]   # first required_pixels from B
 
-            # Decode context frames to pixel space for VACE conditioning
-            # VAE decode may return 5D (1, T, H, W, 3) for video — squeeze batch dim
-            print(f"[VACE Clip Joiner]   Decoding {context_latent_frames * 2} context latent frames...")
-            context_a_pixels = vae.decode(context_a_latent)
-            context_b_pixels = vae.decode(context_b_latent)
+            # Extract context frames offset by replace_frames (matching WanVACEPrepBatch)
+            if replace_frames > 0:
+                context_a = edge_a[:context_frames]   # before the replace zone
+                context_b = edge_b[replace_frames:]   # after the replace zone
+            else:
+                context_a = edge_a[-context_frames:]  # last context_frames
+                context_b = edge_b[:context_frames]   # first context_frames
 
-            # Ensure 4D (T, H, W, 3) — squeeze batch dimension if present
-            if context_a_pixels.ndim == 5:
-                context_a_pixels = context_a_pixels.squeeze(0)
-            if context_b_pixels.ndim == 5:
-                context_b_pixels = context_b_pixels.squeeze(0)
-
-            print(f"[VACE Clip Joiner]   Decoded shapes: A={context_a_pixels.shape}, B={context_b_pixels.shape}")
+            print(f"[VACE Transition Builder]   Edge A: {edge_a.shape[0]}px, "
+                  f"Edge B: {edge_b.shape[0]}px, "
+                  f"Context A: {context_a.shape[0]}px, Context B: {context_b.shape[0]}px")
 
             # Build VACE control video and mask
             control_video, control_mask, total_length = build_control_video_and_mask(
-                context_a_pixels, context_b_pixels,
-                context_frames=context_a_pixels.shape[0],
+                context_a, context_b,
+                context_frames=context_frames,
+                replace_frames=replace_frames,
                 new_frames=new_frames,
             )
 
@@ -438,7 +657,7 @@ class VACEClipJoiner:
             )
 
             # Two-stage sampling
-            print(f"[VACE Clip Joiner]   Sampling ({steps_high}+{steps_low} steps)...")
+            print(f"[VACE Transition Builder]   Sampling ({steps_high}+{steps_low} steps)...")
             result_latent = sample_two_stage(
                 model_high_shifted, model_low_shifted,
                 vace_positive, vace_negative, vace_latent,
@@ -451,80 +670,149 @@ class VACEClipJoiner:
             if trim_latent > 0:
                 result_latent["samples"] = result_latent["samples"][:, :, trim_latent:]
 
-            # The result contains [context_A_regen | transition | context_B_regen]
-            # We only want the generated middle portion (new_frames)
-            # Context frames in latent: context_latent_frames on each side
-            result_samples = result_latent["samples"]
-            total_latent_len = result_samples.shape[2]
+            # Decode transition to pixels immediately
+            transition_samples = result_latent["samples"]
+            print(f"[VACE Transition Builder]   Decoding transition {pair_key}...")
+            pixels = batched_vae_decode(vae, transition_samples, decode_latent_batch)
 
-            # The new transition frames in latent space
-            new_latent_frames = ((new_frames - 1) // 4) + 1 if new_frames > 0 else 0
+            transition_pixels[pair_key] = pixels
 
-            # Extract just the transition portion (skip context on both sides)
-            if new_latent_frames > 0:
-                start = context_latent_frames
-                end = start + new_latent_frames
-                # Clamp to available range
-                end = min(end, total_latent_len - context_latent_frames)
-                transition_samples = result_samples[:, :, start:end, :, :]
-            else:
-                # No new frames, just a direct stitch (empty transition)
-                transition_samples = result_samples[:, :, 0:0, :, :]
-
-            transition_latents[pair_key] = transition_samples
-
-            # Save intermediate
+            # Save intermediate as h265 yuv444 10-bit MP4
             if intermediates_dir:
-                save_path = os.path.join(intermediates_dir, f"transition_{pair_key}.latent")
-                save_data = {
-                    "latent_tensor": transition_samples.contiguous(),
-                    "latent_format_version_0": torch.tensor([]),
-                }
-                comfy.utils.save_torch_file(save_data, save_path)
-                print(f"[VACE Clip Joiner]   Saved: {save_path}")
+                save_path = os.path.join(intermediates_dir, f"transition_{pair_key}.mp4")
+                save_video_444_10bit(save_path, pixels)
+                print(f"[VACE Transition Builder]   Saved: {save_path}")
 
             pbar.update(1)
 
-        # ── 8. Stitch everything together ──
-        print(f"[VACE Clip Joiner] Stitching {num_clips} clips + {len(pairs)} transitions...")
+        # ── 8. Stitch in pixel space ──
+        # clip_pixels were already decoded in step 6 (same pixels used for VACE context).
+        # Transitions are already decoded (step 7). Apply color matching now.
+        print("[VACE Transition Builder] Stitching in pixel space...")
 
-        parts = []
+        # Apply color matching to all transition pixels
+        if color_match:
+            for pair_key in list(transition_pixels.keys()):
+                pixels = transition_pixels[pair_key]
+                try:
+                    from color_matcher import ColorMatcher
+                    # Parse pair key to get clip indices
+                    parts = pair_key.split("_to_")
+                    idx_a, idx_b = int(parts[0]), int(parts[1])
+                    # Use last frame of A as reference (matching KJNodes pattern: float32, no uint8)
+                    ref_np = clip_pixels[idx_a][-1].numpy()  # (H, W, 3) float32
+
+                    pixels_np = pixels.cpu().numpy()
+                    n_frames = pixels_np.shape[0]
+                    color_strength = 0.7
+
+                    def match_frame(i):
+                        try:
+                            cm = ColorMatcher()  # new instance per thread (thread safety)
+                            image_result = cm.transfer(src=pixels_np[i], ref=ref_np, method='mkl')
+                            if color_strength != 1.0:
+                                image_result = pixels_np[i] + color_strength * (image_result - pixels_np[i])
+                            return torch.from_numpy(image_result)
+                        except Exception as e:
+                            logging.warning(f"Color match frame {i} error: {e}")
+                            return pixels[i]
+
+                    max_threads = min(os.cpu_count() or 1, n_frames)
+                    with ThreadPoolExecutor(max_workers=max_threads) as executor:
+                        matched = list(executor.map(match_frame, range(n_frames)))
+
+                    transition_pixels[pair_key] = torch.stack(matched, dim=0).to(torch.float32).clamp_(0, 1)
+                    print(f"[VACE Transition Builder]   Color matched {pair_key} (mkl, strength=0.7)")
+                except ImportError:
+                    print("[VACE Transition Builder]   WARNING: color-matcher not installed. pip install color-matcher")
+                except Exception as e:
+                    print(f"[VACE Transition Builder]   WARNING: Color match failed for {pair_key}: {e}")
+
+        # Stitch pattern (matching the workflow):
+        #   [clip_A trimmed] [FULL VACE output] [clip_B trimmed] [FULL VACE output] ...
+        #
+        # Without crossfade:
+        #   clip_A is trimmed by required_pixels (context+replace) from its trailing edge
+        #   clip_B is trimmed by required_pixels from its leading edge
+        #   The full VACE output bridges the gap: [context_A | generated | context_B]
+        #
+        # With crossfade:
+        #   clip_A is trimmed by only replace_frames from its trailing edge (keeps context zone)
+        #   The VACE output's leading context_frames overlap with clip_A's trailing context zone
+        #   We crossfade over that overlap (context_frames long)
+        #   Same on the B side: VACE output's trailing context_frames overlap with clip_B's leading context zone
+        #
+        # This matches the workflow exactly:
+        #   WanVACEPrepBatch outputs start_images = clip[:-required_frames] and end_images = clip[required_frames:]
+        #   The full VACE output (including context) is placed between them
+
+        segments = []
         for i in range(num_clips):
-            clip_latent = latents[i]  # (1, 16, T, H, W)
+            cp = clip_pixels[i]  # (T, H, W, 3)
+            t_len = cp.shape[0]
 
-            if seamless_loop:
-                # In loop mode, trim context from both ends of every clip
-                # (each end participates in a transition)
-                start_trim = context_latent_frames if i > 0 or seamless_loop else 0
-                end_trim = context_latent_frames if i < num_clips - 1 or seamless_loop else 0
-            else:
-                # Trim context from ends that participate in transitions
-                start_trim = context_latent_frames if i > 0 else 0
-                end_trim = context_latent_frames if i < num_clips - 1 else 0
+            # Determine which edges participate in transitions
+            has_prev_transition = (i > 0) or seamless_loop
+            has_next_transition = (i < num_clips - 1) or seamless_loop
 
-            t_len = clip_latent.shape[2]
-            trimmed = clip_latent[:, :, start_trim:t_len - end_trim if end_trim > 0 else t_len, :, :]
-            parts.append(trimmed)
+            # Trim required_pixels (context+replace) from transition edges
+            start_trim = required_pixels if has_prev_transition else 0
+            end_trim = required_pixels if has_next_transition else 0
 
-            # Add transition after this clip (if exists)
+            end_idx = t_len - end_trim if end_trim > 0 else t_len
+            trimmed = cp[start_trim:end_idx]
+            segments.append(trimmed)
+
+            # Build and insert the transition after this clip
             if i < num_clips - 1:
                 pair_key = f"{i:03d}_to_{i + 1:03d}"
-                trans = transition_latents[pair_key]
-                if trans.shape[2] > 0:
-                    parts.append(trans)
+            elif seamless_loop and i == num_clips - 1:
+                pair_key = f"{num_clips - 1:03d}_to_000"
+            else:
+                pair_key = None
 
-        # Add loop transition at the end
-        if seamless_loop:
-            pair_key = f"{num_clips - 1:03d}_to_000"
-            trans = transition_latents[pair_key]
-            if trans.shape[2] > 0:
-                parts.append(trans)
+            if pair_key and pair_key in transition_pixels:
+                trans_px = transition_pixels[pair_key]
+                t_trans = trans_px.shape[0]
+                cf = context_frames
 
-        # Concatenate along time dimension
-        stitched = torch.cat(parts, dim=2)
-        total_frames_latent = stitched.shape[2]
-        total_frames_pixel = (total_frames_latent - 1) * 4 + 1
-        print(f"[VACE Clip Joiner] Final latent: {stitched.shape} "
-              f"(~{total_frames_pixel} pixel frames)")
+                if crossfade and cf > 0:
+                    # Matching the workflow: split VACE output into 3 parts
+                    #   [vace_ctx_A (cf)] [vace_middle] [vace_ctx_B (cf)]
+                    # Get original context frames from each clip edge
+                    parts = pair_key.split("_to_")
+                    idx_a, idx_b = int(parts[0]), int(parts[1])
+                    original_ctx_a = clip_pixels[idx_a][-(cf + replace_frames):-(replace_frames)] if replace_frames > 0 else clip_pixels[idx_a][-cf:]
+                    original_ctx_b = clip_pixels[idx_b][replace_frames:replace_frames + cf] if replace_frames > 0 else clip_pixels[idx_b][:cf]
 
-        return ({"samples": stitched},)
+                    vace_ctx_a = trans_px[:cf]
+                    vace_middle = trans_px[cf:t_trans - cf]
+                    vace_ctx_b = trans_px[t_trans - cf:]
+
+                    # Cross Fade: video1 → VACE (ease_in: original snaps to VACE)
+                    t_a = torch.linspace(0.0, 1.0, cf, device=trans_px.device)
+                    alpha_a = (t_a * t_a).view(-1, 1, 1, 1)  # ease_in = t²
+                    crossfade_a = (1.0 - alpha_a) * original_ctx_a + alpha_a * vace_ctx_a
+
+                    # Cross Fade: VACE → video2 (ease_in: VACE snaps to original)
+                    t_b = torch.linspace(0.0, 1.0, cf, device=trans_px.device)
+                    alpha_b = (t_b * t_b).view(-1, 1, 1, 1)  # ease_in = t²
+                    crossfade_b = (1.0 - alpha_b) * vace_ctx_b + alpha_b * original_ctx_b
+
+                    # Assemble: [crossfade_A | vace_middle | crossfade_B]
+                    segments.append(crossfade_a)
+                    if vace_middle.shape[0] > 0:
+                        segments.append(vace_middle)
+                    segments.append(crossfade_b)
+                else:
+                    # No crossfade: use full VACE output as-is
+                    segments.append(trans_px)
+
+        # Concatenate all segments, filtering out empties
+        segments = [s for s in segments if s.shape[0] > 0]
+        stitched_pixels = torch.cat(segments, dim=0)
+        total_pixel_frames = stitched_pixels.shape[0]
+        print(f"[VACE Transition Builder] Final output: {stitched_pixels.shape} "
+              f"({total_pixel_frames} pixel frames)")
+
+        return (stitched_pixels,)

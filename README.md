@@ -23,6 +23,18 @@ If yuv444 is selected, will generate a preview clip, so it can still be seen in 
 - **Image Preview**: Built-in preview with click-to-enlarge modal for images and videos
 - **Single IMAGE Output**: Outputs a single IMAGE tensor, ready to connect to any image input
 
+### VACE Transition Builder
+Generate smooth AI-powered transitions between video clips using VACE conditioning and 2-stage sampling. Replaces a 132-node workflow with a single node featuring a built-in clip browser, drag-to-reorder list, and cached h265 intermediates for resumability.
+
+- **File browser modal**: Browse input/output folders, multi-select clips, subfolder navigation
+- **Reorderable clip list**: Drag-to-reorder, enable/disable individual clips, hover thumbnails
+- **2-stage sampling**: High-noise + low-noise models for quality transitions
+- **Pixel-space stitching**: Crossfade with easing curves, optional color matching
+- **Cached transitions**: h265 yuv444p10le intermediates saved to temp — skip already-generated pairs on re-run
+- **Options node**: Connect a separate "VACE Transition Options" node to tune all parameters, or use sensible defaults
+
+Inspired by [__Bob__](https://civitai.com/user/__Bob__)'s [Wan VACE Clip Joiner workflow](https://civitai.com/models/2024299/wan-vace-clip-joiner-smooth-ai-video-transitions-for-wan-ltx-2-hunyuan-and-any-other-video-source) on CivitAI.
+
 ### Load Latent File
 Load a `.latent` file saved by Save Video H264/H265. Companion node for video+latent workflows.
 
@@ -69,6 +81,11 @@ pip install -r ComfyUI-FBnodes/requirements.txt
 GPL-3.0
 
 ## Changelog
+
+### version 1.1.0
+- Added **VACE Transition Builder** node — generates smooth AI transitions between video clips using VACE conditioning
+- Added **VACE Transition Options** node — optional parameter overrides for the transition builder
+- Credit to [__Bob__](https://civitai.com/user/__Bob__) for the [original workflow](https://civitai.com/models/2024299/wan-vace-clip-joiner-smooth-ai-video-transitions-for-wan-ltx-2-hunyuan-and-any-other-video-source)
 
 ### version 1.0.0
 - Initial release
