@@ -535,7 +535,7 @@ class VACEStitcher:
                 }),
                 "vae": ("VAE", {}),
                 "source_folder": (["input", "output"], {
-                    "tooltip": "Base folder for clip files (ComfyUI input or output directory).",
+                    "tooltip": "Select which folder to browse.",
                 }),
                 "clip_list": ("STRING", {
                     "default": "[]",
@@ -612,16 +612,19 @@ class VACEStitcher:
         if len(enabled) < 2:
             raise ValueError(f"Need at least 2 enabled clips, got {len(enabled)}.")
 
-        # Resolve file paths
-        if source_folder == "output":
-            base_dir = folder_paths.get_output_directory()
-        else:
-            base_dir = folder_paths.get_input_directory()
-
+        # Resolve file paths – each clip stores its own source folder
         clip_files = []
         for entry in enabled:
             rel = entry.get("file", "")
-            full = os.path.join(base_dir, rel) if not os.path.isabs(rel) else rel
+            if os.path.isabs(rel):
+                full = rel
+            else:
+                entry_source = entry.get("source", source_folder)
+                if entry_source == "output":
+                    base_dir = folder_paths.get_output_directory()
+                else:
+                    base_dir = folder_paths.get_input_directory()
+                full = os.path.join(base_dir, rel)
             if not os.path.isfile(full):
                 raise FileNotFoundError(f"Clip not found: {full}")
             clip_files.append(full)

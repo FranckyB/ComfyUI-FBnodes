@@ -110,6 +110,22 @@ async function extractVideoThumbnail(filename, previewElement, cacheKey = null) 
             const ctx = canvas.getContext('2d', { alpha: false });
             ctx.drawImage(video, 0, 0, w, h);
 
+            // Detect all-black frame (codec not supported by browser)
+            const sample = ctx.getImageData(0, 0, w, Math.min(h, 4)).data;
+            let allBlack = true;
+            for (let i = 0; i < sample.length; i += 16) {
+                if (sample[i] > 2 || sample[i+1] > 2 || sample[i+2] > 2) { allBlack = false; break; }
+            }
+            if (allBlack) {
+                previewElement.innerHTML = '';
+                const msg = document.createElement('span');
+                msg.textContent = 'Preview N/A (codec not supported by browser)';
+                msg.style.cssText = 'font-size:10px;color:#888;text-align:center;padding:8px;';
+                previewElement.appendChild(msg);
+                video.remove();
+                return;
+            }
+
             const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
             const img = document.createElement('img');
             img.style.cssText = 'max-width:100%;max-height:100%;object-fit:contain;';
@@ -126,13 +142,22 @@ async function extractVideoThumbnail(filename, previewElement, cacheKey = null) 
             video.remove();
         } catch (e) {
             console.error('[VACEStitcher] Thumbnail extract error:', e);
+            previewElement.innerHTML = '';
+            const msg = document.createElement('span');
+            msg.textContent = 'Preview N/A (codec not supported by browser)';
+            msg.style.cssText = 'font-size:10px;color:#888;text-align:center;padding:8px;';
+            previewElement.appendChild(msg);
             video.remove();
         }
     };
 
     video.onerror = () => {
         console.error('[VACEStitcher] Video load error:', filename);
-        // Keep placeholder on error
+        previewElement.innerHTML = '';
+        const msg = document.createElement('span');
+        msg.textContent = 'Preview N/A (codec not supported by browser)';
+        msg.style.cssText = 'font-size:10px;color:#888;text-align:center;padding:8px;';
+        previewElement.appendChild(msg);
         video.remove();
     };
 
@@ -289,7 +314,7 @@ function openClipBrowserModal(sourceFolder, existingClips, onDone) {
         const newFiles = [...selected].filter(
             (f) => !existingClips.some((c) => c.file === f)
         );
-        onDone(newFiles);
+        onDone(newFiles, _currentSourceFolder);
         overlay.remove();
     };
     const cancelBtn = document.createElement("button");
@@ -490,6 +515,41 @@ function showHoverThumbnail(filename, sourceFolder, anchorRect, overrideUrl) {
         vid.autoplay = true;
         vid.loop = true;
         vid.style.cssText = "max-width:320px;max-height:240px;border-radius:4px;";
+
+        const showUnable = () => {
+            if (popup.parentElement) {
+                popup.innerHTML = '';
+                const msg = document.createElement("span");
+                msg.textContent = "Preview N/A (codec not supported by browser)";
+                msg.style.cssText = "font-size:11px;color:#888;padding:12px 16px;white-space:nowrap;";
+                popup.appendChild(msg);
+            }
+        };
+
+        vid.onerror = showUnable;
+
+        // Detect black frame (unsupported codec) after first frame renders
+        let checked = false;
+        vid.addEventListener("playing", () => {
+            if (checked) return;
+            checked = true;
+            setTimeout(() => {
+                try {
+                    const c = document.createElement("canvas");
+                    c.width = Math.min(vid.videoWidth, 64);
+                    c.height = Math.min(vid.videoHeight, 4);
+                    const ctx = c.getContext("2d", { alpha: false });
+                    ctx.drawImage(vid, 0, 0, c.width, c.height);
+                    const d = ctx.getImageData(0, 0, c.width, c.height).data;
+                    let allBlack = true;
+                    for (let i = 0; i < d.length; i += 16) {
+                        if (d[i] > 2 || d[i+1] > 2 || d[i+2] > 2) { allBlack = false; break; }
+                    }
+                    if (allBlack) showUnable();
+                } catch (_) {}
+            }, 80);
+        });
+
         vid.src = getViewUrl(filename, sourceFolder) + `&${Date.now()}`;
         popup.appendChild(vid);
     } else {
@@ -555,9 +615,9 @@ app.registerExtension({
                 value: null,
                 callback: () => {
                     const sf = sourceFolderWidget?.value || "input";
-                    openClipBrowserModal(sf, clipEntries, (newFiles) => {
+                    openClipBrowserModal(sf, clipEntries, (newFiles, sourceFolder) => {
                         for (const f of newFiles) {
-                            clipEntries.push({ file: f, enabled: true });
+                            clipEntries.push({ file: f, enabled: true, source: sourceFolder });
                         }
                         syncWidget();
                         rebuildClipListDisplay();
@@ -841,13 +901,13 @@ app.registerExtension({
                         : entry.file;
                     const lbl = document.createElement("span");
                     lbl.textContent = basename;
-                    lbl.title = entry.file;
+                    lbl.title = `[${entry.source || "input"}] ${entry.file}`;
                     lbl.style.cssText = `flex:1;overflow:hidden;text-overflow:ellipsis;
                         white-space:nowrap;color:${textColor};cursor:default;`;
 
                     // Hover thumbnail on label
                     lbl.onmouseenter = (e) => {
-                        const sf = sourceFolderWidget?.value || "input";
+                        const sf = entry.source || sourceFolderWidget?.value || "input";
                         const rect = lbl.getBoundingClientRect();
                         showHoverThumbnail(entry.file, sf, rect, entry._thumbUrl);
                     };
@@ -946,7 +1006,7 @@ app.registerExtension({
                 });
 
                 addMenuItem("\uD83D\uDDBC\uFE0F Refresh Thumbnail", () => {
-                    const sf = sourceFolderWidget?.value || "input";
+                    const sf = entry.source || sourceFolderWidget?.value || "input";
                     const thumbUrl = getThumbnailUrl(entry.file, sf, 320) + `&${Date.now()}`;
                     // Store the server-generated thumbnail URL on the entry for hover
                     entry._thumbUrl = thumbUrl;
@@ -981,12 +1041,12 @@ app.registerExtension({
                 document.body.appendChild(menu);
             }
 
-            // ── Source folder change: just update internal state ──
+            // ── Source folder change: just controls which folder to browse next ──
             if (sourceFolderWidget) {
                 const origCb = sourceFolderWidget.callback;
                 sourceFolderWidget.callback = function (value) {
                     if (origCb) origCb.apply(this, arguments);
-                    // Don't clear clips on source change — they already store relative paths
+                    // Don't clear clips on source change — each clip stores its own source
                 };
             }
 
