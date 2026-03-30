@@ -127,6 +127,77 @@ async def vace_intermediates_info(request):
         return server.web.json_response({"exists": False, "total_files": 0, "error": str(e)})
 
 
+@server.PromptServer.instance.routes.get("/fbnodes/video-thumbnail")
+async def video_thumbnail(request):
+    """Extract a frame from a video and return it as JPEG thumbnail.
+
+    Query params:
+        filename  – url-encoded filename
+        type      – 'input' | 'output' | 'temp'  (default 'input')
+        subfolder – optional subfolder within the type directory
+        width     – optional max width (default 256)
+    """
+    import io
+    try:
+        filename = request.query.get("filename", "")
+        folder_type = request.query.get("type", "input")
+        subfolder = request.query.get("subfolder", "")
+        max_w = min(int(request.query.get("width", "256")), 1024)
+
+        if not filename:
+            return server.web.Response(status=400, text="Missing filename")
+
+        if folder_type == "input":
+            base = folder_paths.get_input_directory()
+        elif folder_type == "output":
+            base = folder_paths.get_output_directory()
+        elif folder_type == "temp":
+            base = folder_paths.get_temp_directory()
+        else:
+            return server.web.Response(status=400, text="Invalid type")
+
+        if subfolder:
+            base = os.path.join(base, subfolder)
+
+        filepath = os.path.join(base, filename)
+        filepath = os.path.abspath(filepath)
+
+        # Security: ensure resolved path is within the base directory
+        if not filepath.startswith(os.path.abspath(base)):
+            return server.web.Response(status=403, text="Access denied")
+
+        if not os.path.isfile(filepath):
+            return server.web.Response(status=404, text="File not found")
+
+        with av.open(filepath, mode='r') as container:
+            stream = container.streams.video[0]
+            stream.codec_context.thread_type = "AUTO"
+            for frame in container.decode(stream):
+                img = frame.to_ndarray(format='rgb24')
+                break
+            else:
+                return server.web.Response(status=500, text="No frames in video")
+
+        from PIL import Image as PILImage
+        pil_img = PILImage.fromarray(img)
+        h, w = img.shape[:2]
+        if w > max_w:
+            new_h = int(h * (max_w / w))
+            pil_img = pil_img.resize((max_w, new_h), PILImage.LANCZOS)
+
+        buf = io.BytesIO()
+        pil_img.save(buf, format='JPEG', quality=80)
+
+        return server.web.Response(
+            body=buf.getvalue(),
+            content_type='image/jpeg',
+            headers={'Cache-Control': 'public, max-age=3600'},
+        )
+    except Exception as e:
+        logging.error(f"[VACEStitcher] Thumbnail error: {e}")
+        return server.web.Response(status=500, text=str(e))
+
+
 def apply_model_shift(model, shift: float):
     """Apply ModelSamplingSD3-style shift to a model clone."""
     m = model.clone()

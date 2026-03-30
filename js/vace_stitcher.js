@@ -59,6 +59,143 @@ function getViewUrl(filename, sourceFolder) {
     return url;
 }
 
+// ── Video thumbnail extraction with localStorage caching ─────────────────────
+
+async function extractVideoThumbnailCached(filename, previewElement) {
+    const cacheKey = `video_thumb_${filename.replace(/[\/\\]/g, '_')}`;
+    try {
+        const cached = localStorage.getItem(cacheKey);
+        if (cached) {
+            const img = document.createElement('img');
+            img.style.cssText = 'max-width:100%;max-height:100%;object-fit:contain;';
+            img.src = cached;
+            previewElement.innerHTML = '';
+            previewElement.appendChild(img);
+            return;
+        }
+    } catch (e) {
+        console.log('[VACEStitcher] Cache check failed:', e);
+    }
+    extractVideoThumbnail(filename, previewElement, cacheKey);
+}
+
+async function extractVideoThumbnail(filename, previewElement, cacheKey = null) {
+    // Show placeholder while loading
+    const placeholderImg = document.createElement('img');
+    placeholderImg.src = new URL("./placeholder.png", import.meta.url).href;
+    placeholderImg.style.cssText = 'max-width:100%;max-height:100%;object-fit:contain;';
+    previewElement.innerHTML = '';
+    previewElement.appendChild(placeholderImg);
+
+    const video = document.createElement('video');
+    video.crossOrigin = 'anonymous';
+    video.preload = 'metadata';
+    video.muted = true;
+    video.playsInline = true;
+    video.style.display = 'none';
+
+    video.onloadedmetadata = () => { video.currentTime = 0; };
+
+    video.onseeked = () => {
+        try {
+            const maxW = 180, maxH = 150;
+            const ar = video.videoWidth / video.videoHeight;
+            let w, h;
+            if (ar > maxW / maxH) { w = maxW; h = maxW / ar; }
+            else { h = maxH; w = maxH * ar; }
+
+            const canvas = document.createElement('canvas');
+            canvas.width = w;
+            canvas.height = h;
+            const ctx = canvas.getContext('2d', { alpha: false });
+            ctx.drawImage(video, 0, 0, w, h);
+
+            const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
+            const img = document.createElement('img');
+            img.style.cssText = 'max-width:100%;max-height:100%;object-fit:contain;';
+            img.src = dataUrl;
+            previewElement.innerHTML = '';
+            previewElement.appendChild(img);
+
+            if (cacheKey) {
+                setTimeout(() => {
+                    try { localStorage.setItem(cacheKey, dataUrl); }
+                    catch (e) { console.log('[VACEStitcher] Cache write failed:', e); }
+                }, 0);
+            }
+            video.remove();
+        } catch (e) {
+            console.error('[VACEStitcher] Thumbnail extract error:', e);
+            video.remove();
+        }
+    };
+
+    video.onerror = () => {
+        console.error('[VACEStitcher] Video load error:', filename);
+        // Keep placeholder on error
+        video.remove();
+    };
+
+    video.src = getViewUrl(filename, _currentSourceFolder) + `&${Date.now()}`;
+}
+
+function clearThumbnailCache() {
+    try {
+        const prefix = 'video_thumb_';
+        const keys = [];
+        for (let i = 0; i < localStorage.length; i++) {
+            const k = localStorage.key(i);
+            if (k && k.startsWith(prefix)) keys.push(k);
+        }
+        keys.forEach(k => localStorage.removeItem(k));
+        console.log(`[VACEStitcher] Cleared ${keys.length} cached thumbnails`);
+    } catch (e) {
+        console.error('[VACEStitcher] Error clearing cache:', e);
+    }
+}
+
+function refreshIndividualThumbnail(filename, previewElement) {
+    const cacheKey = `video_thumb_${filename.replace(/[\/\\]/g, '_')}`;
+    try { localStorage.removeItem(cacheKey); } catch (e) { /* ignore */ }
+    extractVideoThumbnail(filename, previewElement, cacheKey);
+}
+
+function showThumbnailContextMenu(event, filename, previewElement) {
+    const existing = document.querySelector('.vcj-thumb-ctx-menu');
+    if (existing) existing.remove();
+
+    const menu = document.createElement('div');
+    menu.className = 'vcj-thumb-ctx-menu';
+    menu.style.cssText = `
+        position:fixed;left:${event.pageX}px;top:${event.pageY}px;
+        background:rgba(30,30,30,0.98);border:1px solid rgba(255,255,255,0.2);
+        border-radius:6px;padding:4px;z-index:10001;
+        box-shadow:0 4px 12px rgba(0,0,0,0.5);min-width:160px;
+    `;
+
+    const btn = document.createElement('div');
+    btn.textContent = '\uD83D\uDD04 Refresh Thumbnail';
+    btn.style.cssText = 'padding:8px 12px;color:#ccc;cursor:pointer;border-radius:4px;font-size:13px;';
+    btn.onmouseenter = () => { btn.style.background = 'rgba(66,153,225,0.3)'; };
+    btn.onmouseleave = () => { btn.style.background = 'transparent'; };
+    btn.onclick = () => {
+        refreshIndividualThumbnail(filename, previewElement);
+        menu.remove();
+    };
+
+    menu.appendChild(btn);
+    document.body.appendChild(menu);
+
+    const closeMenu = (e) => {
+        if (!menu.contains(e.target)) {
+            e.stopPropagation();
+            menu.remove();
+            document.removeEventListener('click', closeMenu, true);
+        }
+    };
+    setTimeout(() => document.addEventListener('click', closeMenu, true), 10);
+}
+
 // ── Multi-select file browser modal ──────────────────────────────────────────
 
 function openClipBrowserModal(sourceFolder, existingClips, onDone) {
@@ -133,17 +270,10 @@ function openClipBrowserModal(sourceFolder, existingClips, onDone) {
         color:#888;padding:8px 16px;cursor:pointer;font-size:12px;`;
     regenBtn.onmouseenter = () => { regenBtn.style.background = "rgba(255,255,255,0.15)"; };
     regenBtn.onmouseleave = () => { regenBtn.style.background = "rgba(255,255,255,0.08)"; };
-    regenBtn.onclick = async (e) => {
+    regenBtn.onclick = (e) => {
         e.stopPropagation();
-        try {
-            const info = await (await api.fetchApi("/fbnodes/vace-intermediates-info")).json();
-            if (!info.exists || info.total_files === 0) return;
-            if (!confirm(`Regenerate cache? This will delete ${info.total_files} cached transition(s).\nThey will be re-generated on next run.`)) return;
-            await api.fetchApi("/fbnodes/vace-delete-intermediates", { method: "POST" });
-            console.log("[VACEClipJoiner] Cache cleared for regeneration");
-        } catch (err) {
-            console.error("[VACEClipJoiner] Error:", err);
-        }
+        clearThumbnailCache();
+        loadGrid();
     };
 
     // Right side: Cancel + Add Selected
@@ -254,14 +384,14 @@ function openClipBrowserModal(sourceFolder, existingClips, onDone) {
                     // Thumbnail
                     const preview = item.querySelector(".vcj-preview");
                     if (isVideoFile(filename)) {
-                        const vid = document.createElement("video");
-                        vid.crossOrigin = "anonymous";
-                        vid.preload = "metadata";
-                        vid.muted = true;
-                        vid.style.cssText = "max-width:100%;max-height:100%;object-fit:contain;";
-                        vid.src = getViewUrl(filename, _currentSourceFolder) + `&${Date.now()}`;
-                        vid.onloadeddata = () => { vid.currentTime = 0; };
-                        preview.appendChild(vid);
+                        extractVideoThumbnailCached(filename, preview);
+                        // Right-click to refresh individual thumbnail
+                        item.oncontextmenu = (e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            showThumbnailContextMenu(e, filename, preview);
+                            return false;
+                        };
                     }
 
                     const cb = item.querySelector(".vcj-cb");
@@ -335,7 +465,7 @@ function makeGridItem(icon, label, hasCheckbox, checked) {
 
 let _hoverPopup = null;
 
-function showHoverThumbnail(filename, sourceFolder, anchorRect) {
+function showHoverThumbnail(filename, sourceFolder, anchorRect, overrideUrl) {
     hideHoverThumbnail();
     const popup = document.createElement("div");
     popup.style.cssText = `
@@ -347,7 +477,13 @@ function showHoverThumbnail(filename, sourceFolder, anchorRect) {
     popup.style.left = anchorRect.left + "px";
     popup.style.bottom = (window.innerHeight - anchorRect.top + 4) + "px";
 
-    if (isVideoFile(filename)) {
+    if (overrideUrl) {
+        // Use server-generated thumbnail (for yuv444 etc.)
+        const img = document.createElement("img");
+        img.style.cssText = "max-width:320px;max-height:240px;border-radius:4px;";
+        img.src = overrideUrl;
+        popup.appendChild(img);
+    } else if (isVideoFile(filename)) {
         const vid = document.createElement("video");
         vid.crossOrigin = "anonymous";
         vid.muted = true;
@@ -713,7 +849,7 @@ app.registerExtension({
                     lbl.onmouseenter = (e) => {
                         const sf = sourceFolderWidget?.value || "input";
                         const rect = lbl.getBoundingClientRect();
-                        showHoverThumbnail(entry.file, sf, rect);
+                        showHoverThumbnail(entry.file, sf, rect, entry._thumbUrl);
                     };
                     lbl.onmouseleave = () => hideHoverThumbnail();
                     row.appendChild(lbl);
@@ -806,6 +942,18 @@ app.registerExtension({
                         console.log("[VACEClipJoiner] Cache cleared for regeneration");
                     } catch (err) {
                         console.error("[VACEClipJoiner] Error:", err);
+                    }
+                });
+
+                addMenuItem("\uD83D\uDDBC\uFE0F Refresh Thumbnail", () => {
+                    const sf = sourceFolderWidget?.value || "input";
+                    const thumbUrl = getThumbnailUrl(entry.file, sf, 320) + `&${Date.now()}`;
+                    // Store the server-generated thumbnail URL on the entry for hover
+                    entry._thumbUrl = thumbUrl;
+                    // Show it immediately as a hover preview
+                    const rect = clipListContainer.querySelector(`[data-clip-idx="${idx}"]`)?.getBoundingClientRect();
+                    if (rect) {
+                        showHoverThumbnail(entry.file, sf, rect, thumbUrl);
                     }
                 });
 
