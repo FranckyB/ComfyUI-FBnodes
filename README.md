@@ -24,7 +24,7 @@ If yuv444 is selected, will generate a preview clip, so it can still be seen in 
 - **Single IMAGE Output**: Outputs a single IMAGE tensor, ready to connect to any image input
 
 ### VACE Transition Builder
-Generate smooth AI-powered transitions between video clips using VACE conditioning and 2-stage sampling. Replaces a complex workflow with a single node featuring a built-in clip browser, drag-to-reorder list, and cached h265 intermediates for resumability.
+Generate smooth AI-powered transitions between video clips using VACE conditioning and 2-stage sampling with a single node featuring a built-in clip browser, drag-to-reorder list, and cached h265 intermediates for resumability.
 
 - **File browser modal**: Browse input/output folders, multi-select clips, subfolder navigation
 - **Reorderable clip list**: Drag-to-reorder, enable/disable individual clips, hover thumbnails
