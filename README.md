@@ -45,8 +45,7 @@ Inspired by [__Bob__](https://civitai.com/user/__Bob__)'s [Wan VACE Clip Joiner 
 You need **both** the high-noise and low-noise Wan 2.2 VACE models. Choose one format:
 
 **bf16 or fp8** (from Comfy-Org):
-- [`wan2.2_vace_i2v_high_noise_14B_bf16.safetensors`](https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/tree/main/split_files/diffusion_models)
-- [`wan2.2_vace_i2v_low_noise_14B_bf16.safetensors`](https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/tree/main/split_files/diffusion_models)
+- [`wan2.2_vace_i2v_high_noise_14B-*.safetensors`](https://huggingface.co/Comfy-Org/Wan_2.2_ComfyUI_Repackaged/tree/main/split_files/diffusion_models)
 
 or **GGUF** (from QuantStack):
 - [`Wan2.2-VACE-Fun-A14B-*.gguf`](https://huggingface.co/QuantStack/Wan2.2-VACE-Fun-A14B-GGUF/tree/main) (high + low noise variants)
