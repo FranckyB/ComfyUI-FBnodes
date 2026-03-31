@@ -694,13 +694,13 @@ class VACEStitcher:
         except (json.JSONDecodeError, TypeError):
             entries = []
 
-        if not isinstance(entries, list) or len(entries) < 2:
-            raise ValueError("Need at least 2 enabled clips. Use the Browse button to add clips.")
+        if not isinstance(entries, list) or len(entries) < 1:
+            raise ValueError("Need at least 1 enabled clip. Use the Browse button to add clips.")
 
         # Filter to enabled clips only
         enabled = [e for e in entries if e.get("enabled", True)]
-        if len(enabled) < 2:
-            raise ValueError(f"Need at least 2 enabled clips, got {len(enabled)}.")
+        if len(enabled) < 1:
+            raise ValueError(f"Need at least 1 enabled clip, got {len(enabled)}.")
 
         # Resolve file paths – each clip stores its own source folder
         clip_files = []
@@ -774,7 +774,7 @@ class VACEStitcher:
             else:
                 return clip_pixels[clip_idx]
 
-        # ── 4. Determine clip dimensions ──
+        # ── 4. Determine clip dimensions and validate ──
         # Get dimensions from first clip (decode a single frame if latent-only)
         if clip_latents[0] is not None:
             # Infer pixel dims from latent: (1, C, T, H//8, W//8)
@@ -784,13 +784,39 @@ class VACEStitcher:
             height = clip_pixels[0].shape[1]
             width = clip_pixels[0].shape[2]
 
+        # Validate all clips have the same dimensions
+        for ci in range(1, len(clip_files)):
+            if clip_latents[ci] is not None:
+                ch = clip_latents[ci].shape[3] * 8
+                cw = clip_latents[ci].shape[4] * 8
+            else:
+                ch = clip_pixels[ci].shape[1]
+                cw = clip_pixels[ci].shape[2]
+            if ch != height or cw != width:
+                basename = os.path.basename(clip_files[ci])
+                raise ValueError(
+                    f"Clip size mismatch! Clip 0 is {width}x{height} but clip {ci} "
+                    f"({basename}) is {cw}x{ch}. All clips must have the same resolution."
+                )
+
         # ── 5. Build transition pairs ──
         num_clips = len(clip_files)
+
+        if num_clips == 1 and not seamless_loop:
+            raise ValueError(
+                "Only 1 clip is enabled. Either add more clips or enable "
+                "'seamless_loop' in VACE Stitcher Options to loop a single clip."
+            )
+
         pairs = []
-        for i in range(num_clips - 1):
-            pairs.append((i, i + 1))
-        if seamless_loop:
-            pairs.append((num_clips - 1, 0))
+        if num_clips == 1 and seamless_loop:
+            # Single-clip loop: transition from clip end back to clip start
+            pairs.append((0, 0))
+        else:
+            for i in range(num_clips - 1):
+                pairs.append((i, i + 1))
+            if seamless_loop:
+                pairs.append((num_clips - 1, 0))
 
         print(f"[VACE Stitcher] Generating {len(pairs)} transitions"
               f"{' (seamless loop)' if seamless_loop else ''}")
@@ -951,117 +977,214 @@ class VACEStitcher:
         #   The VACE output's leading context_frames overlap with clip_A's trailing context zone
         #   We crossfade over that overlap (context_frames long)
         #   Same on the B side
+        #
+        # Single-clip seamless loop:
+        #   One transition (clip end → clip start) is split in half.
+        #   2nd half goes at the START (dissolves into clip head), trimmed clip in middle,
+        #   1st half goes at the END (dissolves from clip tail). On loop playback the two
+        #   halves meet seamlessly at the loop point.
+
+        single_clip_loop = (num_clips == 1 and seamless_loop)
 
         segments = []
-        _next_cp = None  # cache: pre-decoded clip B from crossfade becomes next iteration's clip
-        for i in range(num_clips):
-            # Decode full clip pixels on demand (or reuse cached from previous crossfade)
-            print(f"[VACE Stitcher]   Processing clip {i}...")
-            if _next_cp is not None:
-                cp = _next_cp
-                _next_cp = None
-            else:
-                cp = get_clip_pixels(i)
+
+        if single_clip_loop:
+            # ── Single-clip seamless loop stitch ──
+            print("[VACE Stitcher]   Single-clip seamless loop mode")
+            cp = get_clip_pixels(0)
             t_len = cp.shape[0]
 
-            # Determine which edges participate in transitions
-            has_prev_transition = (i > 0) or seamless_loop
-            has_next_transition = (i < num_clips - 1) or seamless_loop
+            pair_key = f"{num_clips - 1:03d}_to_000"
+            trans_px = load_transition_pixels(pair_key)
 
-            # Trim required_pixels (context+replace) from transition edges
-            start_trim = required_pixels if has_prev_transition else 0
-            end_trim = required_pixels if has_next_transition else 0
-
-            end_idx = t_len - end_trim if end_trim > 0 else t_len
-            trimmed = cp[start_trim:end_idx]
-            segments.append(trimmed)
-
-            # Build and insert the transition after this clip
-            if i < num_clips - 1:
-                pair_key = f"{i:03d}_to_{i + 1:03d}"
-            elif seamless_loop and i == num_clips - 1:
-                pair_key = f"{num_clips - 1:03d}_to_000"
+            if trans_px is None:
+                # No transition generated — just output the clip as-is
+                segments.append(cp)
             else:
-                pair_key = None
+                if color_match:
+                    ref_frame = cp[-1]
+                    trans_px = apply_color_match(trans_px, ref_frame)
+                    print(f"[VACE Stitcher]   Color matched {pair_key}")
 
-            if pair_key:
-                trans_px = load_transition_pixels(pair_key)
-                if trans_px is not None:
-                    # Apply color matching if enabled
-                    if color_match:
-                        # Use last frame of clip A as reference
-                        ref_frame = cp[-1]
-                        trans_px = apply_color_match(trans_px, ref_frame)
-                        print(f"[VACE Stitcher]   Color matched {pair_key}")
+                t_trans = trans_px.shape[0]
+                mid = t_trans // 2
 
-                    t_trans = trans_px.shape[0]
-                    cf = context_frames
+                # Split transition in half:
+                #   1st half = transition from clip_tail into generated middle
+                #   2nd half = transition from generated middle into clip_head
+                trans_first_half = trans_px[:mid]   # tail side (goes at END of output)
+                trans_second_half = trans_px[mid:]  # head side (goes at START of output)
 
-                    if crossfade and cf > 0:
-                        # Clamp cf so we don't exceed half the transition length
-                        cf = min(cf, t_trans // 2)
+                # Trim clip: remove required_pixels from both edges
+                trimmed = cp[required_pixels:t_len - required_pixels]
 
-                        if cf < 1:
-                            # Transition too short for crossfade, use as-is
-                            segments.append(trans_px)
+                cf = context_frames
+                if crossfade and cf > 0:
+                    cf = min(cf, mid)  # don't exceed half-transition length
+
+                    if cf >= 1:
+                        # Crossfade 2nd half (head side) → dissolves into clip start
+                        # The last cf frames of trans_second_half overlap with clip's leading context
+                        vace_ctx_head = trans_second_half[-cf:]
+                        original_ctx_head = cp[replace_frames:replace_frames + cf] if replace_frames > 0 else cp[:cf]
+                        actual_cf_head = min(cf, original_ctx_head.shape[0], vace_ctx_head.shape[0])
+                        vace_ctx_head = vace_ctx_head[-actual_cf_head:]
+                        original_ctx_head = original_ctx_head[:actual_cf_head]
+
+                        t_h = torch.linspace(0.0, 1.0, actual_cf_head, device=trans_px.device)
+                        alpha_h = (t_h * t_h).view(-1, 1, 1, 1)
+                        crossfade_head = (1.0 - alpha_h) * vace_ctx_head + alpha_h * original_ctx_head
+
+                        # 2nd half with crossfade at end
+                        segments.append(trans_second_half[:-actual_cf_head])
+                        segments.append(crossfade_head)
+
+                        # Trimmed clip middle
+                        segments.append(trimmed)
+
+                        # Crossfade 1st half (tail side) → clip end dissolves into transition
+                        vace_ctx_tail = trans_first_half[:cf]
+                        if replace_frames > 0:
+                            original_ctx_tail = cp[-(cf + replace_frames):-replace_frames]
                         else:
-                            # Split VACE output: [vace_ctx_A (cf)] [vace_middle] [vace_ctx_B (cf)]
-                            # Use fully-decoded clip pixels for crossfade references
-                            # (edge-only decode produces different pixels due to VAE temporal convolution)
-                            idx_a, idx_b = (int(x) for x in pair_key.split("_to_"))
+                            original_ctx_tail = cp[-cf:]
+                        actual_cf_tail = min(cf, original_ctx_tail.shape[0], vace_ctx_tail.shape[0])
+                        original_ctx_tail = original_ctx_tail[:actual_cf_tail]
+                        vace_ctx_tail = vace_ctx_tail[:actual_cf_tail]
 
-                            # Clip A context: from the full decode we already have (cp)
-                            if replace_frames > 0:
-                                original_ctx_a = cp[-(cf + replace_frames):-replace_frames]
-                            else:
-                                original_ctx_a = cp[-cf:]
+                        t_t = torch.linspace(0.0, 1.0, actual_cf_tail, device=trans_px.device)
+                        alpha_t = (t_t * t_t).view(-1, 1, 1, 1)
+                        crossfade_tail = (1.0 - alpha_t) * original_ctx_tail + alpha_t * vace_ctx_tail
 
-                            # Clip B context: need full decode to get consistent pixels
-                            cp_b = get_clip_pixels(idx_b)
-                            if replace_frames > 0:
-                                original_ctx_b = cp_b[replace_frames:replace_frames + cf]
-                            else:
-                                original_ctx_b = cp_b[:cf]
-                            # Cache clip B's full decode for the next iteration
-                            _next_cp = cp_b
-
-                            # Ensure matched lengths (safety)
-                            actual_cf_a = min(cf, original_ctx_a.shape[0])
-                            actual_cf_b = min(cf, original_ctx_b.shape[0])
-                            original_ctx_a = original_ctx_a[:actual_cf_a]
-                            original_ctx_b = original_ctx_b[:actual_cf_b]
-
-                            vace_ctx_a = trans_px[:actual_cf_a]
-                            vace_middle = trans_px[actual_cf_a:t_trans - actual_cf_b]
-                            vace_ctx_b = trans_px[t_trans - actual_cf_b:]
-
-                            # Cross Fade: video1 → VACE (ease_in: original snaps to VACE)
-                            t_a = torch.linspace(0.0, 1.0, actual_cf_a, device=trans_px.device)
-                            alpha_a = (t_a * t_a).view(-1, 1, 1, 1)  # ease_in = t²
-                            crossfade_a = (1.0 - alpha_a) * original_ctx_a + alpha_a * vace_ctx_a
-
-                            # Cross Fade: VACE → video2 (ease_in: VACE snaps to original)
-                            t_b = torch.linspace(0.0, 1.0, actual_cf_b, device=trans_px.device)
-                            alpha_b = (t_b * t_b).view(-1, 1, 1, 1)  # ease_in = t²
-                            crossfade_b = (1.0 - alpha_b) * vace_ctx_b + alpha_b * original_ctx_b
-
-                            # Assemble: [crossfade_A | vace_middle | crossfade_B]
-                            segments.append(crossfade_a)
-                            if vace_middle.shape[0] > 0:
-                                segments.append(vace_middle)
-                            segments.append(crossfade_b)
-
-                            del original_ctx_a, original_ctx_b
+                        segments.append(crossfade_tail)
+                        segments.append(trans_first_half[actual_cf_tail:])
                     else:
-                        # No crossfade: use full VACE output as-is
-                        segments.append(trans_px)
+                        # Too short for crossfade
+                        segments.append(trans_second_half)
+                        segments.append(trimmed)
+                        segments.append(trans_first_half)
+                else:
+                    # No crossfade
+                    segments.append(trans_second_half)
+                    segments.append(trimmed)
+                    segments.append(trans_first_half)
 
-                    del trans_px
-
-            # Free clip pixels after processing
+                del trans_px
             del cp
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
+
+        else:
+            # ── Multi-clip stitch ──
+            _next_cp = None  # cache: pre-decoded clip B from crossfade becomes next iteration's clip
+            for i in range(num_clips):
+                # Decode full clip pixels on demand (or reuse cached from previous crossfade)
+                print(f"[VACE Stitcher]   Processing clip {i}...")
+                if _next_cp is not None:
+                    cp = _next_cp
+                    _next_cp = None
+                else:
+                    cp = get_clip_pixels(i)
+                t_len = cp.shape[0]
+
+                # Determine which edges participate in transitions
+                has_prev_transition = (i > 0) or seamless_loop
+                has_next_transition = (i < num_clips - 1) or seamless_loop
+
+                # Trim required_pixels (context+replace) from transition edges
+                start_trim = required_pixels if has_prev_transition else 0
+                end_trim = required_pixels if has_next_transition else 0
+
+                end_idx = t_len - end_trim if end_trim > 0 else t_len
+                trimmed = cp[start_trim:end_idx]
+                segments.append(trimmed)
+
+                # Build and insert the transition after this clip
+                if i < num_clips - 1:
+                    pair_key = f"{i:03d}_to_{i + 1:03d}"
+                elif seamless_loop and i == num_clips - 1:
+                    pair_key = f"{num_clips - 1:03d}_to_000"
+                else:
+                    pair_key = None
+
+                if pair_key:
+                    trans_px = load_transition_pixels(pair_key)
+                    if trans_px is not None:
+                        # Apply color matching if enabled
+                        if color_match:
+                            # Use last frame of clip A as reference
+                            ref_frame = cp[-1]
+                            trans_px = apply_color_match(trans_px, ref_frame)
+                            print(f"[VACE Stitcher]   Color matched {pair_key}")
+
+                        t_trans = trans_px.shape[0]
+                        cf = context_frames
+
+                        if crossfade and cf > 0:
+                            # Clamp cf so we don't exceed half the transition length
+                            cf = min(cf, t_trans // 2)
+
+                            if cf < 1:
+                                # Transition too short for crossfade, use as-is
+                                segments.append(trans_px)
+                            else:
+                                # Split VACE output: [vace_ctx_A (cf)] [vace_middle] [vace_ctx_B (cf)]
+                                # Use fully-decoded clip pixels for crossfade references
+                                # (edge-only decode produces different pixels due to VAE temporal convolution)
+                                idx_a, idx_b = (int(x) for x in pair_key.split("_to_"))
+
+                                # Clip A context: from the full decode we already have (cp)
+                                if replace_frames > 0:
+                                    original_ctx_a = cp[-(cf + replace_frames):-replace_frames]
+                                else:
+                                    original_ctx_a = cp[-cf:]
+
+                                # Clip B context: need full decode to get consistent pixels
+                                cp_b = get_clip_pixels(idx_b)
+                                if replace_frames > 0:
+                                    original_ctx_b = cp_b[replace_frames:replace_frames + cf]
+                                else:
+                                    original_ctx_b = cp_b[:cf]
+                                # Cache clip B's full decode for the next iteration
+                                _next_cp = cp_b
+
+                                # Ensure matched lengths (safety)
+                                actual_cf_a = min(cf, original_ctx_a.shape[0])
+                                actual_cf_b = min(cf, original_ctx_b.shape[0])
+                                original_ctx_a = original_ctx_a[:actual_cf_a]
+                                original_ctx_b = original_ctx_b[:actual_cf_b]
+
+                                vace_ctx_a = trans_px[:actual_cf_a]
+                                vace_middle = trans_px[actual_cf_a:t_trans - actual_cf_b]
+                                vace_ctx_b = trans_px[t_trans - actual_cf_b:]
+
+                                # Cross Fade: video1 → VACE (ease_in: original snaps to VACE)
+                                t_a = torch.linspace(0.0, 1.0, actual_cf_a, device=trans_px.device)
+                                alpha_a = (t_a * t_a).view(-1, 1, 1, 1)  # ease_in = t²
+                                crossfade_a = (1.0 - alpha_a) * original_ctx_a + alpha_a * vace_ctx_a
+
+                                # Cross Fade: VACE → video2 (ease_in: VACE snaps to original)
+                                t_b = torch.linspace(0.0, 1.0, actual_cf_b, device=trans_px.device)
+                                alpha_b = (t_b * t_b).view(-1, 1, 1, 1)  # ease_in = t²
+                                crossfade_b = (1.0 - alpha_b) * vace_ctx_b + alpha_b * original_ctx_b
+
+                                # Assemble: [crossfade_A | vace_middle | crossfade_B]
+                                segments.append(crossfade_a)
+                                if vace_middle.shape[0] > 0:
+                                    segments.append(vace_middle)
+                                segments.append(crossfade_b)
+
+                                del original_ctx_a, original_ctx_b
+                        else:
+                            # No crossfade: use full VACE output as-is
+                            segments.append(trans_px)
+
+                        del trans_px
+
+                # Free clip pixels after processing
+                del cp
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
 
         # Concatenate all segments, filtering out empties
         segments = [s for s in segments if s.shape[0] > 0]
