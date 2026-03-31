@@ -79,6 +79,14 @@ async function extractVideoThumbnailCached(filename, previewElement) {
     extractVideoThumbnail(filename, previewElement, cacheKey);
 }
 
+function showPreviewUnavailable(previewElement) {
+    previewElement.innerHTML = '';
+    const msg = document.createElement('span');
+    msg.textContent = 'Preview N/A (codec not supported by browser)';
+    msg.style.cssText = 'font-size:10px;color:#888;text-align:center;padding:8px;';
+    previewElement.appendChild(msg);
+}
+
 async function extractVideoThumbnail(filename, previewElement, cacheKey = null) {
     // Show placeholder while loading
     const placeholderImg = document.createElement('img');
@@ -110,22 +118,6 @@ async function extractVideoThumbnail(filename, previewElement, cacheKey = null) 
             const ctx = canvas.getContext('2d', { alpha: false });
             ctx.drawImage(video, 0, 0, w, h);
 
-            // Detect all-black frame (codec not supported by browser)
-            const sample = ctx.getImageData(0, 0, w, Math.min(h, 4)).data;
-            let allBlack = true;
-            for (let i = 0; i < sample.length; i += 16) {
-                if (sample[i] > 2 || sample[i+1] > 2 || sample[i+2] > 2) { allBlack = false; break; }
-            }
-            if (allBlack) {
-                previewElement.innerHTML = '';
-                const msg = document.createElement('span');
-                msg.textContent = 'Preview N/A (codec not supported by browser)';
-                msg.style.cssText = 'font-size:10px;color:#888;text-align:center;padding:8px;';
-                previewElement.appendChild(msg);
-                video.remove();
-                return;
-            }
-
             const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
             const img = document.createElement('img');
             img.style.cssText = 'max-width:100%;max-height:100%;object-fit:contain;';
@@ -142,22 +134,14 @@ async function extractVideoThumbnail(filename, previewElement, cacheKey = null) 
             video.remove();
         } catch (e) {
             console.error('[VACEStitcher] Thumbnail extract error:', e);
-            previewElement.innerHTML = '';
-            const msg = document.createElement('span');
-            msg.textContent = 'Preview N/A (codec not supported by browser)';
-            msg.style.cssText = 'font-size:10px;color:#888;text-align:center;padding:8px;';
-            previewElement.appendChild(msg);
+            showPreviewUnavailable(previewElement);
             video.remove();
         }
     };
 
     video.onerror = () => {
         console.error('[VACEStitcher] Video load error:', filename);
-        previewElement.innerHTML = '';
-        const msg = document.createElement('span');
-        msg.textContent = 'Preview N/A (codec not supported by browser)';
-        msg.style.cssText = 'font-size:10px;color:#888;text-align:center;padding:8px;';
-        previewElement.appendChild(msg);
+        showPreviewUnavailable(previewElement);
         video.remove();
     };
 
@@ -453,9 +437,9 @@ function makeGridItem(icon, label, hasCheckbox, checked) {
     `;
     const preview = document.createElement("div");
     preview.className = "vcj-preview";
-    preview.style.cssText = `width:100%;height:120px;background:rgba(0,0,0,0.5);
+    preview.style.cssText = `width:100%;height:150px;background:rgba(0,0,0,0.5);
         border-radius:4px;display:flex;align-items:center;justify-content:center;
-        overflow:hidden;font-size:48px;`;
+        overflow:hidden;position:relative;font-size:48px;`;
     if (icon) preview.textContent = icon;
     item.appendChild(preview);
 
@@ -711,7 +695,7 @@ app.registerExtension({
             // ── Delete button state management ──
             async function updateDeleteBtnState() {
                 try {
-                    const info = await (await api.fetchApi("/fbnodes/vace-intermediates-info")).json();
+                    const info = await (await fetch("/fbnodes/vace-intermediates-info")).json();
                     if (info.exists && info.total_files > 0) {
                         deleteBtn.disabled = false;
                         deleteBtn.style.background = "rgba(200,60,60,0.2)";
@@ -733,7 +717,7 @@ app.registerExtension({
             deleteBtn.onclick = async () => {
                 if (deleteBtn.disabled) return;
                 try {
-                    const info = await (await api.fetchApi("/fbnodes/vace-intermediates-info")).json();
+                    const info = await (await fetch("/fbnodes/vace-intermediates-info")).json();
                     if (!info.exists || info.total_files === 0) {
                         updateDeleteBtnState();
                         return;
@@ -744,7 +728,7 @@ app.registerExtension({
                         "Delete", "#c00"
                     );
                     if (!confirmed) return;
-                    const resp = await (await api.fetchApi("/fbnodes/vace-delete-intermediates", { method: "POST" })).json();
+                    const resp = await (await fetch("/fbnodes/vace-delete-intermediates", { method: "POST" })).json();
                     if (resp.success) {
                         console.log(`[VACEClipJoiner] Deleted ${resp.deleted} intermediate set(s).`);
                     }
@@ -995,10 +979,10 @@ app.registerExtension({
 
                 addMenuItem("\u267B\uFE0F Regenerate Transitions", async () => {
                     try {
-                        const info = await (await api.fetchApi("/fbnodes/vace-intermediates-info")).json();
+                        const info = await (await fetch("/fbnodes/vace-intermediates-info")).json();
                         if (!info.exists || info.total_files === 0) return;
                         if (!confirm(`Delete all cached transitions so they regenerate on next run?`)) return;
-                        await api.fetchApi("/fbnodes/vace-delete-intermediates", { method: "POST" });
+                        await fetch("/fbnodes/vace-delete-intermediates", { method: "POST" });
                         console.log("[VACEClipJoiner] Cache cleared for regeneration");
                     } catch (err) {
                         console.error("[VACEClipJoiner] Error:", err);
