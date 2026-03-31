@@ -11,6 +11,7 @@ from .nodes import (
     SwitchAny, SwitchAnyBool,
     PromptApplyLora,
     BetterImageLoader,
+    LoadVideoPlus,
     VACEStitcher,
     VACEStitcher_Options,
     install_latent_preview_hook,
@@ -28,19 +29,21 @@ NODE_CLASS_MAPPINGS = {
     "SwitchAnyBool": SwitchAnyBool,
     "PromptApplyLora": PromptApplyLora,
     "BetterImageLoader": BetterImageLoader,
+    "LoadVideoPlus": LoadVideoPlus,
     "VACEStitcher": VACEStitcher,
     "VACEStitcher_Options": VACEStitcher_Options,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "SaveVideoH26x": "Save Video H264/H265",
+    "SaveVideoH26x": "Save Video+",
     "LoadLatentFile": "Load Latent File",
     "AudioMonoToStereo": "Audio Mono to Stereo",
     "GetVideoComponentsPlus": "Get Video Components+",
     "SwitchAny": "Switch Any",
     "SwitchAnyBool": "Switch Any (Boolean)",
     "PromptApplyLora": "Prompt Apply LoRA",
-    "BetterImageLoader": "Better Image Loader",
+    "BetterImageLoader": "Load Image+",
+    "LoadVideoPlus": "Load Video+",
     "VACEStitcher": "VACE Stitcher",
     "VACEStitcher_Options": "VACE Stitcher Options",
 }

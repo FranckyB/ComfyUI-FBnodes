@@ -1,5 +1,5 @@
 """
-Save Video H264/H265 Node
+Save Video+ Node
 A custom node that saves videos with H.264 or H.265 (HEVC) codec with quality control.
 Based on ComfyUI's built-in SaveVideo node but with added H.265 codec and CRF quality options.
 """
@@ -348,7 +348,7 @@ class LoadLatentFile:
     RETURN_TYPES = ("LATENT",)
     FUNCTION = "load"
     CATEGORY = "FBnodes"
-    DESCRIPTION = "Load a latent from a file. Use with Save Video H264/H265 to reload saved latents."
+    DESCRIPTION = "Load a latent from a file. Use with Save Video+ to reload saved latents."
 
     def load(self, file_path):
         if not file_path or not os.path.exists(file_path):

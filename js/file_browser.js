@@ -8,7 +8,8 @@ let currentSubfolder = '';
 // Track current source folder (input or output)
 let currentSourceFolder = 'input';
 
-export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder) {
+export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder, options) {
+    const opts = options || {};
     // Store source folder
     currentSourceFolder = sourceFolder || 'input';
     // If a file is currently selected and lives in a subfolder, open in that folder
@@ -186,15 +187,24 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder) 
     // Add to DOM
     document.body.appendChild(overlay);
 
-    // Load files
-    loadFileThumbnails(gridContainer, currentFile, onFileSelect, overlay, breadcrumb);
-
     // Setup search/filter
     const searchInput = filterBar.querySelector('.search-input');
     const filterType = filterBar.querySelector('.filter-type');
+
+    // Apply default filter if specified
+    if (opts.defaultFilter) {
+        filterType.value = opts.defaultFilter;
+    }
     
     searchInput.oninput = () => filterThumbnails(gridContainer, searchInput.value, filterType.value);
     filterType.onchange = () => filterThumbnails(gridContainer, searchInput.value, filterType.value);
+
+    // Load files then apply initial filter
+    loadFileThumbnails(gridContainer, currentFile, onFileSelect, overlay, breadcrumb).then(() => {
+        if (opts.defaultFilter) {
+            filterThumbnails(gridContainer, searchInput.value, filterType.value);
+        }
+    });
 }
 
 async function loadFileThumbnails(container, currentFile, onFileSelect, overlay, breadcrumbElement) {

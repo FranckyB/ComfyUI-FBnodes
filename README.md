@@ -4,7 +4,7 @@ A grab bag of handy ComfyUI nodes I built for my own workflows and figured someo
 
 ## Nodes
 
-### Save Video H264/H265
+### Save Video+
 Save video with H.264 or H.265 (HEVC) codec and quality control. Includes audio muxing and workflow metadata embedding.
 If yuv444 is selected, will generate a preview clip, so it can still be seen in browser. (Saved in temp)
 
@@ -14,7 +14,7 @@ If yuv444 is selected, will generate a preview clip, so it can still be seen in 
 - **Preview mode**: Toggle save off for fast preview-only encoding
 - **Latent saving**: Optionally save the latent alongside the video for easy re-generation
 
-### Better Image Loader:
+### Load Image+:
 - **Image/Video Screenshot Loading**: Image loader, based on Prompt Extractor from [Prompt Manager](https://github.com/FranckyB/ComfyUI-Prompt-Manager)
 - **Input/Output Folder Switching**: Toggle between browsing your input or output folder directly from the node
 - **File Browser**: Same thumbnail browser as Prompt Extractor with subfolder navigation
@@ -22,6 +22,15 @@ If yuv444 is selected, will generate a preview clip, so it can still be seen in 
 - **Drag-and-Drop Support**: Drop images or videos directly onto the node
 - **Image Preview**: Built-in preview with click-to-enlarge modal for images and videos
 - **Single IMAGE Output**: Outputs a single IMAGE tensor, ready to connect to any image input
+
+### Load Video+
+Video loader with the same file browser and UX as Load Image+, but for videos. Outputs a VIDEO type for use with **Get Video Components+**.
+
+- **Input/Output Folder Switching**: Toggle between browsing your input or output folder
+- **File Browser**: Thumbnail browser with video-first filtering and subfolder navigation
+- **Video Preview**: Click-to-enlarge modal with playback controls
+- **Drag-and-Drop Support**: Drop video files directly onto the node
+- **VIDEO Output**: Outputs a VIDEO, ready to pipe into Get Video Components+
 
 ### VACE Stitcher
 Generate smooth AI-powered transitions between video clips using VACE conditioning and 2-stage sampling with a single node featuring a built-in clip browser, drag-to-reorder list, and cached h265 transitions for resumability.
@@ -41,6 +50,8 @@ Inspired by [__Bob__](https://civitai.com/user/__Bob__)'s [Wan VACE Clip Joiner 
 <details>
 <summary><strong>How to use VACE Stitcher</strong></summary>
 
+An example workflow can be found ....  If starting from scratch here are some basic instructions.
+
 #### Required Models
 
 You need **both** the high-noise and low-noise Wan 2.2 VACE models. Choose one format:
@@ -56,6 +67,7 @@ Place models in `/models/diffusion_models/` or '/models/unet' if GGUF
 #### Tips
 
 - Use a Wan 2.2 i2v‑distilled LoRA to lower the required step count.
+- **Lossless clips**: Save your source clips with **Save Video+** using the "Save Latent" option. VACE Stitcher will automatically detect and use the `.latent` file for lossless quality — no video decode needed. A magenta dot in the clip list indicates which clips have a latent available. For now only wan latents are supported.
 - **First run** generates and caches all transitions. Subsequent runs skip cached pairs.
 - **Delete Transitions** clears the cache so you can regenerate with different settings.
 - Without an **Options** node connected, the seed is random each run — just delete transitions and re-queue for a new result.
@@ -65,7 +77,7 @@ Place models in `/models/diffusion_models/` or '/models/unet' if GGUF
 </details>
 
 ### Load Latent File
-Load a `.latent` file saved by Save Video H264/H265. Companion node for video+latent workflows.
+Load a `.latent` file saved by Save Video+. Companion node for video+latent workflows.
 
 ### Get Video Components+
 Like ComfyUI's built-in GetVideoComponents but also outputs the file path and automatically loads a matching `.latent` file if one exists alongside the video.
@@ -110,6 +122,10 @@ pip install -r ComfyUI-FBnodes/requirements.txt
 GPL-3.0
 
 ## Changelog
+
+### version 1.1.6
+- **Renamed nodes**: Save Video H264/H265 → **Save Video+**, Better Image Loader → **Load Image+**. Existing workflows are unaffected.
+- **New node**: Added **Load Video+** — video loader with file browser, preview, and drag-drop. Outputs VIDEO for Get Video Components+.
 
 ### version 1.1.5
 - **VACE Stitcher**: Added lossless `.latent` file support for clips and transitions
