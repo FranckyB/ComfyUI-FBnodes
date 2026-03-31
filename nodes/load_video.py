@@ -3,7 +3,6 @@ Load Video+ - Video loader with file browser, preview, and input/output folder s
 Outputs VIDEO type for use with Get Video Components+.
 """
 import os
-import hashlib
 
 import folder_paths
 
@@ -60,11 +59,22 @@ class LoadVideoPlus:
     def VALIDATE_INPUTS(cls, **kwargs):
         return True
 
+    @staticmethod
+    def _parse_video_path(video):
+        """Strip [input]/[output] annotation from video path if present."""
+        import re
+        match = re.match(r'^(.+?)\s*\[(input|output|temp)\]\s*$', video)
+        if match:
+            return match.group(1).strip(), match.group(2)
+        return video.strip(), None
+
     def load(self, video="", source_folder="input", unique_id=None):
         if not video or video == "(none)":
             raise ValueError("No video file selected. Please select a video using the file browser.")
 
-        file_path = video.strip()
+        file_path, annotated_type = self._parse_video_path(video)
+        if annotated_type:
+            source_folder = annotated_type
         resolved_path = None
 
         if not os.path.isabs(file_path):
@@ -93,7 +103,13 @@ class LoadVideoPlus:
     def IS_CHANGED(cls, video="", source_folder="input", **kwargs):
         if not video or video == "(none)":
             return ""
-        file_path = video.strip()
+        import re
+        match = re.match(r'^(.+?)\s*\[(input|output|temp)\]\s*$', video)
+        if match:
+            file_path = match.group(1).strip()
+            source_folder = match.group(2)
+        else:
+            file_path = video.strip()
         if not os.path.isabs(file_path):
             if source_folder == "output":
                 base_dir = folder_paths.get_output_directory()

@@ -1,7 +1,8 @@
 /**
  * LoadVideoPlus Extension for ComfyUI (FBnodes)
- * Video loader with file browser and drag-drop.
- * Video playback preview is handled natively by ComfyUI via UI result data.
+ * Video loader with file browser, drag-drop, and native video playback.
+ * Uses ComfyUI's native video_upload widget with [output] path annotations
+ * for output folder support.
  */
 
 import { app } from "../../scripts/app.js";
@@ -9,6 +10,26 @@ import { api } from "../../scripts/api.js";
 import { createFileBrowserModal } from "./file_browser.js";
 
 const VIDEO_EXTENSIONS = ['mp4', 'webm', 'mov', 'avi', 'mkv', 'm4v', 'wmv'];
+
+/**
+ * Strip [input]/[output]/[temp] annotation from a path
+ */
+function stripAnnotation(value) {
+    if (!value) return value;
+    return value.replace(/\s*\[(input|output|temp)\]\s*$/, '');
+}
+
+/**
+ * Add [output] annotation to a path (only if source is not input)
+ */
+function annotatePath(filename, sourceFolder) {
+    if (!filename || filename === '(none)') return filename;
+    const stripped = stripAnnotation(filename);
+    if (sourceFolder === 'output') {
+        return `${stripped} [output]`;
+    }
+    return stripped;
+}
 
 /**
  * LoadVideoPlus extension registration
@@ -43,7 +64,9 @@ app.registerExtension({
                                     const ext = f.split('.').pop().toLowerCase();
                                     return VIDEO_EXTENSIONS.includes(ext);
                                 });
-                                videoWidget.options.values = ["(none)", ...videoFiles];
+                                // Annotate output files so native player uses type=output
+                                const annotated = videoFiles.map(f => annotatePath(f, value));
+                                videoWidget.options.values = ["(none)", ...annotated];
                                 videoWidget.value = "(none)";
                                 if (videoWidget.callback) videoWidget.callback("(none)");
                             }
@@ -65,11 +88,13 @@ app.registerExtension({
                     name: "\u{1F4C1} Browse Files",
                     value: null,
                     callback: () => {
-                        const currentFile = videoWidget.value === "(none)" ? null : videoWidget.value;
+                        const rawValue = videoWidget.value;
+                        const currentFile = (!rawValue || rawValue === "(none)") ? null : stripAnnotation(rawValue);
                         const sourceFolder = node._sourceFolder || 'input';
                         createFileBrowserModal(currentFile, (selectedFile) => {
-                            videoWidget.value = selectedFile;
-                            if (videoWidget.callback) videoWidget.callback(selectedFile);
+                            const annotated = annotatePath(selectedFile, node._sourceFolder);
+                            videoWidget.value = annotated;
+                            if (videoWidget.callback) videoWidget.callback(annotated);
                             node.setDirtyCanvas(true);
                         }, sourceFolder, { defaultFilter: 'video' });
                     },
@@ -93,13 +118,18 @@ app.registerExtension({
                     }).then(data => {
                         if (data && data.files) {
                             const savedValue = videoWidget.value;
+                            const savedStripped = stripAnnotation(savedValue);
                             const videoFiles = data.files.filter(f => {
                                 const ext = f.split('.').pop().toLowerCase();
                                 return VIDEO_EXTENSIONS.includes(ext);
                             });
-                            videoWidget.options.values = ["(none)", ...videoFiles];
-                            if (savedValue && videoFiles.includes(savedValue)) {
-                                videoWidget.value = savedValue;
+                            const annotated = videoFiles.map(f => annotatePath(f, 'output'));
+                            videoWidget.options.values = ["(none)", ...annotated];
+                            // Restore the saved value (ensure it has annotation)
+                            if (savedStripped && videoFiles.includes(savedStripped)) {
+                                const restoredValue = annotatePath(savedStripped, 'output');
+                                videoWidget.value = restoredValue;
+                                if (videoWidget.callback) videoWidget.callback(restoredValue);
                             }
                         }
                     }).catch(() => {});
@@ -138,9 +168,14 @@ app.registerExtension({
                     if (response.ok) {
                         const data = await response.json();
                         if (videoWidget) {
+                            // Switch to input folder since drag-drop uploads to input
+                            if (sourceFolderWidget && node._sourceFolder !== 'input') {
+                                sourceFolderWidget.value = 'input';
+                                node._sourceFolder = 'input';
+                            }
+
                             try {
-                                const sf = node._sourceFolder || 'input';
-                                const listResponse = await api.fetchApi(`/fbnodes/list-files?source=${sf}`);
+                                const listResponse = await api.fetchApi(`/fbnodes/list-files?source=input`);
                                 if (listResponse.ok) {
                                     const listData = await listResponse.json();
                                     const videoFiles = (listData.files || []).filter(f => {
