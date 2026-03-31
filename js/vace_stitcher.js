@@ -209,7 +209,15 @@ function showThumbnailContextMenu(event, filename, previewElement) {
 
 function openClipBrowserModal(sourceFolder, existingClips, onDone) {
     _currentSourceFolder = sourceFolder || "input";
+    // Return to the last directory the user added clips from
     _currentSubfolder = "";
+    if (existingClips.length > 0) {
+        const lastFile = existingClips[existingClips.length - 1].file || "";
+        const slashIdx = lastFile.lastIndexOf("/");
+        if (slashIdx > 0) {
+            _currentSubfolder = lastFile.substring(0, slashIdx);
+        }
+    }
 
     // Track already-selected files
     const selected = new Set(existingClips.map((c) => c.file));
@@ -645,22 +653,58 @@ app.registerExtension({
             `;
             sectionContainer.appendChild(clipListContainer);
 
-            // Footer with Delete transitions button
+            // Footer with Delete transitions + Clear All buttons
             const sectionFooter = document.createElement("div");
             sectionFooter.style.cssText = `
                 padding:6px 8px;border-top:1px solid rgba(255,255,255,0.1);
-                flex-shrink:0;
+                flex-shrink:0;display:flex;gap:6px;
             `;
             const deleteBtn = document.createElement("button");
-            deleteBtn.textContent = "\uD83D\uDDD1\uFE0F Delete Transitions";
+            deleteBtn.textContent = "Delete Transitions";
             deleteBtn.style.cssText = `
-                width:100%;padding:5px 12px;border:none;border-radius:4px;
+                flex:1;padding:5px 12px;border:none;border-radius:4px;
                 font-size:11px;cursor:default;
                 background:rgba(255,255,255,0.06);color:rgba(255,255,255,0.3);
                 transition:background 0.15s, color 0.15s;
             `;
             deleteBtn.disabled = true;
             sectionFooter.appendChild(deleteBtn);
+
+            const clearAllBtn = document.createElement("button");
+            clearAllBtn.textContent = "Clear All";
+            clearAllBtn.style.cssText = `
+                flex:1;padding:5px 12px;border:none;border-radius:4px;
+                font-size:11px;cursor:pointer;
+                background:rgba(255,255,255,0.06);color:rgba(255,255,255,0.5);
+                transition:background 0.15s, color 0.15s;
+            `;
+            clearAllBtn.title = "Remove all clips and delete cached transitions";
+            clearAllBtn.onmouseenter = () => {
+                clearAllBtn.style.background = "rgba(200,60,60,0.25)";
+                clearAllBtn.style.color = "rgba(255,130,130,0.9)";
+            };
+            clearAllBtn.onmouseleave = () => {
+                clearAllBtn.style.background = "rgba(255,255,255,0.06)";
+                clearAllBtn.style.color = "rgba(255,255,255,0.5)";
+            };
+            clearAllBtn.onclick = async () => {
+                const confirmed = await showConfirm(
+                    "Clear All",
+                    "Remove all clips from the list and delete all cached transitions?",
+                    "Clear All", "#c00"
+                );
+                if (!confirmed) return;
+                // Clear clips
+                clipEntries.length = 0;
+                syncWidget();
+                rebuildClipListDisplay();
+                // Delete transitions
+                try {
+                    await fetch("/fbnodes/vace-delete-transitions", { method: "POST" });
+                } catch (_) {}
+                updateDeleteBtnState();
+            };
+            sectionFooter.appendChild(clearAllBtn);
             sectionContainer.appendChild(sectionFooter);
 
             const sectionWidget = node.addDOMWidget(
@@ -698,10 +742,10 @@ app.registerExtension({
                     const info = await (await fetch("/fbnodes/vace-transitions-info")).json();
                     if (info.exists && info.total_files > 0) {
                         deleteBtn.disabled = false;
-                        deleteBtn.style.background = "rgba(200,60,60,0.2)";
-                        deleteBtn.style.color = "rgba(255,130,130,0.8)";
+                        deleteBtn.style.background = "rgba(255,255,255,0.06)";
+                        deleteBtn.style.color = "rgba(255,255,255,0.5)";
                         deleteBtn.style.cursor = "pointer";
-                        deleteBtn.title = `${info.total_files} cached transition(s) in ${info.dirs} set(s)`;
+                        deleteBtn.title = `${info.total_files} cached transition(s)`;
                     } else {
                         deleteBtn.disabled = true;
                         deleteBtn.style.background = "rgba(255,255,255,0.06)";
@@ -724,7 +768,7 @@ app.registerExtension({
                     }
                     const confirmed = await showConfirm(
                         "Delete Transitions",
-                        `Delete ${info.total_files} cached transition(s) in ${info.dirs} set(s)?`,
+                        `Delete ${info.total_files} cached transition file(s)?`,
                         "Delete", "#c00"
                     );
                     if (!confirmed) return;
@@ -742,14 +786,26 @@ app.registerExtension({
                 }
             };
             deleteBtn.onmouseenter = () => {
-                if (!deleteBtn.disabled) deleteBtn.style.background = "rgba(200,60,60,0.35)";
+                if (!deleteBtn.disabled) {
+                    deleteBtn.style.background = "rgba(200,60,60,0.25)";
+                    deleteBtn.style.color = "rgba(255,130,130,0.9)";
+                }
             };
             deleteBtn.onmouseleave = () => {
-                if (!deleteBtn.disabled) deleteBtn.style.background = "rgba(200,60,60,0.2)";
+                if (!deleteBtn.disabled) {
+                    deleteBtn.style.background = "rgba(255,255,255,0.06)";
+                    deleteBtn.style.color = "rgba(255,255,255,0.5)";
+                }
             };
 
             updateDeleteBtnState();
             setInterval(updateDeleteBtnState, 30000);
+
+            // Also refresh when execution finishes (transitions may have been generated)
+            api.addEventListener("executed", (e) => {
+                if (e.detail?.node === node.id + "") updateDeleteBtnState();
+            });
+            api.addEventListener("execution_success", () => updateDeleteBtnState());
 
             // ── Drag reorder state ──
             let _dragIdx = null;
