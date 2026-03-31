@@ -1,7 +1,7 @@
 /**
  * VACE Clip Joiner UI Extension for ComfyUI (FBnodes)
  * Multi-select file browser, reorderable clip list with enable/disable,
- * thumbnail hover, and delete-intermediates button.
+ * thumbnail hover, and delete-transitions button.
  */
 
 import { app } from "../../scripts/app.js";
@@ -645,7 +645,7 @@ app.registerExtension({
             `;
             sectionContainer.appendChild(clipListContainer);
 
-            // Footer with Delete Intermediates button
+            // Footer with Delete transitions button
             const sectionFooter = document.createElement("div");
             sectionFooter.style.cssText = `
                 padding:6px 8px;border-top:1px solid rgba(255,255,255,0.1);
@@ -695,7 +695,7 @@ app.registerExtension({
             // ── Delete button state management ──
             async function updateDeleteBtnState() {
                 try {
-                    const info = await (await fetch("/fbnodes/vace-intermediates-info")).json();
+                    const info = await (await fetch("/fbnodes/vace-transitions-info")).json();
                     if (info.exists && info.total_files > 0) {
                         deleteBtn.disabled = false;
                         deleteBtn.style.background = "rgba(200,60,60,0.2)";
@@ -707,7 +707,7 @@ app.registerExtension({
                         deleteBtn.style.background = "rgba(255,255,255,0.06)";
                         deleteBtn.style.color = "rgba(255,255,255,0.3)";
                         deleteBtn.style.cursor = "default";
-                        deleteBtn.title = "No cached intermediates";
+                        deleteBtn.title = "No cached transitions";
                     }
                 } catch (_) {
                     deleteBtn.disabled = true;
@@ -717,7 +717,7 @@ app.registerExtension({
             deleteBtn.onclick = async () => {
                 if (deleteBtn.disabled) return;
                 try {
-                    const info = await (await fetch("/fbnodes/vace-intermediates-info")).json();
+                    const info = await (await fetch("/fbnodes/vace-transitions-info")).json();
                     if (!info.exists || info.total_files === 0) {
                         updateDeleteBtnState();
                         return;
@@ -728,7 +728,7 @@ app.registerExtension({
                         "Delete", "#c00"
                     );
                     if (!confirmed) return;
-                    const resp = await (await fetch("/fbnodes/vace-delete-intermediates", { method: "POST" })).json();
+                    const resp = await (await fetch("/fbnodes/vace-delete-transitions", { method: "POST" })).json();
                     if (resp.success) {
                         console.log(`[VACEClipJoiner] Deleted ${resp.deleted} intermediate set(s).`);
                     }
@@ -738,7 +738,7 @@ app.registerExtension({
                         clipListWidget.value = clipListWidget.value; // trigger dirty
                     }
                 } catch (err) {
-                    console.error("[VACEClipJoiner] Error deleting intermediates:", err);
+                    console.error("[VACEClipJoiner] Error deleting transitions:", err);
                 }
             };
             deleteBtn.onmouseenter = () => {
@@ -979,10 +979,10 @@ app.registerExtension({
 
                 addMenuItem("\u267B\uFE0F Regenerate Transitions", async () => {
                     try {
-                        const info = await (await fetch("/fbnodes/vace-intermediates-info")).json();
+                        const info = await (await fetch("/fbnodes/vace-transitions-info")).json();
                         if (!info.exists || info.total_files === 0) return;
                         if (!confirm(`Delete all cached transitions so they regenerate on next run?`)) return;
-                        await fetch("/fbnodes/vace-delete-intermediates", { method: "POST" });
+                        await fetch("/fbnodes/vace-delete-transitions", { method: "POST" });
                         console.log("[VACEClipJoiner] Cache cleared for regeneration");
                     } catch (err) {
                         console.error("[VACEClipJoiner] Error:", err);

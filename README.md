@@ -24,13 +24,13 @@ If yuv444 is selected, will generate a preview clip, so it can still be seen in 
 - **Single IMAGE Output**: Outputs a single IMAGE tensor, ready to connect to any image input
 
 ### VACE Stitcher
-Generate smooth AI-powered transitions between video clips using VACE conditioning and 2-stage sampling with a single node featuring a built-in clip browser, drag-to-reorder list, and cached h265 intermediates for resumability.
+Generate smooth AI-powered transitions between video clips using VACE conditioning and 2-stage sampling with a single node featuring a built-in clip browser, drag-to-reorder list, and cached h265 transitions for resumability.
 
 - **File browser modal**: Browse input/output folders, multi-select clips, subfolder navigation
 - **Reorderable clip list**: Drag-to-reorder, enable/disable individual clips, hover thumbnails
 - **2-stage sampling**: High-noise + low-noise models for quality transitions
 - **Pixel-space stitching**: Crossfade with easing curves, optional color matching
-- **Cached transitions**: h265 yuv444p10le intermediates saved to temp — skip already-generated pairs on re-run
+- **Cached transitions**: h265 yuv444p10le transitions saved to temp — skip already-generated pairs on re-run
 - **Options node**: Connect a separate "VACE Stitcher Options" node to tune all parameters, or use sensible defaults
 
 Inspired by [__Bob__](https://civitai.com/user/__Bob__)'s [Wan VACE Clip Joiner workflow](https://civitai.com/models/2024299/wan-vace-clip-joiner-smooth-ai-video-transitions-for-wan-ltx-2-hunyuan-and-any-other-video-source) on CivitAI.

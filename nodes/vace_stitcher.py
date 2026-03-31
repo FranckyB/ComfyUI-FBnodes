@@ -1,5 +1,5 @@
 """
-VACE Transition Builder Node
+VACE Stitcher Node
 Takes video clips (.mp4), generates VACE transitions between them,
 and stitches everything into a single continuous pixel sequence.
 """
@@ -68,8 +68,8 @@ def save_video_444_10bit(file_path: str, pixels: torch.Tensor, fps: float = 24.0
             output.mux(packet)
 
 
-def _get_intermediates_dir(clip_files):
-    """Get a stable intermediates directory in temp based on the clip list hash."""
+def _get_transitions_dir(clip_files):
+    """Get a stable transitions directory in temp based on the clip list hash."""
     key_str = "|".join(os.path.abspath(f) for f in clip_files)
     h = hashlib.md5(key_str.encode()).hexdigest()[:12]
     temp_dir = folder_paths.get_temp_directory()
@@ -78,7 +78,7 @@ def _get_intermediates_dir(clip_files):
     return d
 
 
-def _list_all_intermediates():
+def _list_all_transitions():
     """List all intermediate transition directories in temp."""
     temp_dir = folder_paths.get_temp_directory()
     base = os.path.join(temp_dir, "_vace_transitions")
@@ -97,9 +97,9 @@ def _list_all_intermediates():
 # API routes for VACE Clip Joiner
 # ---------------------------------------------------------------------------
 
-@server.PromptServer.instance.routes.post("/fbnodes/vace-delete-intermediates")
-async def vace_delete_intermediates(request):
-    """Delete all VACE transition intermediates from temp."""
+@server.PromptServer.instance.routes.post("/fbnodes/vace-delete-transitions")
+async def vace_delete_transitions(request):
+    """Delete all VACE transition transitions from temp."""
     import shutil
     try:
         temp_dir = folder_paths.get_temp_directory()
@@ -116,11 +116,11 @@ async def vace_delete_intermediates(request):
         return server.web.json_response({"success": False, "error": str(e)}, status=500)
 
 
-@server.PromptServer.instance.routes.get("/fbnodes/vace-intermediates-info")
-async def vace_intermediates_info(request):
-    """Check if intermediates exist."""
+@server.PromptServer.instance.routes.get("/fbnodes/vace-transitions-info")
+async def vace_transitions_info(request):
+    """Check if transitions exist."""
     try:
-        items = _list_all_intermediates()
+        items = _list_all_transitions()
         total = sum(i["count"] for i in items)
         return server.web.json_response({"exists": total > 0, "total_files": total, "dirs": len(items)})
     except Exception as e:
@@ -558,7 +558,7 @@ class VACEStitcher:
     DESCRIPTION = (
         "Select video/latent clips via browser, reorder them, and generate VACE "
         "transitions between consecutive clips using 2-stage sampling. "
-        "Intermediates saved to temp for resumability."
+        "transitions saved to temp for resumability."
     )
 
     @classmethod
@@ -634,12 +634,12 @@ class VACEStitcher:
         if ext0 not in ('.mp4', '.webm', '.mov', '.avi'):
             raise ValueError(f"Unsupported file type: {ext0}. Only video files (.mp4, .webm, .mov, .avi) are supported.")
 
-        print(f"[VACE Transition Builder] {len(clip_files)} clips")
+        print(f"[VACE Stitcher] {len(clip_files)} clips")
 
         # Load clips
         clip_pixels = []
         for f in clip_files:
-            print(f"[VACE Transition Builder]   Loading: {os.path.basename(f)}")
+            print(f"[VACE Stitcher]   Loading: {os.path.basename(f)}")
             clip_pixels.append(load_video_file(f))
 
         # ── 2. Use models directly (user applies shift externally if needed) ──
@@ -658,11 +658,11 @@ class VACEStitcher:
         if seamless_loop:
             pairs.append((num_clips - 1, 0))
 
-        print(f"[VACE Transition Builder] Generating {len(pairs)} transitions"
+        print(f"[VACE Stitcher] Generating {len(pairs)} transitions"
               f"{' (seamless loop)' if seamless_loop else ''}")
 
-        # ── 5. Intermediates directory (always save to temp) ──
-        intermediates_dir = _get_intermediates_dir(clip_files)
+        # ── 5. transitions directory (always save to temp) ──
+        transitions_dir = _get_transitions_dir(clip_files)
 
         # ── 6. Determine clip dimensions ──
         height = clip_pixels[0].shape[1]
@@ -670,7 +670,7 @@ class VACEStitcher:
 
         # Compute how many pixel frames we need from each clip edge
         required_pixels = context_frames + replace_frames
-        print(f"[VACE Transition Builder] Context={context_frames}, Replace={replace_frames}, "
+        print(f"[VACE Stitcher] Context={context_frames}, Replace={replace_frames}, "
               f"Required pixels per edge={required_pixels}")
 
         # Convert pixel-frame batch size to latent frames for VAE decode
@@ -682,14 +682,14 @@ class VACEStitcher:
 
         for pair_idx, (idx_a, idx_b) in enumerate(pairs):
             pair_key = f"{idx_a:03d}_to_{idx_b:03d}"
-            print(f"[VACE Transition Builder] Transition {pair_idx + 1}/{len(pairs)}: "
+            print(f"[VACE Stitcher] Transition {pair_idx + 1}/{len(pairs)}: "
                   f"clip {idx_a} -> clip {idx_b}")
 
             # Check for cached intermediate (MP4)
-            if intermediates_dir:
-                cached_path = os.path.join(intermediates_dir, f"transition_{pair_key}.mp4")
+            if transitions_dir:
+                cached_path = os.path.join(transitions_dir, f"transition_{pair_key}.mp4")
                 if os.path.exists(cached_path):
-                    print(f"[VACE Transition Builder]   Using cached transition: {cached_path}")
+                    print(f"[VACE Stitcher]   Using cached transition: {cached_path}")
                     transition_pixels[pair_key] = load_video_file(cached_path)
                     pbar.update(1)
                     continue
@@ -710,7 +710,7 @@ class VACEStitcher:
                 context_a = edge_a[-context_frames:]  # last context_frames
                 context_b = edge_b[:context_frames]   # first context_frames
 
-            print(f"[VACE Transition Builder]   Edge A: {edge_a.shape[0]}px, "
+            print(f"[VACE Stitcher]   Edge A: {edge_a.shape[0]}px, "
                   f"Edge B: {edge_b.shape[0]}px, "
                   f"Context A: {context_a.shape[0]}px, Context B: {context_b.shape[0]}px")
 
@@ -731,7 +731,7 @@ class VACEStitcher:
             )
 
             # Two-stage sampling
-            print(f"[VACE Transition Builder]   Sampling ({steps_high}+{steps_low} steps)...")
+            print(f"[VACE Stitcher]   Sampling ({steps_high}+{steps_low} steps)...")
             result_latent = sample_two_stage(
                 model_high_shifted, model_low_shifted,
                 vace_positive, vace_negative, vace_latent,
@@ -746,23 +746,23 @@ class VACEStitcher:
 
             # Decode transition to pixels immediately
             transition_samples = result_latent["samples"]
-            print(f"[VACE Transition Builder]   Decoding transition {pair_key}...")
+            print(f"[VACE Stitcher]   Decoding transition {pair_key}...")
             pixels = batched_vae_decode(vae, transition_samples, decode_latent_batch)
 
             transition_pixels[pair_key] = pixels
 
             # Save intermediate as h265 yuv444 10-bit MP4
-            if intermediates_dir:
-                save_path = os.path.join(intermediates_dir, f"transition_{pair_key}.mp4")
+            if transitions_dir:
+                save_path = os.path.join(transitions_dir, f"transition_{pair_key}.mp4")
                 save_video_444_10bit(save_path, pixels)
-                print(f"[VACE Transition Builder]   Saved: {save_path}")
+                print(f"[VACE Stitcher]   Saved: {save_path}")
 
             pbar.update(1)
 
         # ── 8. Stitch in pixel space ──
         # clip_pixels were already decoded in step 6 (same pixels used for VACE context).
         # Transitions are already decoded (step 7). Apply color matching now.
-        print("[VACE Transition Builder] Stitching in pixel space...")
+        print("[VACE Stitcher] Stitching in pixel space...")
 
         # Apply color matching to all transition pixels
         if color_match:
@@ -796,11 +796,11 @@ class VACEStitcher:
                         matched = list(executor.map(match_frame, range(n_frames)))
 
                     transition_pixels[pair_key] = torch.stack(matched, dim=0).to(torch.float32).clamp_(0, 1)
-                    print(f"[VACE Transition Builder]   Color matched {pair_key} (mkl, strength=0.7)")
+                    print(f"[VACE Stitcher]   Color matched {pair_key} (mkl, strength=0.7)")
                 except ImportError:
-                    print("[VACE Transition Builder]   WARNING: color-matcher not installed. pip install color-matcher")
+                    print("[VACE Stitcher]   WARNING: color-matcher not installed. pip install color-matcher")
                 except Exception as e:
-                    print(f"[VACE Transition Builder]   WARNING: Color match failed for {pair_key}: {e}")
+                    print(f"[VACE Stitcher]   WARNING: Color match failed for {pair_key}: {e}")
 
         # Stitch pattern (matching the workflow):
         #   [clip_A trimmed] [FULL VACE output] [clip_B trimmed] [FULL VACE output] ...
@@ -886,7 +886,7 @@ class VACEStitcher:
         segments = [s for s in segments if s.shape[0] > 0]
         stitched_pixels = torch.cat(segments, dim=0)
         total_pixel_frames = stitched_pixels.shape[0]
-        print(f"[VACE Transition Builder] Final output: {stitched_pixels.shape} "
+        print(f"[VACE Stitcher] Final output: {stitched_pixels.shape} "
               f"({total_pixel_frames} pixel frames)")
 
         return (stitched_pixels,)
