@@ -2,7 +2,7 @@
 ComfyUI-FBnodes - Utility nodes for ComfyUI
 Video saving, universal switches, LoRA application, and animated latent preview.
 """
-__version__ = "1.1.1"
+__version__ = "1.1.5"
 __author__ = "François Beaudry"
 __license__ = "GPL-3.0"
 

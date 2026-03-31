@@ -898,6 +898,16 @@ app.registerExtension({
                     lbl.onmouseleave = () => hideHoverThumbnail();
                     row.appendChild(lbl);
 
+                    // Latent indicator dot (hidden by default, shown async)
+                    const latentDot = document.createElement("div");
+                    latentDot.className = "vcj-latent-dot";
+                    latentDot.style.cssText = `
+                        width:8px;height:8px;border-radius:50%;flex-shrink:0;
+                        background:#c840c0;display:none;
+                    `;
+                    latentDot.title = "Lossless .latent file available";
+                    row.appendChild(latentDot);
+
                     // Remove button
                     const removeBtn = document.createElement("button");
                     removeBtn.textContent = "\u2715";
@@ -948,6 +958,24 @@ app.registerExtension({
 
                     clipListContainer.appendChild(row);
                 });
+
+                // Async: check which clips have .latent files and show dots
+                const source = sourceFolderWidget?.value || "input";
+                const filesToCheck = clipEntries.map((e) => e.file);
+                fetch("/fbnodes/vace-check-latents", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ source, files: filesToCheck }),
+                }).then((r) => r.json()).then((data) => {
+                    const latentSet = new Set(data.has_latent || []);
+                    clipListContainer.querySelectorAll("[data-clip-idx]").forEach((row) => {
+                        const idx = parseInt(row.dataset.clipIdx);
+                        if (latentSet.has(clipEntries[idx]?.file)) {
+                            const dot = row.querySelector(".vcj-latent-dot");
+                            if (dot) dot.style.display = "block";
+                        }
+                    });
+                }).catch(() => {});
 
                 // Update node height
                 node.setDirtyCanvas(true, true);

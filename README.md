@@ -30,7 +30,8 @@ Generate smooth AI-powered transitions between video clips using VACE conditioni
 - **Reorderable clip list**: Drag-to-reorder, enable/disable individual clips, hover thumbnails
 - **2-stage sampling**: High-noise + low-noise models for quality transitions
 - **Pixel-space stitching**: Crossfade with easing curves, optional color matching
-- **Cached transitions**: h265 yuv444p10le transitions saved to temp — skip already-generated pairs on re-run
+- **Lossless latent support**: Load `.latent` clips directly — skips lossy video decode, with memory-efficient on-demand decoding
+- **Cached transitions**: Transitions cached as lossless `.latent` files (with `.mp4` fallback) — skip already-generated pairs on re-run
 - **Options node**: Connect a separate "VACE Stitcher Options" node to tune all parameters, or use sensible defaults
 
 Inspired by [__Bob__](https://civitai.com/user/__Bob__)'s [Wan VACE Clip Joiner workflow](https://civitai.com/models/2024299/wan-vace-clip-joiner-smooth-ai-video-transitions-for-wan-ltx-2-hunyuan-and-any-other-video-source) on CivitAI.
@@ -109,6 +110,13 @@ pip install -r ComfyUI-FBnodes/requirements.txt
 GPL-3.0
 
 ## Changelog
+
+### version 1.1.5
+- **VACE Stitcher**: Added lossless `.latent` file support for clips and transitions
+  - Clips with a `.latent` file alongside are loaded in latent space, avoiding lossy video decode
+  - Transitions now cached as `.latent` files instead of h265 video — lossless quality
+  - Memory-efficient on-demand decoding: only decode what's needed, when it's needed
+  - Latent indicator (magenta dot) in clip list UI shows which clips have `.latent` files
 
 ### version 1.1.1
 - Renamed node from "VACE Transition Builder" to **VACE Stitcher**

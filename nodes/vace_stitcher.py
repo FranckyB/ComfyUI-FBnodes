@@ -20,6 +20,8 @@ import torch
 import numpy as np
 import av
 
+import safetensors.torch
+
 import comfy.sample
 import comfy.samplers
 import comfy.utils
@@ -29,6 +31,32 @@ import folder_paths
 import node_helpers
 import server
 import latent_preview
+
+
+def load_latent_file(file_path: str) -> torch.Tensor:
+    """Load a .latent file and return the latent samples tensor (1, C, T, H, W)."""
+    latent_data = safetensors.torch.load_file(file_path, device="cpu")
+    multiplier = 1.0
+    if "latent_format_version_0" not in latent_data:
+        multiplier = 1.0 / 0.18215
+    return latent_data["latent_tensor"].float() * multiplier
+
+
+def save_latent_file(file_path: str, latent_samples: torch.Tensor):
+    """Save latent samples tensor to a .latent file (lossless)."""
+    latent_output = {
+        "latent_tensor": latent_samples,
+        "latent_format_version_0": torch.tensor([]),
+    }
+    if os.path.exists(file_path):
+        os.remove(file_path)
+    comfy.utils.save_torch_file(latent_output, file_path)
+
+
+def find_matching_latent(video_path: str) -> str | None:
+    """Check if a .latent file exists alongside a video file. Returns path or None."""
+    latent_path = os.path.splitext(video_path)[0] + '.latent'
+    return latent_path if os.path.exists(latent_path) else None
 
 
 def load_video_file(file_path: str) -> torch.Tensor:
@@ -88,14 +116,42 @@ def _list_all_transitions():
     for name in os.listdir(base):
         full = os.path.join(base, name)
         if os.path.isdir(full):
-            mp4s = glob.glob(os.path.join(full, "*.mp4"))
-            result.append({"dir": full, "hash": name, "count": len(mp4s)})
+            files = glob.glob(os.path.join(full, "*.latent")) + glob.glob(os.path.join(full, "*.mp4"))
+            result.append({"dir": full, "hash": name, "count": len(files)})
     return result
 
 
 # ---------------------------------------------------------------------------
 # API routes for VACE Clip Joiner
 # ---------------------------------------------------------------------------
+
+@server.PromptServer.instance.routes.post("/fbnodes/vace-check-latents")
+async def vace_check_latents(request):
+    """Check which clip files have a matching .latent file alongside them."""
+    try:
+        body = await request.json()
+        source = body.get("source", "input")
+        files = body.get("files", [])
+
+        if source == "output":
+            base_dir = folder_paths.get_output_directory()
+        else:
+            base_dir = folder_paths.get_input_directory()
+
+        has_latent = []
+        for f in files:
+            # Sanitize: only allow relative paths, no ..
+            if ".." in f or os.path.isabs(f):
+                continue
+            video_path = os.path.join(base_dir, f.replace("/", os.sep))
+            latent_path = os.path.splitext(video_path)[0] + ".latent"
+            if os.path.isfile(latent_path):
+                has_latent.append(f)
+
+        return server.web.json_response({"has_latent": has_latent})
+    except Exception as e:
+        return server.web.json_response({"has_latent": [], "error": str(e)}, status=500)
+
 
 @server.PromptServer.instance.routes.post("/fbnodes/vace-delete-transitions")
 async def vace_delete_transitions(request):
@@ -386,6 +442,40 @@ def batched_vae_decode(vae, latent: torch.Tensor, frames_per_batch: int = 16) ->
     return torch.cat(all_pixels, dim=0)
 
 
+def decode_edge_pixels(vae, latent: torch.Tensor, edge: str, num_pixels: int,
+                       frames_per_batch: int = 16) -> torch.Tensor:
+    """
+    Decode only the head or tail pixel frames from a latent tensor.
+    Minimizes memory by decoding only the latent frames needed to cover the edge.
+
+    Args:
+        vae: VAE model
+        latent: (1, C, T, H, W) latent tensor
+        edge: 'head' (first N frames) or 'tail' (last N frames)
+        num_pixels: number of pixel frames needed
+        frames_per_batch: decode batch size in latent frames
+
+    Returns: (num_pixels, H, W, 3) pixel tensor
+    """
+    total_latent = latent.shape[2]
+    # Wan VAE: pixel_frames = (latent_frames - 1) * 4 + 1
+    # To get at least N pixel frames: latent_frames_needed = ceil((N - 1) / 4) + 1
+    latent_needed = ((num_pixels - 1 + 3) // 4) + 1  # ceiling division
+    latent_needed = min(latent_needed, total_latent)
+
+    if edge == 'tail':
+        sub_latent = latent[:, :, -latent_needed:, :, :]
+    else:  # head
+        sub_latent = latent[:, :, :latent_needed, :, :]
+
+    pixels = batched_vae_decode(vae, sub_latent, frames_per_batch)
+
+    if edge == 'tail':
+        return pixels[-num_pixels:]
+    else:
+        return pixels[:num_pixels]
+
+
 def build_control_video_and_mask(
     context_a: torch.Tensor, context_b: torch.Tensor,
     context_frames: int, replace_frames: int, new_frames: int,
@@ -636,11 +726,23 @@ class VACEStitcher:
 
         print(f"[VACE Stitcher] {len(clip_files)} clips")
 
-        # Load clips
-        clip_pixels = []
+        # Load clips: prefer .latent files (lossless) with .mp4 fallback
+        clip_pixels = []    # pixel tensors (T, H, W, 3) — may be None if latent available
+        clip_latents = []   # latent tensors (1, C, T, H, W) — None if no .latent file
         for f in clip_files:
-            print(f"[VACE Stitcher]   Loading: {os.path.basename(f)}")
-            clip_pixels.append(load_video_file(f))
+            latent_path = find_matching_latent(f)
+            if latent_path:
+                print(f"[VACE Stitcher]   Loading latent: {os.path.basename(latent_path)}")
+                clip_latents.append(load_latent_file(latent_path))
+                clip_pixels.append(None)  # will decode on demand
+            else:
+                print(f"[VACE Stitcher]   Loading video: {os.path.basename(f)}")
+                clip_latents.append(None)
+                clip_pixels.append(load_video_file(f))
+
+        latent_count = sum(1 for latent in clip_latents if latent is not None)
+        video_count = sum(1 for pixels in clip_pixels if pixels is not None)
+        print(f"[VACE Stitcher] Loaded {len(clip_files)} clips: {latent_count} from .latent, {video_count} from video")
 
         # ── 2. Use models directly (user applies shift externally if needed) ──
         model_high_shifted = model_high
@@ -650,7 +752,39 @@ class VACEStitcher:
         positive_cond = positive
         negative_cond = negative
 
-        # ── 4. Build transition pairs ──
+        # Convert pixel-frame batch size to latent frames for VAE decode
+        decode_latent_batch = max(1, ((decode_batch_size - 1) // 4) + 1)
+
+        # Helper: get edge pixels from a clip without decoding the full thing
+        def get_clip_edge(clip_idx, edge, num_frames):
+            """Get head or tail pixel frames from a clip, decoding only what's needed."""
+            if clip_latents[clip_idx] is not None:
+                return decode_edge_pixels(
+                    vae, clip_latents[clip_idx], edge, num_frames, decode_latent_batch
+                )
+            else:
+                px = clip_pixels[clip_idx]
+                return px[:num_frames] if edge == 'head' else px[-num_frames:]
+
+        # Helper: get full clip pixels (decode latent or return loaded video)
+        def get_clip_pixels(clip_idx):
+            """Decode full clip to pixels on demand. Returns (T, H, W, 3) tensor."""
+            if clip_latents[clip_idx] is not None:
+                return batched_vae_decode(vae, clip_latents[clip_idx], decode_latent_batch)
+            else:
+                return clip_pixels[clip_idx]
+
+        # ── 4. Determine clip dimensions ──
+        # Get dimensions from first clip (decode a single frame if latent-only)
+        if clip_latents[0] is not None:
+            # Infer pixel dims from latent: (1, C, T, H//8, W//8)
+            height = clip_latents[0].shape[3] * 8
+            width = clip_latents[0].shape[4] * 8
+        else:
+            height = clip_pixels[0].shape[1]
+            width = clip_pixels[0].shape[2]
+
+        # ── 5. Build transition pairs ──
         num_clips = len(clip_files)
         pairs = []
         for i in range(num_clips - 1):
@@ -661,23 +795,16 @@ class VACEStitcher:
         print(f"[VACE Stitcher] Generating {len(pairs)} transitions"
               f"{' (seamless loop)' if seamless_loop else ''}")
 
-        # ── 5. transitions directory (always save to temp) ──
+        # ── 6. Transitions directory (always save to temp) ──
         transitions_dir = _get_transitions_dir(clip_files)
-
-        # ── 6. Determine clip dimensions ──
-        height = clip_pixels[0].shape[1]
-        width = clip_pixels[0].shape[2]
 
         # Compute how many pixel frames we need from each clip edge
         required_pixels = context_frames + replace_frames
         print(f"[VACE Stitcher] Context={context_frames}, Replace={replace_frames}, "
               f"Required pixels per edge={required_pixels}")
 
-        # Convert pixel-frame batch size to latent frames for VAE decode
-        decode_latent_batch = max(1, ((decode_batch_size - 1) // 4) + 1)
-
-        # ── 7. Generate all transitions ──
-        transition_pixels = {}
+        # ── 7. Generate all transitions (memory-efficient: only decode edges) ──
+        # Transitions are saved as .latent files; decoding deferred to stitch step.
         pbar = comfy.utils.ProgressBar(len(pairs))
 
         for pair_idx, (idx_a, idx_b) in enumerate(pairs):
@@ -685,22 +812,18 @@ class VACEStitcher:
             print(f"[VACE Stitcher] Transition {pair_idx + 1}/{len(pairs)}: "
                   f"clip {idx_a} -> clip {idx_b}")
 
-            # Check for cached intermediate (MP4)
+            # Check for cached transition (.latent preferred, .mp4 fallback)
             if transitions_dir:
-                cached_path = os.path.join(transitions_dir, f"transition_{pair_key}.mp4")
-                if os.path.exists(cached_path):
-                    print(f"[VACE Stitcher]   Using cached transition: {cached_path}")
-                    transition_pixels[pair_key] = load_video_file(cached_path)
+                cached_latent = os.path.join(transitions_dir, f"transition_{pair_key}.latent")
+                cached_mp4 = os.path.join(transitions_dir, f"transition_{pair_key}.mp4")
+                if os.path.exists(cached_latent) or os.path.exists(cached_mp4):
+                    print("[VACE Stitcher]   Cached transition exists, skipping generation")
                     pbar.update(1)
                     continue
 
-            # Use the already-decoded pixel frames directly (no second VAE decode!)
-            pixels_a = clip_pixels[idx_a]  # (T, H, W, 3)
-            pixels_b = clip_pixels[idx_b]
-
-            # Extract edge regions from pixel space
-            edge_a = pixels_a[-required_pixels:]  # last required_pixels from A
-            edge_b = pixels_b[:required_pixels]   # first required_pixels from B
+            # Decode only the edge pixels needed for VACE context (not the full clips)
+            edge_a = get_clip_edge(idx_a, 'tail', required_pixels)
+            edge_b = get_clip_edge(idx_b, 'head', required_pixels)
 
             # Extract context frames offset by replace_frames (matching WanVACEPrepBatch)
             if replace_frames > 0:
@@ -722,6 +845,9 @@ class VACEStitcher:
                 new_frames=new_frames,
             )
 
+            # Free edge pixels before VACE sampling (model needs GPU memory)
+            del edge_a, edge_b, context_a, context_b
+
             # Build VACE conditioning
             vace_positive, vace_negative, vace_latent, trim_latent = build_vace_conditioning(
                 positive_cond, negative_cond, vae,
@@ -729,6 +855,9 @@ class VACEStitcher:
                 width, height, total_length,
                 strength=vace_strength,
             )
+
+            # Free control tensors
+            del control_video, control_mask
 
             # Two-stage sampling
             print(f"[VACE Stitcher]   Sampling ({steps_high}+{steps_low} steps)...")
@@ -744,63 +873,71 @@ class VACEStitcher:
             if trim_latent > 0:
                 result_latent["samples"] = result_latent["samples"][:, :, trim_latent:]
 
-            # Decode transition to pixels immediately
-            transition_samples = result_latent["samples"]
-            print(f"[VACE Stitcher]   Decoding transition {pair_key}...")
-            pixels = batched_vae_decode(vae, transition_samples, decode_latent_batch)
-
-            transition_pixels[pair_key] = pixels
-
-            # Save intermediate as h265 yuv444 10-bit MP4
+            # Save transition as lossless .latent (no decode yet — deferred to stitch step)
+            transition_samples = result_latent["samples"].cpu()
             if transitions_dir:
-                save_path = os.path.join(transitions_dir, f"transition_{pair_key}.mp4")
-                save_video_444_10bit(save_path, pixels)
-                print(f"[VACE Stitcher]   Saved: {save_path}")
+                save_path = os.path.join(transitions_dir, f"transition_{pair_key}.latent")
+                save_latent_file(save_path, transition_samples)
+                print(f"[VACE Stitcher]   Saved latent: {save_path}")
+
+            # Free sampling results
+            del result_latent, transition_samples
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
             pbar.update(1)
 
-        # ── 8. Stitch in pixel space ──
-        # clip_pixels were already decoded in step 6 (same pixels used for VACE context).
-        # Transitions are already decoded (step 7). Apply color matching now.
+        # ── 8. Stitch in pixel space (on-demand decode, one clip/transition at a time) ──
         print("[VACE Stitcher] Stitching in pixel space...")
 
-        # Apply color matching to all transition pixels
-        if color_match:
-            for pair_key in list(transition_pixels.keys()):
-                pixels = transition_pixels[pair_key]
-                try:
-                    from color_matcher import ColorMatcher
-                    # Parse pair key to get clip indices
-                    parts = pair_key.split("_to_")
-                    idx_a, idx_b = int(parts[0]), int(parts[1])
-                    # Use last frame of A as reference (matching KJNodes pattern: float32, no uint8)
-                    ref_np = clip_pixels[idx_a][-1].numpy()  # (H, W, 3) float32
+        # Helper: load a transition's pixels (decode from .latent or load .mp4)
+        def load_transition_pixels(pair_key):
+            if transitions_dir:
+                cached_latent = os.path.join(transitions_dir, f"transition_{pair_key}.latent")
+                cached_mp4 = os.path.join(transitions_dir, f"transition_{pair_key}.mp4")
+                if os.path.exists(cached_latent):
+                    print(f"[VACE Stitcher]   Decoding transition {pair_key} from latent...")
+                    samples = load_latent_file(cached_latent)
+                    px = batched_vae_decode(vae, samples, decode_latent_batch)
+                    del samples
+                    return px
+                elif os.path.exists(cached_mp4):
+                    print(f"[VACE Stitcher]   Loading transition {pair_key} from MP4...")
+                    return load_video_file(cached_mp4)
+            return None
 
-                    pixels_np = pixels.cpu().numpy()
-                    n_frames = pixels_np.shape[0]
-                    color_strength = 0.7
+        # Helper: apply color matching to transition pixels
+        def apply_color_match(trans_px, ref_frame):
+            """Color match transition pixels to a reference frame."""
+            try:
+                from color_matcher import ColorMatcher
+                ref_np = ref_frame.numpy()  # (H, W, 3) float32
+                pixels_np = trans_px.cpu().numpy()
+                n_frames = pixels_np.shape[0]
+                color_strength = 0.7
 
-                    def match_frame(i):
-                        try:
-                            cm = ColorMatcher()  # new instance per thread (thread safety)
-                            image_result = cm.transfer(src=pixels_np[i], ref=ref_np, method='mkl')
-                            if color_strength != 1.0:
-                                image_result = pixels_np[i] + color_strength * (image_result - pixels_np[i])
-                            return torch.from_numpy(image_result)
-                        except Exception as e:
-                            logging.warning(f"Color match frame {i} error: {e}")
-                            return pixels[i]
+                def match_frame(i):
+                    try:
+                        cm = ColorMatcher()
+                        image_result = cm.transfer(src=pixels_np[i], ref=ref_np, method='mkl')
+                        if color_strength != 1.0:
+                            image_result = pixels_np[i] + color_strength * (image_result - pixels_np[i])
+                        return torch.from_numpy(image_result)
+                    except Exception as e:
+                        logging.warning(f"Color match frame {i} error: {e}")
+                        return trans_px[i]
 
-                    max_threads = min(os.cpu_count() or 1, n_frames)
-                    with ThreadPoolExecutor(max_workers=max_threads) as executor:
-                        matched = list(executor.map(match_frame, range(n_frames)))
+                max_threads = min(os.cpu_count() or 1, n_frames)
+                with ThreadPoolExecutor(max_workers=max_threads) as executor:
+                    matched = list(executor.map(match_frame, range(n_frames)))
 
-                    transition_pixels[pair_key] = torch.stack(matched, dim=0).to(torch.float32).clamp_(0, 1)
-                    print(f"[VACE Stitcher]   Color matched {pair_key} (mkl, strength=0.7)")
-                except ImportError:
-                    print("[VACE Stitcher]   WARNING: color-matcher not installed. pip install color-matcher")
-                except Exception as e:
-                    print(f"[VACE Stitcher]   WARNING: Color match failed for {pair_key}: {e}")
+                return torch.stack(matched, dim=0).to(torch.float32).clamp_(0, 1)
+            except ImportError:
+                print("[VACE Stitcher]   WARNING: color-matcher not installed. pip install color-matcher")
+                return trans_px
+            except Exception as e:
+                print(f"[VACE Stitcher]   WARNING: Color match failed: {e}")
+                return trans_px
 
         # Stitch pattern (matching the workflow):
         #   [clip_A trimmed] [FULL VACE output] [clip_B trimmed] [FULL VACE output] ...
@@ -811,18 +948,20 @@ class VACEStitcher:
         #   The full VACE output bridges the gap: [context_A | generated | context_B]
         #
         # With crossfade:
-        #   clip_A is trimmed by only replace_frames from its trailing edge (keeps context zone)
         #   The VACE output's leading context_frames overlap with clip_A's trailing context zone
         #   We crossfade over that overlap (context_frames long)
-        #   Same on the B side: VACE output's trailing context_frames overlap with clip_B's leading context zone
-        #
-        # This matches the workflow exactly:
-        #   WanVACEPrepBatch outputs start_images = clip[:-required_frames] and end_images = clip[required_frames:]
-        #   The full VACE output (including context) is placed between them
+        #   Same on the B side
 
         segments = []
+        _next_cp = None  # cache: pre-decoded clip B from crossfade becomes next iteration's clip
         for i in range(num_clips):
-            cp = clip_pixels[i]  # (T, H, W, 3)
+            # Decode full clip pixels on demand (or reuse cached from previous crossfade)
+            print(f"[VACE Stitcher]   Processing clip {i}...")
+            if _next_cp is not None:
+                cp = _next_cp
+                _next_cp = None
+            else:
+                cp = get_clip_pixels(i)
             t_len = cp.shape[0]
 
             # Determine which edges participate in transitions
@@ -845,42 +984,84 @@ class VACEStitcher:
             else:
                 pair_key = None
 
-            if pair_key and pair_key in transition_pixels:
-                trans_px = transition_pixels[pair_key]
-                t_trans = trans_px.shape[0]
-                cf = context_frames
+            if pair_key:
+                trans_px = load_transition_pixels(pair_key)
+                if trans_px is not None:
+                    # Apply color matching if enabled
+                    if color_match:
+                        # Use last frame of clip A as reference
+                        ref_frame = cp[-1]
+                        trans_px = apply_color_match(trans_px, ref_frame)
+                        print(f"[VACE Stitcher]   Color matched {pair_key}")
 
-                if crossfade and cf > 0:
-                    # Matching the workflow: split VACE output into 3 parts
-                    #   [vace_ctx_A (cf)] [vace_middle] [vace_ctx_B (cf)]
-                    # Get original context frames from each clip edge
-                    parts = pair_key.split("_to_")
-                    idx_a, idx_b = int(parts[0]), int(parts[1])
-                    original_ctx_a = clip_pixels[idx_a][-(cf + replace_frames):-(replace_frames)] if replace_frames > 0 else clip_pixels[idx_a][-cf:]
-                    original_ctx_b = clip_pixels[idx_b][replace_frames:replace_frames + cf] if replace_frames > 0 else clip_pixels[idx_b][:cf]
+                    t_trans = trans_px.shape[0]
+                    cf = context_frames
 
-                    vace_ctx_a = trans_px[:cf]
-                    vace_middle = trans_px[cf:t_trans - cf]
-                    vace_ctx_b = trans_px[t_trans - cf:]
+                    if crossfade and cf > 0:
+                        # Clamp cf so we don't exceed half the transition length
+                        cf = min(cf, t_trans // 2)
 
-                    # Cross Fade: video1 → VACE (ease_in: original snaps to VACE)
-                    t_a = torch.linspace(0.0, 1.0, cf, device=trans_px.device)
-                    alpha_a = (t_a * t_a).view(-1, 1, 1, 1)  # ease_in = t²
-                    crossfade_a = (1.0 - alpha_a) * original_ctx_a + alpha_a * vace_ctx_a
+                        if cf < 1:
+                            # Transition too short for crossfade, use as-is
+                            segments.append(trans_px)
+                        else:
+                            # Split VACE output: [vace_ctx_A (cf)] [vace_middle] [vace_ctx_B (cf)]
+                            # Use fully-decoded clip pixels for crossfade references
+                            # (edge-only decode produces different pixels due to VAE temporal convolution)
+                            idx_a, idx_b = (int(x) for x in pair_key.split("_to_"))
 
-                    # Cross Fade: VACE → video2 (ease_in: VACE snaps to original)
-                    t_b = torch.linspace(0.0, 1.0, cf, device=trans_px.device)
-                    alpha_b = (t_b * t_b).view(-1, 1, 1, 1)  # ease_in = t²
-                    crossfade_b = (1.0 - alpha_b) * vace_ctx_b + alpha_b * original_ctx_b
+                            # Clip A context: from the full decode we already have (cp)
+                            if replace_frames > 0:
+                                original_ctx_a = cp[-(cf + replace_frames):-replace_frames]
+                            else:
+                                original_ctx_a = cp[-cf:]
 
-                    # Assemble: [crossfade_A | vace_middle | crossfade_B]
-                    segments.append(crossfade_a)
-                    if vace_middle.shape[0] > 0:
-                        segments.append(vace_middle)
-                    segments.append(crossfade_b)
-                else:
-                    # No crossfade: use full VACE output as-is
-                    segments.append(trans_px)
+                            # Clip B context: need full decode to get consistent pixels
+                            cp_b = get_clip_pixels(idx_b)
+                            if replace_frames > 0:
+                                original_ctx_b = cp_b[replace_frames:replace_frames + cf]
+                            else:
+                                original_ctx_b = cp_b[:cf]
+                            # Cache clip B's full decode for the next iteration
+                            _next_cp = cp_b
+
+                            # Ensure matched lengths (safety)
+                            actual_cf_a = min(cf, original_ctx_a.shape[0])
+                            actual_cf_b = min(cf, original_ctx_b.shape[0])
+                            original_ctx_a = original_ctx_a[:actual_cf_a]
+                            original_ctx_b = original_ctx_b[:actual_cf_b]
+
+                            vace_ctx_a = trans_px[:actual_cf_a]
+                            vace_middle = trans_px[actual_cf_a:t_trans - actual_cf_b]
+                            vace_ctx_b = trans_px[t_trans - actual_cf_b:]
+
+                            # Cross Fade: video1 → VACE (ease_in: original snaps to VACE)
+                            t_a = torch.linspace(0.0, 1.0, actual_cf_a, device=trans_px.device)
+                            alpha_a = (t_a * t_a).view(-1, 1, 1, 1)  # ease_in = t²
+                            crossfade_a = (1.0 - alpha_a) * original_ctx_a + alpha_a * vace_ctx_a
+
+                            # Cross Fade: VACE → video2 (ease_in: VACE snaps to original)
+                            t_b = torch.linspace(0.0, 1.0, actual_cf_b, device=trans_px.device)
+                            alpha_b = (t_b * t_b).view(-1, 1, 1, 1)  # ease_in = t²
+                            crossfade_b = (1.0 - alpha_b) * vace_ctx_b + alpha_b * original_ctx_b
+
+                            # Assemble: [crossfade_A | vace_middle | crossfade_B]
+                            segments.append(crossfade_a)
+                            if vace_middle.shape[0] > 0:
+                                segments.append(vace_middle)
+                            segments.append(crossfade_b)
+
+                            del original_ctx_a, original_ctx_b
+                    else:
+                        # No crossfade: use full VACE output as-is
+                        segments.append(trans_px)
+
+                    del trans_px
+
+            # Free clip pixels after processing
+            del cp
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
         # Concatenate all segments, filtering out empties
         segments = [s for s in segments if s.shape[0] > 0]
