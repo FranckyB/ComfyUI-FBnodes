@@ -599,7 +599,7 @@ class VACEStitcher:
                     "tooltip": "Negative conditioning from a CLIP Text Encode node.",
                 }),
                 "vae": ("VAE", {}),
-                "source_folder": (["output", "input"], {
+                "source_folder": (["input", "output"], {
                     "tooltip": "Select which folder to browse.",
                 }),
                 "clip_list": ("STRING", {

@@ -24,6 +24,114 @@ _video_frames_cache = {}
 
 
 # ---------------------------------------------------------------------------
+# PyAV-based video frame extraction (for H265/yuv444 that browsers can't decode)
+# ---------------------------------------------------------------------------
+
+def extract_video_frame_av(file_path, frame_position=0.0):
+    """
+    Extract a video frame using PyAV. Works with H265, yuv444, and other codecs
+    that browsers cannot decode.
+
+    Seeks to the nearest keyframe before the target position, then decodes forward
+    to the exact target frame for frame-accurate extraction.
+
+    Args:
+        file_path: Absolute path to the video file
+        frame_position: float from 0.0 to 1.0 representing position in video
+
+    Returns:
+        PIL Image or None on failure
+    """
+    try:
+        import av
+    except ImportError:
+        print("[FBnodes] PyAV not available, cannot extract frame server-side")
+        return None
+
+    try:
+        container = av.open(file_path)
+        stream = container.streams.video[0]
+
+        # For position 0.0, just return the first frame
+        if frame_position <= 0.0:
+            for frame in container.decode(video=0):
+                img = frame.to_image()
+                container.close()
+                return img
+            container.close()
+            return None
+
+        # Calculate target timestamp in stream time_base units
+        duration = stream.duration
+        target_ts = None
+
+        if duration and stream.time_base:
+            target_ts = int(frame_position * duration)
+        else:
+            # Fallback: estimate from frame count and average rate
+            total_frames = stream.frames
+            if total_frames > 0 and stream.average_rate:
+                target_frame = int(frame_position * total_frames)
+                fps = float(stream.average_rate)
+                if fps > 0 and stream.time_base:
+                    target_sec = target_frame / fps
+                    target_ts = int(target_sec / float(stream.time_base))
+
+        if target_ts is not None:
+            # Seek to nearest keyframe before target (backward seek)
+            container.seek(target_ts, stream=stream, backward=True)
+
+            # Decode forward until we reach or pass the target timestamp
+            best_frame = None
+            for frame in container.decode(video=0):
+                best_frame = frame
+                if frame.pts is not None and frame.pts >= target_ts:
+                    break
+
+            if best_frame is not None:
+                img = best_frame.to_image()
+                container.close()
+                return img
+        else:
+            # No duration info - just decode the first frame
+            for frame in container.decode(video=0):
+                img = frame.to_image()
+                container.close()
+                return img
+
+        container.close()
+        return None
+    except Exception as e:
+        print(f"[FBnodes] PyAV frame extraction error: {e}")
+        return None
+
+
+def extract_video_frame_av_to_tensor(file_path, frame_position=0.0):
+    """
+    Extract a video frame using PyAV and return as a ComfyUI tensor.
+
+    Args:
+        file_path: Absolute path to the video file
+        frame_position: float from 0.0 to 1.0
+
+    Returns:
+        Tensor (B, H, W, C) or None
+    """
+    img = extract_video_frame_av(file_path, frame_position)
+    if img is None:
+        return None
+
+    try:
+        if img.mode != 'RGB':
+            img = img.convert('RGB')
+        img_array = np.array(img).astype(np.float32) / 255.0
+        return torch.from_numpy(img_array).unsqueeze(0)
+    except Exception as e:
+        print(f"[FBnodes] Error converting PyAV frame to tensor: {e}")
+        return None
+
+
+# ---------------------------------------------------------------------------
 # API routes (using /fbnodes/ prefix to avoid conflicts with Prompt Manager)
 # ---------------------------------------------------------------------------
 
@@ -49,6 +157,169 @@ async def cache_video_frame(request):
     except Exception as e:
         print(f"[FBnodes] Error caching video frame: {e}")
         return server.web.json_response({"success": False, "error": str(e)}, status=500)
+
+
+@server.PromptServer.instance.routes.get("/fbnodes/video-frame")
+async def extract_video_frame_api(request):
+    """Extract a video frame server-side for videos the browser can't decode (H265, yuv444)"""
+    try:
+        filename = request.rel_url.query.get('filename', '')
+        source = request.rel_url.query.get('source', 'input')
+        position = float(request.rel_url.query.get('position', '0.0'))
+
+        if not filename:
+            return server.web.json_response({"error": "Missing filename"}, status=400)
+
+        # Build full path
+        if source == 'output':
+            base_dir = folder_paths.get_output_directory()
+        else:
+            base_dir = folder_paths.get_input_directory()
+
+        file_path = os.path.join(base_dir, filename.replace('/', os.sep))
+
+        if not os.path.exists(file_path):
+            return server.web.json_response({"error": "File not found"}, status=404)
+
+        # Validate path stays within base directory
+        real_base = os.path.realpath(base_dir)
+        real_path = os.path.realpath(file_path)
+        if not real_path.startswith(real_base):
+            return server.web.json_response({"error": "Invalid path"}, status=403)
+
+        img = extract_video_frame_av(file_path, position)
+        if img is None:
+            return server.web.json_response({"error": "Failed to extract frame"}, status=500)
+
+        # Return as JPEG image
+        buf = io.BytesIO()
+        img.save(buf, format='JPEG', quality=85)
+        buf.seek(0)
+
+        return server.web.Response(
+            body=buf.read(),
+            content_type='image/jpeg'
+        )
+    except Exception as e:
+        print(f"[FBnodes] Error in video-frame API: {e}")
+        return server.web.json_response({"error": str(e)}, status=500)
+
+
+@server.PromptServer.instance.routes.get("/fbnodes/video-frame-clip")
+async def extract_video_frame_clip_api(request):
+    """
+    Generate a browser-playable 1-frame H264 mp4 clip from a video the browser
+    can't decode (H265, yuv444, etc.).  The result is cached to temp/ so
+    subsequent requests for the same source just redirect to the cached file via
+    ComfyUI's /view endpoint.
+    """
+    try:
+        import av
+    except ImportError:
+        return server.web.json_response(
+            {"error": "PyAV not available"}, status=500
+        )
+
+    filename = request.rel_url.query.get('filename', '')
+    source = request.rel_url.query.get('source', 'input')
+
+    if not filename:
+        return server.web.json_response({"error": "Missing filename"}, status=400)
+
+    # Build & validate full path
+    if source == 'output':
+        base_dir = folder_paths.get_output_directory()
+    else:
+        base_dir = folder_paths.get_input_directory()
+
+    file_path = os.path.join(base_dir, filename.replace('/', os.sep))
+    if not os.path.exists(file_path):
+        return server.web.json_response({"error": "File not found"}, status=404)
+    real_base = os.path.realpath(base_dir)
+    real_path = os.path.realpath(file_path)
+    if not real_path.startswith(real_base):
+        return server.web.json_response({"error": "Invalid path"}, status=403)
+
+    # Deterministic cache name in temp/
+    import hashlib
+    name_hash = hashlib.sha256(real_path.encode()).hexdigest()[:16]
+    clip_name = f"_fbnodes_preview_{name_hash}.mp4"
+    temp_dir = folder_paths.get_temp_directory()
+    clip_path = os.path.join(temp_dir, clip_name)
+
+    # If cached clip already exists (and source hasn't been modified), serve it
+    if os.path.exists(clip_path):
+        src_mtime = os.path.getmtime(real_path)
+        clip_mtime = os.path.getmtime(clip_path)
+        if clip_mtime >= src_mtime:
+            return server.web.json_response({
+                "filename": clip_name,
+                "type": "temp",
+                "subfolder": ""
+            })
+
+    try:
+        # Extract first frame with PyAV
+        img = extract_video_frame_av(file_path, 0.0)
+        if img is None:
+            return server.web.json_response({"error": "Frame extraction failed"}, status=500)
+
+        if img.mode != 'RGB':
+            img = img.convert('RGB')
+
+        # Burn "H265/yuv444 — browser playback not supported" overlay onto the frame
+        from PIL import ImageDraw, ImageFont
+        draw = ImageDraw.Draw(img)
+        w, h = img.size
+        bar_height = max(28, int(h * 0.05))
+        draw.rectangle([(0, h - bar_height), (w, h)], fill=(0, 0, 0, 180))
+        font_size = max(12, int(bar_height * 0.5))
+        try:
+            font = ImageFont.truetype("arial.ttf", font_size)
+        except Exception:
+            font = ImageFont.load_default()
+        text = "H265/yuv444 \u2014 browser playback not supported"
+        bbox = draw.textbbox((0, 0), text, font=font)
+        tw = bbox[2] - bbox[0]
+        tx = (w - tw) // 2
+        ty = h - bar_height + (bar_height - font_size) // 2
+        draw.text((tx, ty), text, fill=(204, 204, 204), font=font)
+
+        import numpy as np
+
+        frame_np = np.array(img)
+        height, width = frame_np.shape[:2]
+
+        # Ensure even dimensions (H264 requirement)
+        width = width if width % 2 == 0 else width - 1
+        height = height if height % 2 == 0 else height - 1
+        frame_np = frame_np[:height, :width]
+
+        os.makedirs(temp_dir, exist_ok=True)
+
+        # Write a 1-frame H264 mp4
+        out_container = av.open(clip_path, mode='w')
+        out_stream = out_container.add_stream('libx264', rate=1)
+        out_stream.width = width
+        out_stream.height = height
+        out_stream.pix_fmt = 'yuv420p'
+        out_stream.options = {'crf': '18', 'preset': 'ultrafast'}
+
+        av_frame = av.VideoFrame.from_ndarray(frame_np, format='rgb24')
+        for packet in out_stream.encode(av_frame):
+            out_container.mux(packet)
+        for packet in out_stream.encode():
+            out_container.mux(packet)
+        out_container.close()
+
+        return server.web.json_response({
+            "filename": clip_name,
+            "type": "temp",
+            "subfolder": ""
+        })
+    except Exception as e:
+        print(f"[FBnodes] Error generating preview clip: {e}")
+        return server.web.json_response({"error": str(e)}, status=500)
 
 
 @server.PromptServer.instance.routes.get("/fbnodes/list-files")
@@ -281,8 +552,15 @@ class BetterImageLoader:
                     relative_path = relative_path.replace('\\', '/')
                 else:
                     relative_path = os.path.basename(resolved_path)
-                image_tensor = get_cached_video_frame(relative_path, frame_position)
 
+                # Prefer PyAV for frame extraction (accurate frame_position, handles H265/yuv444)
+                image_tensor = extract_video_frame_av_to_tensor(resolved_path, frame_position)
+
+                # Fall back to JS-cached frame if PyAV unavailable
+                if image_tensor is None:
+                    image_tensor = get_cached_video_frame(relative_path, frame_position)
+
+                # Last resort: placeholder
                 if image_tensor is None:
                     image_tensor = get_placeholder_image_tensor()
 
@@ -308,7 +586,7 @@ class BetterImageLoader:
             img = (img * 255).astype(np.uint8)
             pil_img = Image.fromarray(img)
 
-            filename = f"better_image_loader_preview_{random.randint(0, 0xFFFFFF):06x}.png"
+            filename = f"load_image_preview_{random.randint(0, 0xFFFFFF):06x}.png"
             filepath = os.path.join(output_dir, filename)
             pil_img.save(filepath)
 

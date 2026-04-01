@@ -1,5 +1,5 @@
 /**
- * BetterImageLoader Extension for ComfyUI (FBnodes)
+ * Load Image Extension for ComfyUI (FBnodes)
  * Stripped-down image/video loader with file browser, preview, and drag-drop.
  * No metadata extraction - just loads and displays images/video frames.
  */
@@ -10,6 +10,9 @@ import { createFileBrowserModal } from "./file_browser.js";
 
 // Placeholder image path
 const PLACEHOLDER_IMAGE_PATH = new URL("./placeholder.png", import.meta.url).href;
+
+// Track videos that the browser can't decode (H265/yuv444) to skip browser attempt on future scrubs
+const _nonBrowserDecodableVideos = new Set();
 
 /**
  * Check if filename is a video file
@@ -221,13 +224,39 @@ function showVideoPreviewModal(filename, viewType) {
         box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
     `;
     video.onerror = () => {
-        videoContainer.innerHTML = `
-            <div style="color: #ff6666; font-family: sans-serif; text-align: center;">
-                <div style="font-size: 48px; margin-bottom: 10px;">\u26A0\uFE0F</div>
-                <div>Failed to load video</div>
-                <div style="font-size: 12px; margin-top: 5px; opacity: 0.7;">${filename}</div>
-            </div>
+        // Browser can't decode (H265/yuv444) - show server-extracted frame with overlay
+        const viewType = 'input'; // default for preview modal
+        const frameUrl = `/fbnodes/video-frame?filename=${encodeURIComponent(filename)}&source=${viewType}&position=0`;
+        const fallbackImg = document.createElement('img');
+        fallbackImg.style.cssText = `
+            max-width: 100%; max-height: 80vh; border-radius: 8px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
         `;
+        fallbackImg.onload = () => {
+            videoContainer.innerHTML = '';
+            videoContainer.style.position = 'relative';
+            videoContainer.appendChild(fallbackImg);
+            // Add overlay message
+            const overlay = document.createElement('div');
+            overlay.style.cssText = `
+                position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
+                background: rgba(0, 0, 0, 0.75); color: #ccc; padding: 8px 16px;
+                border-radius: 6px; font-family: sans-serif; font-size: 13px;
+                pointer-events: none; white-space: nowrap;
+            `;
+            overlay.textContent = 'H265/yuv444 \u2014 browser playback not supported';
+            videoContainer.appendChild(overlay);
+        };
+        fallbackImg.onerror = () => {
+            videoContainer.innerHTML = `
+                <div style="color: #aaa; font-family: sans-serif; text-align: center;">
+                    <div style="font-size: 48px; margin-bottom: 10px;">\uD83C\uDFAC</div>
+                    <div>This video format cannot be played in the browser</div>
+                    <div style="font-size: 12px; margin-top: 5px; opacity: 0.7;">H265 or yuv444 encoded</div>
+                </div>
+            `;
+        };
+        fallbackImg.src = frameUrl;
     };
 
     videoContainer.appendChild(video);
@@ -322,6 +351,42 @@ async function loadImageFile(node, filename) {
 }
 
 /**
+ * Load a video frame from the server-side PyAV endpoint (for H265/yuv444 videos).
+ */
+function loadVideoFrameFromServer(node, filename, framePosition, viewType) {
+    const frameUrl = `/fbnodes/video-frame?filename=${encodeURIComponent(filename)}&source=${viewType}&position=${framePosition}`;
+    const img = new Image();
+    img.onload = () => {
+        node.imgs = [img];
+        node.imageIndex = 0;
+        node._loadedImageFilename = filename;
+        node._loadedFramePosition = framePosition;
+
+        // Cache as base64 for Python backend
+        const canvas = document.createElement('canvas');
+        canvas.width = img.naturalWidth;
+        canvas.height = img.naturalHeight;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0);
+        const frameData = canvas.toDataURL('image/png');
+        cacheVideoFrame(filename, frameData, framePosition);
+
+        // Resize node to fit image
+        const targetWidth = Math.max(node.size[0], 256);
+        const targetHeight = Math.max(node.size[1], img.naturalHeight * (targetWidth / img.naturalWidth) + 100);
+        node.setSize([targetWidth, targetHeight]);
+
+        node.setDirtyCanvas(true, true);
+        app.graph.setDirtyCanvas(true, true);
+    };
+    img.onerror = () => {
+        console.error(`[BetterImageLoader] Server-side frame extraction failed for: ${filename}`);
+        showPlaceholder(node);
+    };
+    img.src = frameUrl;
+}
+
+/**
  * Load frame from a video file at specified position
  */
 async function loadVideoFrame(node, filename) {
@@ -344,9 +409,26 @@ async function loadVideoFrame(node, filename) {
             videoUrl += `&subfolder=${encodeURIComponent(subfolder)}`;
         }
 
+        // If this video is already known to be non-browser-decodable, go straight to server
+        if (_nonBrowserDecodableVideos.has(filename)) {
+            loadVideoFrameFromServer(node, filename, framePosition, viewType);
+            return;
+        }
+
         const video = document.createElement('video');
         video.crossOrigin = 'anonymous';
-        video.preload = 'metadata';
+        video.preload = 'auto';
+        video.muted = true;
+        video.playsInline = true;
+        video.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:1px;height:1px;opacity:0;pointer-events:none;';
+
+        const cleanupVideo = () => {
+            video.onloadedmetadata = null;
+            video.onseeked = null;
+            video.onerror = null;
+            try { video.src = ''; video.load(); } catch (e) { /* ignore */ }
+            if (video.parentNode) video.parentNode.removeChild(video);
+        };
 
         video.onloadedmetadata = () => {
             const frameTime = framePosition * Math.max(0, video.duration - 0.1);
@@ -376,10 +458,12 @@ async function loadVideoFrame(node, filename) {
 
                 node.setDirtyCanvas(true, true);
                 app.graph.setDirtyCanvas(true, true);
+                cleanupVideo();
             };
 
             img.onerror = () => {
                 console.error(`[BetterImageLoader] Failed to create image from video frame`);
+                cleanupVideo();
                 showPlaceholder(node);
             };
 
@@ -387,10 +471,14 @@ async function loadVideoFrame(node, filename) {
         };
 
         video.onerror = () => {
-            console.error(`[BetterImageLoader] Failed to load video: ${filename}`);
-            showPlaceholder(node);
+            console.log(`[BetterImageLoader] Browser cannot decode video, using server-side extraction: ${filename}`);
+            // Remember this video can't be decoded by browser - skip browser attempt on future scrubs
+            _nonBrowserDecodableVideos.add(filename);
+            cleanupVideo();
+            loadVideoFrameFromServer(node, filename, framePosition, viewType);
         };
 
+        document.body.appendChild(video);
         video.src = videoUrl + `&${Date.now()}`;
     } catch (error) {
         console.error("[BetterImageLoader] Error loading video:", error);

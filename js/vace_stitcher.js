@@ -37,7 +37,7 @@ function showConfirm(title, message, confirmText = "Delete", confirmColor = "#c0
     });
 }
 
-let _currentSourceFolder = "input";
+let _currentSourceFolder = "output";
 let _currentSubfolder = "";
 
 function isVideoFile(filename) {
@@ -85,6 +85,44 @@ function showPreviewUnavailable(previewElement) {
     msg.textContent = 'Preview N/A (codec not supported by browser)';
     msg.style.cssText = 'font-size:10px;color:#888;text-align:center;padding:8px;';
     previewElement.appendChild(msg);
+}
+
+function showServerExtractedThumbnail(filename, sourceFolder, previewElement, cacheKey) {
+    const frameUrl = `/fbnodes/video-frame?filename=${encodeURIComponent(filename)}&source=${sourceFolder}&position=0`;
+    const img = new Image();
+    img.onload = () => {
+        // Draw frame with overlay bar
+        const maxW = 180, maxH = 150;
+        const ar = img.naturalWidth / img.naturalHeight;
+        let w, h;
+        if (ar > maxW / maxH) { w = maxW; h = maxW / ar; }
+        else { h = maxH; w = maxH * ar; }
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d', { alpha: false });
+        ctx.drawImage(img, 0, 0, w, h);
+        const barH = Math.max(14, Math.round(h * 0.1));
+        ctx.fillStyle = 'rgba(0,0,0,0.7)';
+        ctx.fillRect(0, h - barH, w, barH);
+        ctx.fillStyle = '#ccc';
+        ctx.font = `${Math.max(8, Math.round(barH * 0.6))}px sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('H265 \u2014 browser playback N/A', w / 2, h - barH / 2);
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
+        const result = document.createElement('img');
+        result.style.cssText = 'max-width:100%;max-height:100%;object-fit:contain;';
+        result.src = dataUrl;
+        previewElement.innerHTML = '';
+        previewElement.appendChild(result);
+        if (cacheKey) {
+            try { localStorage.setItem(cacheKey, dataUrl); }
+            catch (e) { /* ignore */ }
+        }
+    };
+    img.onerror = () => showPreviewUnavailable(previewElement);
+    img.src = frameUrl;
 }
 
 async function extractVideoThumbnail(filename, previewElement, cacheKey = null) {
@@ -508,20 +546,48 @@ function showHoverThumbnail(filename, sourceFolder, anchorRect, overrideUrl) {
         vid.loop = true;
         vid.style.cssText = "max-width:320px;max-height:240px;border-radius:4px;";
 
-        const showUnable = () => {
-            if (popup.parentElement) {
+        const showServerFrame = () => {
+            if (!popup.parentElement) return;
+            const frameUrl = `/fbnodes/video-frame?filename=${encodeURIComponent(filename)}&source=${sourceFolder}&position=0`;
+            const sImg = new Image();
+            sImg.onload = () => {
+                if (!popup.parentElement) return;
+                // Draw with overlay bar
+                const canvas = document.createElement('canvas');
+                canvas.width = sImg.naturalWidth;
+                canvas.height = sImg.naturalHeight;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(sImg, 0, 0);
+                const barH = Math.max(18, Math.round(canvas.height * 0.06));
+                ctx.fillStyle = 'rgba(0,0,0,0.7)';
+                ctx.fillRect(0, canvas.height - barH, canvas.width, barH);
+                ctx.fillStyle = '#ccc';
+                ctx.font = `${Math.max(10, Math.round(barH * 0.55))}px sans-serif`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText('H265 \u2014 browser playback not supported', canvas.width / 2, canvas.height - barH / 2);
+                const result = new Image();
+                result.style.cssText = 'max-width:320px;max-height:240px;border-radius:4px;';
+                result.src = canvas.toDataURL('image/jpeg', 0.85);
                 popup.innerHTML = '';
-                const msg = document.createElement("span");
-                msg.textContent = "Preview N/A (codec not supported by browser)";
-                msg.style.cssText = "font-size:11px;color:#888;padding:12px 16px;white-space:nowrap;";
+                popup.appendChild(result);
+            };
+            sImg.onerror = () => {
+                if (!popup.parentElement) return;
+                popup.innerHTML = '';
+                const msg = document.createElement('span');
+                msg.textContent = 'Preview N/A';
+                msg.style.cssText = 'font-size:11px;color:#888;padding:12px 16px;white-space:nowrap;';
                 popup.appendChild(msg);
-            }
+            };
+            sImg.src = frameUrl;
         };
 
-        vid.onerror = showUnable;
+        vid.onerror = () => { vid.remove(); showServerFrame(); };
 
         // Detect black frame (unsupported codec) after first frame renders
         let checked = false;
+        let resolved = false;
         vid.addEventListener("playing", () => {
             if (checked) return;
             checked = true;
@@ -537,10 +603,20 @@ function showHoverThumbnail(filename, sourceFolder, anchorRect, overrideUrl) {
                     for (let i = 0; i < d.length; i += 16) {
                         if (d[i] > 2 || d[i+1] > 2 || d[i+2] > 2) { allBlack = false; break; }
                     }
-                    if (allBlack) showUnable();
+                    if (allBlack && !resolved) { resolved = true; vid.remove(); showServerFrame(); }
+                    else { resolved = true; }
                 } catch (_) {}
             }, 80);
         });
+
+        // Timeout: if neither playing nor onerror fires within 2s, use server frame
+        setTimeout(() => {
+            if (!resolved && !checked) {
+                resolved = true;
+                vid.remove();
+                showServerFrame();
+            }
+        }, 2000);
 
         vid.src = getViewUrl(filename, sourceFolder) + `&${Date.now()}`;
         popup.appendChild(vid);

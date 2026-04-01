@@ -1,10 +1,10 @@
 """
 ComfyUI-FBnodes - nodes subpackage
 """
-from .save_video_h26x import SaveVideoH26x, LoadLatentFile, MonoToStereo, GetVideoComponentsPlus
+from .save_video import SaveVideoH26x, LoadLatentFile, MonoToStereo, GetVideoComponentsPlus
 from .switch_any import SwitchAny, SwitchAnyBool
-from .prompt_apply_lora import PromptApplyLora
+from .apply_lora import PromptApplyLora
 from .latent_preview import install_latent_preview_hook
-from .better_image_loader import BetterImageLoader
+from .load_image import BetterImageLoader
 from .load_video import LoadVideoPlus
 from .vace_stitcher import VACEStitcher, VACEStitcher_Options

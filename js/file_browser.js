@@ -691,13 +691,21 @@ async function extractVideoThumbnail(filename, previewElement, cacheKey = null) 
     previewElement.innerHTML = '';
     previewElement.appendChild(placeholderImg);
     
-    // Create video element with minimal settings for fast loading
+    // Create video element - append to DOM for reliable codec detection
     const video = document.createElement('video');
     video.crossOrigin = 'anonymous';
-    video.preload = 'metadata';
+    video.preload = 'auto';
     video.muted = true;
     video.playsInline = true;
-    video.style.display = 'none';
+    video.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:1px;height:1px;opacity:0;pointer-events:none;';
+
+    const cleanupVideo = () => {
+        video.onloadedmetadata = null;
+        video.onseeked = null;
+        video.onerror = null;
+        try { video.src = ''; video.load(); } catch (e) { /* ignore */ }
+        if (video.parentNode) video.parentNode.removeChild(video);
+    };
     
     video.onloadedmetadata = () => {
         // Use absolute first frame (no seeking = fastest)
@@ -751,18 +759,49 @@ async function extractVideoThumbnail(filename, previewElement, cacheKey = null) 
             }
             
             // Clean up
-            video.remove();
+            cleanupVideo();
         } catch (error) {
             console.error('[FileBrowser] Error extracting video thumbnail:', error);
             // Keep placeholder on error
-            video.remove();
+            cleanupVideo();
         }
     };
     
     video.onerror = () => {
-        console.error('[FileBrowser] Error loading video for thumbnail:', filename);
-        // Keep placeholder on error
-        video.remove();
+        console.log('[FileBrowser] Browser cannot decode video, trying server-side extraction:', filename);
+        cleanupVideo();
+        // Fall back to server-side frame extraction (PyAV handles H265/yuv444)
+        const frameUrl = `/fbnodes/video-frame?filename=${encodeURIComponent(filename)}&source=${currentSourceFolder}&position=0`;
+        const img = document.createElement('img');
+        img.style.cssText = 'max-width: 100%; max-height: 100%; object-fit: contain;';
+        img.onload = () => {
+            previewElement.innerHTML = '';
+            previewElement.appendChild(img);
+            // Cache the server-extracted thumbnail
+            if (cacheKey) {
+                try {
+                    const canvas = document.createElement('canvas');
+                    canvas.width = img.naturalWidth;
+                    canvas.height = img.naturalHeight;
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(img, 0, 0);
+                    const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
+                    localStorage.setItem(cacheKey, dataUrl);
+                } catch (e) {
+                    console.log('[FileBrowser] Failed to cache server thumbnail:', e);
+                }
+            }
+        };
+        img.onerror = () => {
+            // Show "can't display" message
+            previewElement.innerHTML = `
+                <div style="text-align: center; color: #888; font-size: 11px; padding: 10px;">
+                    <div style="font-size: 24px; margin-bottom: 6px;">🎬</div>
+                    <div>Preview unavailable</div>
+                    <div style="font-size: 10px; opacity: 0.7; margin-top: 2px;">H265/yuv444 format</div>
+                </div>`;
+        };
+        img.src = frameUrl;
     };
     
     // Load video from input directory
@@ -774,6 +813,7 @@ async function extractVideoThumbnail(filename, previewElement, cacheKey = null) 
         subfolder = filename.substring(0, lastSlash);
         basename = filename.substring(lastSlash + 1);
     }
+    document.body.appendChild(video);
     video.src = `/view?filename=${encodeURIComponent(basename)}&type=${currentSourceFolder}&subfolder=${encodeURIComponent(subfolder)}&${Date.now()}`;
 }
 
