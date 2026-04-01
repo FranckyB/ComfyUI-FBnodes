@@ -21,7 +21,7 @@ from fractions import Fraction
 from comfy.cli_args import args
 
 
-class SaveVideoH26x:
+class SaveVideoPlus:
     """
     Save video with H.264 or H.265 codec and quality control.
     Takes VIDEO input (with audio support) and saves workflow metadata.
@@ -341,7 +341,7 @@ class SaveVideoH26x:
 class LoadLatentFile:
     """
     Load a latent from a file path.
-    Companion to SaveVideoH26x for loading latents saved alongside videos.
+    Companion to SaveVideoPlus for loading latents saved alongside videos.
     """
 
     @classmethod

@@ -1,5 +1,5 @@
 /**
- * File Browser Modal for FBnodes BetterImageLoader
+ * File Browser Modal for FBnodes LoadImagePlus
  * Shows thumbnails of files in input directory
  */
 

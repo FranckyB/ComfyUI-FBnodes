@@ -6,7 +6,7 @@ import comfy.sd
 import comfy.utils
 
 
-class PromptApplyLora:
+class ApplyLoraPlus:
     """
     Apply a LoRA stack to a model and optionally a CLIP.
     Takes a LORA_STACK (list of tuples) and applies each LoRA sequentially.
@@ -45,7 +45,7 @@ class PromptApplyLora:
             # Get the LoRA path
             lora_path = folder_paths.get_full_path("loras", lora_name)
             if lora_path is None:
-                print(f"[PromptApplyLora] Warning: LoRA not found: {lora_name}")
+                print(f"[ApplyLoraPlus] Warning: LoRA not found: {lora_name}")
                 continue
 
             # Load the LoRA

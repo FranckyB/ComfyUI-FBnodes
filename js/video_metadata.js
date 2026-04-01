@@ -78,7 +78,7 @@ function getVideoMetadata(file) {
                 }
 
                 // Second try: Look for 'prompt' or 'workflow' tags in metadata
-                // These are stored by our SaveVideoH26x node using movflags=use_metadata_tags
+                // These are stored by our SaveVideoPlus node using movflags=use_metadata_tags
                 offset = 0;
                 while (offset < videoData.length - 100) {
                     // Look for 'prompt' or 'workflow' strings followed by JSON

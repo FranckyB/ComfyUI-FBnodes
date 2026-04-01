@@ -46,12 +46,12 @@ async function cacheVideoFrame(filename, frameData, framePosition) {
         });
 
         if (response.ok) {
-            console.log(`[BetterImageLoader] Cached video frame at position ${framePosition.toFixed(2)} for: ${filename}`);
+            console.log(`[LoadImagePlus] Cached video frame at position ${framePosition.toFixed(2)} for: ${filename}`);
         } else {
-            console.error("[BetterImageLoader] Failed to cache video frame:", response.status);
+            console.error("[LoadImagePlus] Failed to cache video frame:", response.status);
         }
     } catch (error) {
-        console.error("[BetterImageLoader] Error caching video frame:", error);
+        console.error("[LoadImagePlus] Error caching video frame:", error);
     }
 }
 
@@ -339,13 +339,13 @@ async function loadImageFile(node, filename) {
         };
 
         img.onerror = () => {
-            console.error(`[BetterImageLoader] Failed to load image: ${filename}`);
+            console.error(`[LoadImagePlus] Failed to load image: ${filename}`);
             showPlaceholder(node);
         };
 
         img.src = `${fileUrl}&${Date.now()}`;
     } catch (error) {
-        console.error("[BetterImageLoader] Error loading image:", error);
+        console.error("[LoadImagePlus] Error loading image:", error);
         showPlaceholder(node);
     }
 }
@@ -380,7 +380,7 @@ function loadVideoFrameFromServer(node, filename, framePosition, viewType) {
         app.graph.setDirtyCanvas(true, true);
     };
     img.onerror = () => {
-        console.error(`[BetterImageLoader] Server-side frame extraction failed for: ${filename}`);
+        console.error(`[LoadImagePlus] Server-side frame extraction failed for: ${filename}`);
         showPlaceholder(node);
     };
     img.src = frameUrl;
@@ -462,7 +462,7 @@ async function loadVideoFrame(node, filename) {
             };
 
             img.onerror = () => {
-                console.error(`[BetterImageLoader] Failed to create image from video frame`);
+                console.error(`[LoadImagePlus] Failed to create image from video frame`);
                 cleanupVideo();
                 showPlaceholder(node);
             };
@@ -471,7 +471,7 @@ async function loadVideoFrame(node, filename) {
         };
 
         video.onerror = () => {
-            console.log(`[BetterImageLoader] Browser cannot decode video, using server-side extraction: ${filename}`);
+            console.log(`[LoadImagePlus] Browser cannot decode video, using server-side extraction: ${filename}`);
             // Remember this video can't be decoded by browser - skip browser attempt on future scrubs
             _nonBrowserDecodableVideos.add(filename);
             cleanupVideo();
@@ -481,7 +481,7 @@ async function loadVideoFrame(node, filename) {
         document.body.appendChild(video);
         video.src = videoUrl + `&${Date.now()}`;
     } catch (error) {
-        console.error("[BetterImageLoader] Error loading video:", error);
+        console.error("[LoadImagePlus] Error loading video:", error);
         showPlaceholder(node);
     }
 }
@@ -509,17 +509,17 @@ function showPlaceholder(node) {
 }
 
 /**
- * BetterImageLoader extension registration
+ * LoadImagePlus extension registration
  */
 app.registerExtension({
-    name: "FBnodes.BetterImageLoader",
+    name: "FBnodes.LoadImagePlus",
 
     async setup() {
         api.addEventListener("better-image-loader-extract-frame", async (event) => {
             const { filename, frame_position } = event.detail;
             if (app.graph && app.graph._nodes) {
                 for (const node of app.graph._nodes) {
-                    if (node.type === "BetterImageLoader") {
+                    if (node.type === "LoadImagePlus") {
                         const imageWidget = node.widgets?.find(w => w.name === "image");
                         const frameWidget = node.widgets?.find(w => w.name === "frame_position");
                         if (imageWidget && imageWidget.value === filename) {
@@ -536,7 +536,7 @@ app.registerExtension({
     },
 
     async beforeRegisterNodeDef(nodeType, nodeData, app) {
-        if (nodeData.name !== "BetterImageLoader") return;
+        if (nodeData.name !== "LoadImagePlus") return;
 
         const onNodeCreated = nodeType.prototype.onNodeCreated;
         nodeType.prototype.onNodeCreated = function () {
@@ -568,7 +568,7 @@ app.registerExtension({
                             }
                         }
                     } catch (err) {
-                        console.warn('[BetterImageLoader] Could not fetch file list:', err);
+                        console.warn('[LoadImagePlus] Could not fetch file list:', err);
                     }
                     node.setDirtyCanvas(true);
                 };
@@ -754,7 +754,7 @@ app.registerExtension({
                         }
                     }
                 } catch (error) {
-                    console.error('[BetterImageLoader] Error uploading file:', error);
+                    console.error('[LoadImagePlus] Error uploading file:', error);
                 }
                 return true;
             };
@@ -846,4 +846,4 @@ app.registerExtension({
     }
 });
 
-console.log("[FBnodes] BetterImageLoader extension loaded");
+console.log("[FBnodes] LoadImagePlus extension loaded");

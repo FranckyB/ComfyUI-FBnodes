@@ -1,5 +1,5 @@
 """
-BetterImageLoader - A streamlined image/video loader with file browser and preview.
+LoadImagePlus - A streamlined image/video loader with file browser and preview.
 """
 import os
 import json
@@ -17,7 +17,7 @@ try:
     IMAGE_SUPPORT = True
 except ImportError:
     IMAGE_SUPPORT = False
-    print("[FBnodes] Warning: PIL/numpy not available, BetterImageLoader disabled")
+    print("[FBnodes] Warning: PIL/numpy not available, LoadImagePlus disabled")
 
 # Cache for video frames extracted by JavaScript
 _video_frames_cache = {}
@@ -450,7 +450,7 @@ def get_placeholder_image_tensor():
 # Node class
 # ---------------------------------------------------------------------------
 
-class BetterImageLoader:
+class LoadImagePlus:
     """
     A streamlined image loader with file browser, preview, and input/output folder switching.
     """

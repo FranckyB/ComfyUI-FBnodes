@@ -95,7 +95,7 @@ Universal switch with up to 10 named inputs. True lazy evaluation — only the s
 ### Switch Any (Boolean)
 Boolean switch — passes through `on_true` or `on_false` based on a condition toggle. Only the active branch is evaluated.
 
-### Prompt Apply LoRA
+### Apply LoRA+
 Apply a LORA_STACK (list of LoRA tuples) to a model and optional CLIP. Works with Prompt Manager Advanced's LoRA stack output.
 
 ## Animated Latent Preview
@@ -122,6 +122,9 @@ pip install -r ComfyUI-FBnodes/requirements.txt
 GPL-3.0
 
 ## Changelog
+
+### version 1.1.9
+- **Renamed nodes**: Prompt Apply LoRA → **Apply LoRA+**, cleaned up internal node IDs (`SaveVideoH26x` → `SaveVideoPlus`, `PromptApplyLora` → `ApplyLoraPlus`, `BetterImageLoader` → `LoadImagePlus`). Existing workflows are automatically migrated via the Node Replacement API.
 
 ### version 1.1.8
 - **Speed Improvement**: Thumbnail generation now uses server-side PyAV instead of browser-based video decoding — substantially faster, especially with many clips.
