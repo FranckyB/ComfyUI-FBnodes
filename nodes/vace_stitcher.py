@@ -15,7 +15,6 @@ import logging
 import random
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
-from fractions import Fraction
 import torch
 import numpy as np
 import av
@@ -70,30 +69,6 @@ def load_video_file(file_path: str) -> torch.Tensor:
             frames.append(arr)
     video = np.stack(frames, axis=0)  # (T, H, W, 3) uint8
     return torch.from_numpy(video).float() / 255.0
-
-
-def save_video_444_10bit(file_path: str, pixels: torch.Tensor, fps: float = 24.0):
-    """Save pixel frames as h265 yuv444p10le MP4 for maximum quality intermediate storage."""
-    t, h, w, c = pixels.shape
-    with av.open(file_path, mode='w') as output:
-        stream = output.add_stream('libx265', rate=Fraction(round(fps * 1000), 1000))
-        stream.width = w
-        stream.height = h
-        stream.pix_fmt = 'yuv444p10le'
-        stream.options = {
-            'crf': '0',
-            'preset': 'fast',
-            'tag': 'hvc1',
-            'x265-params': 'log-level=error',
-        }
-        for i in range(t):
-            img = (pixels[i, :, :, :3] * 65535).clamp(0, 65535).to(torch.int16).cpu().numpy().astype('uint16')
-            frame = av.VideoFrame.from_ndarray(img, format='rgb48le')
-            frame = frame.reformat(format='yuv444p10le')
-            for packet in stream.encode(frame):
-                output.mux(packet)
-        for packet in stream.encode(None):
-            output.mux(packet)
 
 
 def _get_transitions_dir(clip_files):
@@ -624,7 +599,7 @@ class VACEStitcher:
                     "tooltip": "Negative conditioning from a CLIP Text Encode node.",
                 }),
                 "vae": ("VAE", {}),
-                "source_folder": (["input", "output"], {
+                "source_folder": (["output", "input"], {
                     "tooltip": "Select which folder to browse.",
                 }),
                 "clip_list": ("STRING", {
@@ -640,8 +615,8 @@ class VACEStitcher:
             },
         }
 
-    RETURN_TYPES = ("IMAGE",)
-    RETURN_NAMES = ("images",)
+    RETURN_TYPES = ("IMAGE", "FLOAT", "STRING")
+    RETURN_NAMES = ("images", "fps", "metadata")
     FUNCTION = "execute"
     OUTPUT_NODE = True
     CATEGORY = "FBnodes"
@@ -743,6 +718,30 @@ class VACEStitcher:
         latent_count = sum(1 for latent in clip_latents if latent is not None)
         video_count = sum(1 for pixels in clip_pixels if pixels is not None)
         print(f"[VACE Stitcher] Loaded {len(clip_files)} clips: {latent_count} from .latent, {video_count} from video")
+
+        # Extract FPS and all metadata from the first clip's video file
+        clip_fps = 16.0
+        clip_metadata = ""
+        try:
+            with av.open(clip_files[0], mode='r') as container:
+                stream = container.streams.video[0]
+                if stream.average_rate:
+                    clip_fps = float(stream.average_rate)
+                elif stream.guessed_rate:
+                    clip_fps = float(stream.guessed_rate)
+                # Extract all ComfyUI metadata from container
+                if container.metadata:
+                    meta = {}
+                    for key, value in container.metadata.items():
+                        if key and value:
+                            meta[key] = value
+                    if meta:
+                        clip_metadata = json.dumps(meta)
+            print(f"[VACE Stitcher] Detected FPS from first clip: {clip_fps}")
+            if clip_metadata:
+                print(f"[VACE Stitcher] Extracted metadata from first clip ({len(json.loads(clip_metadata))} keys)")
+        except Exception as e:
+            print(f"[VACE Stitcher] Could not detect FPS/metadata, defaulting to {clip_fps}: {e}")
 
         # ── 2. Use models directly (user applies shift externally if needed) ──
         model_high_shifted = model_high
@@ -1193,4 +1192,4 @@ class VACEStitcher:
         print(f"[VACE Stitcher] Final output: {stitched_pixels.shape} "
               f"({total_pixel_frames} pixel frames)")
 
-        return (stitched_pixels,)
+        return (stitched_pixels, clip_fps, clip_metadata)

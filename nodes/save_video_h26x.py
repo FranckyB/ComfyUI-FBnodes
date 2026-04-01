@@ -66,6 +66,7 @@ class SaveVideoH26x:
             },
             "optional": {
                 "latent": ("LATENT", {"tooltip": "Optional latent to save alongside the video (same filename with .latent extension)."}),
+                "metadata": ("STRING", {"forceInput": True, "tooltip": "Optional metadata JSON string to embed in the video (e.g. from VACE Stitcher)."}),
             },
             "hidden": {
                 "prompt": "PROMPT",
@@ -80,7 +81,7 @@ class SaveVideoH26x:
     CATEGORY = "FBnodes"
     DESCRIPTION = "Saves video with H.264 or H.265 codec and quality control. Includes audio and workflow metadata."
 
-    def save_video(self, video, filename_prefix, codec, chroma, crf, save, save_latent, latent=None, prompt=None, extra_pnginfo=None):
+    def save_video(self, video, filename_prefix, codec, chroma, crf, save, save_latent, latent=None, metadata=None, prompt=None, extra_pnginfo=None):
         # Expand %date:format% patterns (e.g., %date:yy-MM-dd_hh-mm%)
         # This mimics ComfyUI's frontend JS date expansion
         def expand_date_format(text):
@@ -183,13 +184,22 @@ class SaveVideoH26x:
                     os.remove(latent_file)
                 comfy.utils.save_torch_file(latent_output, latent_file, metadata=latent_metadata)
 
-        # Build metadata
-        metadata = {}
+        # Build metadata dict for MP4 container
+        metadata_dict = {}
         if not args.disable_metadata:
-            if extra_pnginfo is not None:
-                metadata.update(extra_pnginfo)
-            if prompt is not None:
-                metadata["prompt"] = prompt
+            if metadata is not None:
+                # Connected metadata replaces the default workflow/prompt metadata
+                try:
+                    parsed = json.loads(metadata)
+                    if isinstance(parsed, dict):
+                        metadata_dict.update(parsed)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            else:
+                if extra_pnginfo is not None:
+                    metadata_dict.update(extra_pnginfo)
+                if prompt is not None:
+                    metadata_dict["prompt"] = prompt
 
         # Prepare frame rate as fraction
         frame_rate_frac = Fraction(round(float(frame_rate) * 1000), 1000)
@@ -197,8 +207,8 @@ class SaveVideoH26x:
         # Open output container with movflags for metadata
         with av.open(file_path, mode='w', options={'movflags': 'use_metadata_tags'}) as output:
             # Add metadata
-            if metadata:
-                for key, value in metadata.items():
+            if metadata_dict:
+                for key, value in metadata_dict.items():
                     output.metadata[key] = json.dumps(value) if not isinstance(value, str) else value
 
             # Create video stream
