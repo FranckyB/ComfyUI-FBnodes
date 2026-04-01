@@ -123,7 +123,8 @@ GPL-3.0
 
 ## Changelog
 
-### version 1.1.7
+### version 1.1.8
+- **Speed Improvement**: Thumbnail generation now uses server-side PyAV instead of browser-based video decoding — substantially faster, especially with many clips.
 - **Improved Handling of H265 Clip**
 - **Renamed nodes**: Save Video H264/H265 → **Save Video+**, Better Image Loader → **Load Image+**. Existing workflows are unaffected.
 - **New node**: Added **Load Video+** — video loader with file browser, preview, and drag-drop. Outputs VIDEO for Get Video Components+.
