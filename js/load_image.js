@@ -536,7 +536,7 @@ app.registerExtension({
     },
 
     async beforeRegisterNodeDef(nodeType, nodeData, app) {
-        if (nodeData.name !== "LoadImagePlus") return;
+        if (nodeData.name !== "LoadImagePlus" && nodeData.name !== "BetterImageLoader") return;
 
         const onNodeCreated = nodeType.prototype.onNodeCreated;
         nodeType.prototype.onNodeCreated = function () {

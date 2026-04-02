@@ -125,6 +125,7 @@ GPL-3.0
 
 ### version 1.1.9
 - **Renamed nodes**: cleaned up internal node IDs (`SaveVideoH26x` → `SaveVideoPlus`, `PromptApplyLora` → `ApplyLoraPlus`, `BetterImageLoader` → `LoadImagePlus`). Existing workflows will use "Legacy" versions for backward compatibility.
+- **Fix Save Video+ display issues**"  Fixed issues found in Load Video+.
 
 ### version 1.1.8
 - **Speed Improvement**: Thumbnail generation now uses server-side PyAV instead of browser-based video decoding — substantially faster, especially with many clips.

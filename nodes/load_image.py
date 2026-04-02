@@ -205,6 +205,54 @@ async def extract_video_frame_api(request):
         return server.web.json_response({"error": str(e)}, status=500)
 
 
+@server.PromptServer.instance.routes.get("/fbnodes/video-info")
+async def video_info_api(request):
+    """Return codec and pixel format for a video file so the frontend can
+    decide whether the browser will be able to play it."""
+    try:
+        import av
+    except ImportError:
+        return server.web.json_response(
+            {"error": "PyAV not available"}, status=500
+        )
+
+    filename = request.rel_url.query.get('filename', '')
+    source = request.rel_url.query.get('source', 'input')
+
+    if not filename:
+        return server.web.json_response({"error": "Missing filename"}, status=400)
+
+    if source == 'output':
+        base_dir = folder_paths.get_output_directory()
+    else:
+        base_dir = folder_paths.get_input_directory()
+
+    file_path = os.path.join(base_dir, filename.replace('/', os.sep))
+    real_base = os.path.realpath(base_dir)
+    real_path = os.path.realpath(file_path)
+    if not real_path.startswith(real_base):
+        return server.web.json_response({"error": "Invalid path"}, status=403)
+    if not os.path.exists(file_path):
+        return server.web.json_response({"error": "File not found"}, status=404)
+
+    try:
+        container = av.open(file_path)
+        stream = container.streams.video[0]
+        codec_name = stream.codec_context.name or ""
+        pix_fmt = stream.codec_context.pix_fmt or ""
+        container.close()
+
+        needs_preview = codec_name in ("hevc", "h265") or "444" in pix_fmt
+
+        return server.web.json_response({
+            "codec": codec_name,
+            "pix_fmt": pix_fmt,
+            "needs_preview": needs_preview,
+        })
+    except Exception as e:
+        return server.web.json_response({"error": str(e)}, status=500)
+
+
 @server.PromptServer.instance.routes.get("/fbnodes/video-frame-clip")
 async def extract_video_frame_clip_api(request):
     """

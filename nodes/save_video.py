@@ -37,7 +37,7 @@ class SaveVideoPlus:
             "required": {
                 "video": ("VIDEO", {"tooltip": "The video to save."}),
                 "filename_prefix": ("STRING", {
-                    "default": "video/vid_%date:yy-MM-dd_hh-mm-ss%",
+                    "default": "video/vid_%date:yy-MM-dd_HH-mm-ss%",
                     "tooltip": "The prefix for the file to save.\nSupports %date:format% patterns."
                 }),
                 "codec": (cls.CODECS, {

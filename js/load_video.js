@@ -14,8 +14,9 @@ const VIDEO_EXTENSIONS = ['mp4', 'webm', 'mov', 'avi', 'mkv', 'm4v', 'wmv'];
 // Track videos that the browser can't decode (H265/yuv444) to skip browser attempt on future loads
 const _nonBrowserDecodableVideos = new Set();
 
-// Placeholder image path
+// Placeholder paths
 const PLACEHOLDER_IMAGE_PATH = new URL("./placeholder.png", import.meta.url).href;
+const PLACEHOLDER_VIDEO_PATH = new URL("./placeholder.mp4", import.meta.url).href;
 
 /**
  * Strip [input]/[output]/[temp] annotation from a path
@@ -38,11 +39,42 @@ function annotatePath(filename, sourceFolder) {
 }
 
 /**
- * Check if a video can be played in the browser.
- * If not (H265/yuv444), ask the server to generate a browser-playable 1-frame
- * H264 clip and feed that to ComfyUI's native video player instead.
+ * Fix the native video player's src to use the correct folder type.
+ * The native player defaults to type=input; when source is output we
+ * need to rewrite the URL so it fetches from the output directory.
  */
-function checkVideoPlayability(node, filename) {
+function fixVideoSrcFolder(node, filename, sourceFolder) {
+    const vid = node.videoContainer?.querySelector('video')
+        || node.widgets?.find(w => w.name === 'video-preview')?.element?.querySelector('video');
+    if (!vid) return;
+
+    // Build the correct URL
+    let actualFilename = filename;
+    let subfolder = "";
+    if (filename.includes('/')) {
+        const lastSlash = filename.lastIndexOf('/');
+        subfolder = filename.substring(0, lastSlash);
+        actualFilename = filename.substring(lastSlash + 1);
+    }
+    let correctUrl = `/view?filename=${encodeURIComponent(actualFilename)}&type=${sourceFolder}`;
+    if (subfolder) correctUrl += `&subfolder=${encodeURIComponent(subfolder)}`;
+
+    // Fix <source> child or direct src
+    const source = vid.querySelector('source');
+    if (source && source.src && source.src.includes('type=input')) {
+        source.src = correctUrl;
+        vid.load();
+    } else if (vid.src && vid.src.includes('type=input')) {
+        vid.src = correctUrl;
+        vid.load();
+    }
+}
+
+/**
+ * Ask the server whether the video is H265/yuv444 (not browser-playable).
+ * If so, generate a 1-frame H264 preview clip and display that instead.
+ */
+async function checkVideoPlayability(node, filename) {
     if (!filename || filename === '(none)') return;
 
     const sourceFolder = node._sourceFolder || 'input';
@@ -53,78 +85,21 @@ function checkVideoPlayability(node, filename) {
         return;
     }
 
-    // Instant synchronous check: ask the browser if it can play H265 at all.
-    // canPlayType returns "" (no), "maybe", or "probably".
-    // If the browser flat-out says no to both hvc1 and hev1, skip the slow
-    // async probe and request the server clip immediately.
-    const testEl = document.createElement('video');
-    const h265Support = testEl.canPlayType('video/mp4; codecs="hvc1"')
-                     || testEl.canPlayType('video/mp4; codecs="hev1"');
-    if (!h265Support) {
-        // Browser definitively cannot play H265 — go straight to server clip
-        const ext = filename.split('.').pop().toLowerCase();
-        if (['mp4', 'mov', 'm4v', 'mkv'].includes(ext)) {
-            console.log(`[LoadVideoPlus] Browser has no H265 support, requesting preview clip: ${filename}`);
+    try {
+        const resp = await api.fetchApi(
+            `/fbnodes/video-info?filename=${encodeURIComponent(filename)}&source=${sourceFolder}`
+        );
+        if (!resp.ok) return;
+        const info = await resp.json();
+
+        if (info.needs_preview) {
+            console.log(`[LoadVideoPlus] Server reports ${info.codec}/${info.pix_fmt}, requesting preview clip: ${filename}`);
             _nonBrowserDecodableVideos.add(filename);
             loadServerPreviewClip(node, filename, sourceFolder);
-            return;
         }
+    } catch (err) {
+        console.warn(`[LoadVideoPlus] Could not check video info:`, err);
     }
-
-    // Build the video URL (same as ComfyUI's native player uses)
-    let actualFilename = filename;
-    let subfolder = "";
-    if (filename.includes('/')) {
-        const lastSlash = filename.lastIndexOf('/');
-        subfolder = filename.substring(0, lastSlash);
-        actualFilename = filename.substring(lastSlash + 1);
-    }
-    let videoUrl = `/view?filename=${encodeURIComponent(actualFilename)}&type=${sourceFolder}`;
-    if (subfolder) {
-        videoUrl += `&subfolder=${encodeURIComponent(subfolder)}`;
-    }
-
-    // Async probe for ambiguous cases (browser said "maybe"/"probably" but
-    // the specific file might still fail, e.g. yuv444 pixel format).
-    const testVideo = document.createElement('video');
-    testVideo.preload = 'auto';
-    testVideo.muted = true;
-    testVideo.playsInline = true;
-    testVideo.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:1px;height:1px;opacity:0;pointer-events:none;';
-
-    let resolved = false;
-    const cleanup = () => {
-        if (resolved) return;
-        resolved = true;
-        testVideo.onloadeddata = null;
-        testVideo.onerror = null;
-        try { testVideo.src = ''; testVideo.load(); } catch (e) { /* ignore */ }
-        if (testVideo.parentNode) testVideo.parentNode.removeChild(testVideo);
-    };
-
-    // 'loadeddata' = browser successfully decoded at least one video frame
-    testVideo.onloadeddata = () => {
-        cleanup();
-        // Browser plays this fine — nothing to do
-    };
-
-    testVideo.onerror = () => {
-        console.log(`[LoadVideoPlus] Browser cannot decode video, requesting H264 preview clip: ${filename}`);
-        _nonBrowserDecodableVideos.add(filename);
-        cleanup();
-        loadServerPreviewClip(node, filename, sourceFolder);
-    };
-
-    // Safety timeout – if neither event fires within 3s, assume playable
-    setTimeout(() => {
-        if (!resolved) {
-            console.log(`[LoadVideoPlus] Video probe timed out, assuming playable: ${filename}`);
-            cleanup();
-        }
-    }, 3000);
-
-    document.body.appendChild(testVideo);
-    testVideo.src = videoUrl;
 }
 
 /**
@@ -264,9 +239,7 @@ app.registerExtension({
                                     const ext = f.split('.').pop().toLowerCase();
                                     return VIDEO_EXTENSIONS.includes(ext);
                                 });
-                                // Annotate output files so native player uses type=output
-                                const annotated = videoFiles.map(f => annotatePath(f, value));
-                                videoWidget.options.values = ["(none)", ...annotated];
+                                videoWidget.options.values = ["(none)", ...videoFiles];
                                 videoWidget.value = "(none)";
                                 if (videoWidget.callback) videoWidget.callback("(none)");
                             }
@@ -284,10 +257,37 @@ app.registerExtension({
                 // Hook into video widget callback to detect H265 and show server-extracted frame
                 const origVideoCallback = videoWidget.callback;
                 videoWidget.callback = function(value) {
+                    // The native player reads widget.value to build the video URL.
+                    // Temporarily set value with [output] so it resolves correctly,
+                    // then restore the clean name for display.
+                    const clean = stripAnnotation(value);
+                    if (node._sourceFolder === 'output' && clean && clean !== '(none)') {
+                        videoWidget.value = clean + ' [output]';
+                    }
                     if (origVideoCallback) origVideoCallback.apply(this, arguments);
-                    const filename = stripAnnotation(value);
-                    if (filename && filename !== '(none)') {
-                        checkVideoPlayability(node, filename);
+                    // Restore clean display name
+                    if (clean) videoWidget.value = clean;
+
+                    if (clean && clean !== '(none)') {
+                        checkVideoPlayability(node, clean);
+                    } else {
+                        // Show placeholder video when nothing is selected
+                        setTimeout(() => {
+                            const vid = node.videoContainer?.querySelector('video')
+                                || node.widgets?.find(w => w.name === 'video-preview')?.element?.querySelector('video');
+                            if (vid) {
+                                const source = vid.querySelector('source');
+                                if (source) {
+                                    source.src = PLACEHOLDER_VIDEO_PATH;
+                                    source.removeAttribute('type');
+                                } else {
+                                    vid.src = PLACEHOLDER_VIDEO_PATH;
+                                }
+                                vid.load();
+                            } else {
+                                createVideoPreview(node, PLACEHOLDER_VIDEO_PATH);
+                            }
+                        }, 100);
                     }
                 };
 
@@ -302,9 +302,8 @@ app.registerExtension({
                         const currentFile = (!rawValue || rawValue === "(none)") ? null : stripAnnotation(rawValue);
                         const sourceFolder = node._sourceFolder || 'input';
                         createFileBrowserModal(currentFile, (selectedFile) => {
-                            const annotated = annotatePath(selectedFile, node._sourceFolder);
-                            videoWidget.value = annotated;
-                            if (videoWidget.callback) videoWidget.callback(annotated);
+                            videoWidget.value = selectedFile;
+                            if (videoWidget.callback) videoWidget.callback(selectedFile);
                             node.setDirtyCanvas(true);
                         }, sourceFolder, { defaultFilter: 'video' });
                     },
@@ -314,9 +313,18 @@ app.registerExtension({
                 Object.defineProperty(browseButton, "node", { value: node });
             }
 
+            // Show placeholder video on initial node creation
+            if (videoWidget && (!videoWidget.value || videoWidget.value === '(none)')) {
+                setTimeout(() => createVideoPreview(node, PLACEHOLDER_VIDEO_PATH), 100);
+            }
+
             // Restore on workflow load
             const onConfigure = node.onConfigure;
+            node._initialConfigDone = false;
             node.onConfigure = function(info) {
+                const isFirstConfigure = !node._initialConfigDone;
+                node._initialConfigDone = true;
+
                 const result = onConfigure ? onConfigure.apply(this, arguments) : undefined;
 
                 const sfWidget = this.widgets?.find(w => w.name === "source_folder");
@@ -333,24 +341,49 @@ app.registerExtension({
                                 const ext = f.split('.').pop().toLowerCase();
                                 return VIDEO_EXTENSIONS.includes(ext);
                             });
-                            const annotated = videoFiles.map(f => annotatePath(f, 'output'));
-                            videoWidget.options.values = ["(none)", ...annotated];
-                            // Restore the saved value (ensure it has annotation)
+                            videoWidget.options.values = ["(none)", ...videoFiles];
+                            // Restore the saved value
                             if (savedStripped && videoFiles.includes(savedStripped)) {
-                                const restoredValue = annotatePath(savedStripped, 'output');
-                                videoWidget.value = restoredValue;
-                                if (videoWidget.callback) videoWidget.callback(restoredValue);
+                                videoWidget.value = savedStripped;
+                                // Only trigger H265 detection on first load;
+                                // on tab switch the native player handles it
+                                if (isFirstConfigure) {
+                                    if (videoWidget.callback) videoWidget.callback(savedStripped);
+                                }
                             }
                         }
                     }).catch(() => {});
                 }
 
-                // Check video playability on workflow load (H265 fallback)
+                // Check video playability (H265/yuv444 fallback).
+                // Server check is fast and the preview clip is cached in temp/.
                 if (videoWidget) {
                     const filename = stripAnnotation(videoWidget.value);
                     if (filename && filename !== '(none)') {
-                        // Small delay to let native player attempt to load first
+                        // Ensure native player can resolve output files
+                        if (node._sourceFolder === 'output') {
+                            videoWidget.value = filename + ' [output]';
+                            setTimeout(() => { videoWidget.value = filename; }, 200);
+                        }
                         setTimeout(() => checkVideoPlayability(node, filename), 500);
+                    } else {
+                        // Show placeholder when no video is selected
+                        setTimeout(() => {
+                            const vid = node.videoContainer?.querySelector('video')
+                                || node.widgets?.find(w => w.name === 'video-preview')?.element?.querySelector('video');
+                            if (vid) {
+                                const source = vid.querySelector('source');
+                                if (source) {
+                                    source.src = PLACEHOLDER_VIDEO_PATH;
+                                    source.removeAttribute('type');
+                                } else {
+                                    vid.src = PLACEHOLDER_VIDEO_PATH;
+                                }
+                                vid.load();
+                            } else {
+                                createVideoPreview(node, PLACEHOLDER_VIDEO_PATH);
+                            }
+                        }, 100);
                     }
                 }
 
