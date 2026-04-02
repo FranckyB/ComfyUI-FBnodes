@@ -1,7 +1,7 @@
 """
 ComfyUI-FBnodes - Utility nodes for ComfyUI
-Video saving, universal switches, LoRA application, and animated latent preview.
 """
+
 __version__ = "1.1.9"
 __author__ = "François Beaudry"
 __license__ = "GPL-3.0"
@@ -36,6 +36,11 @@ NODE_CLASS_MAPPINGS = {
     "SwitchAnyBool": SwitchAnyBool,
     "VACEStitcher": VACEStitcher,
     "VACEStitcher_Options": VACEStitcher_Options,
+
+    # compatibility aliases
+    "BetterImageLoader": LoadImagePlus,
+    "PromptApplyLora": ApplyLoraPlus,
+    "SaveVideoH26x": SaveVideoPlus,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -50,15 +55,15 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "SwitchAnyBool": "Switch Any (Boolean)",
     "VACEStitcher": "VACE Stitcher",
     "VACEStitcher_Options": "VACE Stitcher Options",
+
+    # compatibility aliases
+    "PromptApplyLora": "Apply LoRA+ (legacy)",
+    "BetterImageLoader": "Load Image+ (legacy)",
+    "SaveVideoH26x": "Save Video+ (legacy)",
 }
 
 WEB_DIRECTORY = "./js"
 
-# Register node replacements for backward compatibility (old workflows auto-migrate)
-import asyncio
-from .node_replacements import register_replacements
-asyncio.ensure_future(register_replacements())
-
-__all__ = ['NODE_CLASS_MAPPINGS', 'NODE_DISPLAY_NAME_MAPPINGS', 'WEB_DIRECTORY']
+__all__ = ["NODE_CLASS_MAPPINGS", "NODE_DISPLAY_NAME_MAPPINGS", "WEB_DIRECTORY"]
 
 print("[FBnodes] Nodes registered successfully")
