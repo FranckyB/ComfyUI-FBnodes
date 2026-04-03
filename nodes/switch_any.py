@@ -64,8 +64,14 @@ class SwitchAny:
         name_list = parse_names(names, num_inputs)
         for i, name in enumerate(name_list):
             if name == select:
-                return [f"input_{i + 1}"]
+                key = f"input_{i + 1}"
+                # Only request if actually connected
+                if key not in kwargs:
+                    return []
+                return [key]
         # Fallback: first input
+        if "input_1" not in kwargs:
+            return []
         return ["input_1"]
 
     def switch(self, select, num_inputs=2, names="", **kwargs):
@@ -73,10 +79,8 @@ class SwitchAny:
         for i, name in enumerate(name_list):
             if name == select:
                 value = kwargs.get(f"input_{i + 1}")
-                if value is None:
-                    raise ValueError(f"Selected input '{name}' is not connected.")
                 return (value,)
-        raise ValueError(f"No input matches selection '{select}'.")
+        return (None,)
 
 
 class SwitchAnyBool:
@@ -106,11 +110,12 @@ class SwitchAnyBool:
         return True
 
     def check_lazy_status(self, condition, **kwargs):
-        return ["on_true"] if condition else ["on_false"]
+        key = "on_true" if condition else "on_false"
+        # Only request if actually connected
+        if key not in kwargs:
+            return []
+        return [key]
 
     def switch(self, condition, on_true=None, on_false=None):
         value = on_true if condition else on_false
-        label = "on_true" if condition else "on_false"
-        if value is None:
-            raise ValueError(f"Selected input '{label}' is not connected.")
         return (value,)
