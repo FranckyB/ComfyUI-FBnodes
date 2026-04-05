@@ -282,13 +282,23 @@ function showVideoPreviewModal(filename, viewType) {
 }
 
 /**
+ * Strip ComfyUI annotated filepath suffix, e.g. "file.png [input]" -> "file.png"
+ */
+function stripAnnotation(filename) {
+    if (!filename) return filename;
+    const match = filename.match(/^(.+)\s+\[(input|output|temp)\]$/);
+    return match ? match[1] : filename;
+}
+
+/**
  * Load and display an image in the node (simplified - no metadata extraction)
  */
 async function loadAndDisplayImage(node, filename) {
-    if (!filename) {
+    if (!filename || filename === '(none)') {
         showPlaceholder(node);
         return;
     }
+    filename = stripAnnotation(filename);
 
     const ext = filename.split('.').pop().toLowerCase();
 
@@ -579,6 +589,12 @@ app.registerExtension({
             if (imageWidget) {
                 const originalCallback = imageWidget.callback;
                 imageWidget.callback = function(value) {
+                    // Strip annotated filepath suffix from MaskEditor
+                    const cleaned = stripAnnotation(value);
+                    if (cleaned !== value) {
+                        imageWidget.value = cleaned;
+                        value = cleaned;
+                    }
                     if (originalCallback) originalCallback.apply(this, arguments);
 
                     if (value && framePositionWidget) {

@@ -461,20 +461,63 @@ def get_cached_video_frame(relative_path, frame_position):
 
 
 def load_image_as_tensor(file_path):
-    """Load an image file and convert to ComfyUI tensor format (B, H, W, C)."""
+    """Load an image file and convert to ComfyUI tensor format (B, H, W, C).
+    Returns (image_tensor, mask_tensor) tuple."""
     if not IMAGE_SUPPORT:
-        return None
+        return None, None
     try:
+        from PIL import ImageOps, ImageSequence
         img = Image.open(file_path)
-        if img.mode != 'RGB':
-            img = img.convert('RGB')
 
-        img_array = np.array(img).astype(np.float32) / 255.0
-        img_tensor = torch.from_numpy(img_array).unsqueeze(0)
-        return img_tensor
+        output_images = []
+        output_masks = []
+        w, h = None, None
+
+        for i in ImageSequence.Iterator(img):
+            i = ImageOps.exif_transpose(i)
+
+            if i.mode == 'I':
+                i = i.point(lambda x: x * (1 / 255))
+            image = i.convert("RGB")
+
+            if len(output_images) == 0:
+                w = image.size[0]
+                h = image.size[1]
+
+            if image.size[0] != w or image.size[1] != h:
+                continue
+
+            image_np = np.array(image).astype(np.float32) / 255.0
+            image_tensor = torch.from_numpy(image_np)[None,]
+
+            if 'A' in i.getbands():
+                mask = np.array(i.getchannel('A')).astype(np.float32) / 255.0
+                mask = 1. - torch.from_numpy(mask)
+            elif i.mode == 'P' and 'transparency' in i.info:
+                mask = np.array(i.convert('RGBA').getchannel('A')).astype(np.float32) / 255.0
+                mask = 1. - torch.from_numpy(mask)
+            else:
+                mask = torch.zeros((64, 64), dtype=torch.float32, device="cpu")
+
+            output_images.append(image_tensor)
+            output_masks.append(mask.unsqueeze(0))
+
+            if img.format == "MPO":
+                break
+
+        if len(output_images) > 1:
+            img_tensor = torch.cat(output_images, dim=0)
+            mask_tensor = torch.cat(output_masks, dim=0)
+        elif len(output_images) == 1:
+            img_tensor = output_images[0]
+            mask_tensor = output_masks[0]
+        else:
+            return None, None
+
+        return img_tensor, mask_tensor
     except Exception as e:
         print(f"[FBnodes] Error loading image: {e}")
-        return None
+        return None, None
 
 
 def get_placeholder_image_tensor():
@@ -542,8 +585,8 @@ class LoadImagePlus:
 
     CATEGORY = "FBnodes"
     DESCRIPTION = "A better image/video loader with file browser, preview, and input/output folder switching."
-    RETURN_TYPES = ("IMAGE",)
-    RETURN_NAMES = ("image",)
+    RETURN_TYPES = ("IMAGE", "MASK")
+    RETURN_NAMES = ("image", "mask")
     FUNCTION = "load"
     OUTPUT_NODE = True
 
@@ -567,6 +610,10 @@ class LoadImagePlus:
         if image and image.strip():
             file_path = image.strip()
 
+            # Strip annotated filepath suffix from MaskEditor (e.g. "file.png [input]")
+            if ' [' in file_path:
+                file_path = file_path[:file_path.rindex(' [')]
+
             if not os.path.isabs(file_path):
                 if source_folder == "output":
                     base_dir = folder_paths.get_output_directory()
@@ -584,11 +631,13 @@ class LoadImagePlus:
                 if os.path.exists(file_path):
                     resolved_path = file_path
 
+        mask_tensor = None
+
         if resolved_path:
             ext = os.path.splitext(resolved_path)[1].lower()
 
             if ext in ['.png', '.jpg', '.jpeg', '.webp']:
-                image_tensor = load_image_as_tensor(resolved_path)
+                image_tensor, mask_tensor = load_image_as_tensor(resolved_path)
 
             elif ext in ['.mp4', '.webm', '.mov', '.avi']:
                 if source_folder == "output":
@@ -615,17 +664,31 @@ class LoadImagePlus:
         if image_tensor is None:
             image_tensor = get_placeholder_image_tensor()
 
-        preview_images = self._save_preview_images(image_tensor)
+        if mask_tensor is None:
+            mask_tensor = torch.zeros((64, 64), dtype=torch.float32, device="cpu").unsqueeze(0)
+
+        preview_images = self._save_preview_images(image_tensor, mask_tensor)
 
         return {
             "ui": {"images": preview_images},
-            "result": (image_tensor,)
+            "result": (image_tensor, mask_tensor)
         }
 
-    def _save_preview_images(self, images):
+    def _save_preview_images(self, images, masks=None):
         import random
         results = []
         output_dir = folder_paths.get_temp_directory()
+
+        if not hasattr(images, 'shape'):
+            return results
+
+        has_mask = (masks is not None and hasattr(masks, 'shape')
+                    and masks.shape[-1] != 64 and masks.shape[-2] != 64)
+        if has_mask:
+            m = masks[0] if len(masks.shape) > 2 else masks
+            if hasattr(m, 'cpu'):
+                m = m.cpu()
+            has_mask = m.max().item() > 0.01
 
         for i in range(images.shape[0]):
             img = images[i]
@@ -633,6 +696,23 @@ class LoadImagePlus:
                 img = img.cpu().numpy()
             img = (img * 255).astype(np.uint8)
             pil_img = Image.fromarray(img)
+
+            if has_mask and i < masks.shape[0]:
+                mask = masks[i] if len(masks.shape) > 2 else masks
+                if hasattr(mask, 'cpu'):
+                    mask = mask.cpu().numpy()
+                mask_uint8 = (mask * 255).astype(np.uint8)
+                mask_pil = Image.fromarray(mask_uint8, mode='L')
+                if mask_pil.size != pil_img.size:
+                    mask_pil = mask_pil.resize(pil_img.size, Image.NEAREST)
+                # Invert mask: masked regions become transparent (mask=1 means masked)
+                alpha = 255 - mask_uint8
+                alpha_pil = Image.fromarray(alpha, mode='L')
+                if alpha_pil.size != pil_img.size:
+                    alpha_pil = alpha_pil.resize(pil_img.size, Image.NEAREST)
+                pil_img = pil_img.convert('RGBA')
+                pil_img.putalpha(alpha_pil)
+                # Save as PNG to preserve transparency
 
             filename = f"load_image_preview_{random.randint(0, 0xFFFFFF):06x}.png"
             filepath = os.path.join(output_dir, filename)

@@ -21,7 +21,8 @@ If yuv444 is selected, will generate a preview clip, so it can still be seen in 
 - **Video Frame Scrubbing**: Load any frame from a video using the frame position slider
 - **Drag-and-Drop Support**: Drop images or videos directly onto the node
 - **Image Preview**: Built-in preview with click-to-enlarge modal for images and videos
-- **Single IMAGE Output**: Outputs a single IMAGE tensor, ready to connect to any image input
+- **Mask Editor Support**: Right-click to open ComfyUI's MaskEditor, painted masks are displayed in the preview
+- **IMAGE + MASK Output**: Outputs both IMAGE and MASK tensors, with alpha channel extraction from images
 
 ### Load Video+
 Video loader with the same file browser and UX as Load Image+, but for videos. Outputs a VIDEO type for use with **Get Video Components+**.
@@ -122,6 +123,11 @@ pip install -r ComfyUI-FBnodes/requirements.txt
 GPL-3.0
 
 ## Changelog
+
+### version 1.1.10
+- **Load Image+ Mask Support**: Added MASK output with alpha channel extraction from images
+- **Mask Editor Integration**: MaskEditor now works correctly — painted masks display in the node preview with transparency
+- **Fix**: Handle MaskEditor's annotated filepath format (`file.png [input]`) so masked images load properly
 
 ### version 1.1.9
 - **Renamed nodes**: cleaned up internal node IDs (`SaveVideoH26x` → `SaveVideoPlus`, `PromptApplyLora` → `ApplyLoraPlus`, `BetterImageLoader` → `LoadImagePlus`). Existing workflows will use "Legacy" versions for backward compatibility.
