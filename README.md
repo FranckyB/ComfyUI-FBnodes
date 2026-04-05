@@ -46,7 +46,7 @@ Generate smooth AI-powered transitions between video clips using VACE conditioni
 
 Inspired by [__Bob__](https://civitai.com/user/__Bob__)'s [Wan VACE Clip Joiner workflow](https://civitai.com/models/2024299/wan-vace-clip-joiner-smooth-ai-video-transitions-for-wan-ltx-2-hunyuan-and-any-other-video-source) on CivitAI.
 
-[![VACE Stitcher](docs/VACEStitcher.png)](docs/VACEStitcher.png)
+[![VACE Stitcher](docs/vace_stitcher.png)](docs/vace_stitcher.png)
 
 <details>
 <summary><strong>How to use VACE Stitcher</strong></summary>
