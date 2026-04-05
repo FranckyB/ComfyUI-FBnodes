@@ -34,14 +34,14 @@ Video loader with the same file browser and UX as Load Image+, but for videos. O
 - **VIDEO Output**: Outputs a VIDEO, ready to pipe into Get Video Components+
 
 ### VACE Stitcher
-Generate smooth AI-powered transitions between video clips using VACE conditioning and 2-stage sampling with a single node featuring a built-in clip browser, drag-to-reorder list, and cached h265 transitions for resumability.
+Generate smooth AI-powered transitions between video clips using VACE conditioning and 2-stage sampling with a single node featuring a built-in clip browser, drag-to-reorder list, and cached .latent transitions for resumability.
 
 - **File browser modal**: Browse input/output folders, multi-select clips, subfolder navigation
 - **Reorderable clip list**: Drag-to-reorder, enable/disable individual clips, hover thumbnails
 - **2-stage sampling**: High-noise + low-noise models for quality transitions
 - **Pixel-space stitching**: Crossfade with easing curves, optional color matching
 - **Lossless latent support**: Load `.latent` clips directly — skips lossy video decode, with memory-efficient on-demand decoding
-- **Cached transitions**: Transitions cached as lossless `.latent` files (with `.mp4` fallback) — skip already-generated pairs on re-run
+- **Cached transitions**: Transitions cached as lossless `.latent` files — skip already-generated pairs on re-run
 - **Options node**: Connect a separate "VACE Stitcher Options" node to tune all parameters, or use sensible defaults
 
 Inspired by [__Bob__](https://civitai.com/user/__Bob__)'s [Wan VACE Clip Joiner workflow](https://civitai.com/models/2024299/wan-vace-clip-joiner-smooth-ai-video-transitions-for-wan-ltx-2-hunyuan-and-any-other-video-source) on CivitAI.
