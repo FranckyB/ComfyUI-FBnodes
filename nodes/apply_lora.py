@@ -5,11 +5,14 @@ import folder_paths
 import comfy.sd
 import comfy.utils
 
+from ..py.lora_utils import resolve_lora_path
+
 
 class ApplyLoraPlus:
     """
     Apply a LoRA stack to a model and optionally a CLIP.
     Takes a LORA_STACK (list of tuples) and applies each LoRA sequentially.
+    Uses fuzzy matching to find LoRAs on disk — LoRAs not found are skipped.
     """
 
     @classmethod
@@ -42,10 +45,10 @@ class ApplyLoraPlus:
             if model_strength == 0 and clip_strength == 0:
                 continue
 
-            # Get the LoRA path
-            lora_path = folder_paths.get_full_path("loras", lora_name)
-            if lora_path is None:
-                print(f"[ApplyLoraPlus] Warning: LoRA not found: {lora_name}")
+            # Resolve LoRA using fuzzy matching (handles renamed LoRAs, WAN tokens, etc.)
+            lora_path, found = resolve_lora_path(lora_name)
+            if not found:
+                print(f"[ApplyLoraPlus] Warning: LoRA not found, skipping: {lora_name}")
                 continue
 
             # Load the LoRA
