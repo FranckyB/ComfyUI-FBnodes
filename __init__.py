@@ -39,7 +39,6 @@ NODE_CLASS_MAPPINGS = {
 
     # compatibility aliases
     "BetterImageLoader": LoadImagePlus,
-    "PromptApplyLora": ApplyLoraPlus,
     "SaveVideoH26x": SaveVideoPlus,
 }
 
@@ -57,7 +56,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "VACEStitcher_Options": "VACE Stitcher Options",
 
     # compatibility aliases
-    "PromptApplyLora": "Apply LoRA+ (legacy)",
     "BetterImageLoader": "Load Image+ (legacy)",
     "SaveVideoH26x": "Save Video+ (legacy)",
 }

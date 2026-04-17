@@ -23,7 +23,7 @@ class ApplyLoraPlus:
                 "lora_stack": ("LORA_STACK",),
             },
             "optional": {
-                "clip": ("CLIP",),
+                "clip (optional)": ("CLIP",),
             },
         }
 
@@ -33,7 +33,8 @@ class ApplyLoraPlus:
     CATEGORY = "FBnodes"
     DESCRIPTION = "Apply a LoRA stack to a model and optional CLIP."
 
-    def apply_stack(self, model, lora_stack, clip=None):
+    def apply_stack(self, model, lora_stack, clip=None, **kwargs):
+        clip = kwargs.get("clip (optional)", clip)
         if not lora_stack:
             return (model, clip)
 
