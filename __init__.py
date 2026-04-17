@@ -2,7 +2,7 @@
 ComfyUI-FBnodes - Utility nodes for ComfyUI
 """
 
-__version__ = "1.1.10"
+__version__ = "1.1.11"
 __author__ = "François Beaudry"
 __license__ = "GPL-3.0"
 
