@@ -290,6 +290,22 @@ function stripAnnotation(filename) {
     return match ? match[1] : filename;
 }
 
+function beginPreviewRequest(node, filename, framePosition = 0) {
+    node._previewRequestId = (node._previewRequestId || 0) + 1;
+    if (!node.properties) node.properties = {};
+    // Persist the intended state immediately so tab-switch restores the latest selection.
+    node.properties._loadedImageFilename = filename;
+    node.properties._loadedFramePosition = framePosition;
+    return node._previewRequestId;
+}
+
+function isStalePreviewRequest(node, requestId, expectedFilename) {
+    if (node._previewRequestId !== requestId) return true;
+    const imageWidget = node.widgets?.find(w => w.name === "image");
+    const currentFilename = stripAnnotation(imageWidget?.value);
+    return !!expectedFilename && currentFilename !== expectedFilename;
+}
+
 /**
  * Load and display an image in the node (simplified - no metadata extraction)
  */
@@ -299,26 +315,29 @@ async function loadAndDisplayImage(node, filename) {
         return;
     }
     filename = stripAnnotation(filename);
+    const framePositionWidget = node.widgets?.find(w => w.name === "frame_position");
+    const framePosition = framePositionWidget ? framePositionWidget.value : 0.0;
+    const requestId = beginPreviewRequest(node, filename, framePosition);
 
     const ext = filename.split('.').pop().toLowerCase();
 
     if (['mp4', 'webm', 'mov', 'avi'].includes(ext)) {
-        loadVideoFrame(node, filename);
+        loadVideoFrame(node, filename, requestId);
         return;
     }
 
     if (['png', 'jpg', 'jpeg', 'webp'].includes(ext)) {
-        loadImageFile(node, filename);
+        loadImageFile(node, filename, requestId);
         return;
     }
 
-    showPlaceholder(node);
+    showPlaceholder(node, requestId);
 }
 
 /**
  * Load an image file and display it (no metadata extraction)
  */
-async function loadImageFile(node, filename) {
+async function loadImageFile(node, filename, requestId) {
     try {
         const viewType = node._sourceFolder || 'input';
 
@@ -336,41 +355,47 @@ async function loadImageFile(node, filename) {
 
         const img = new Image();
         img.onload = () => {
+            if (isStalePreviewRequest(node, requestId, filename)) {
+                return;
+            }
             node.imgs = [img];
             node.imageIndex = 0;
-            node._loadedImageFilename = filename;
-
-            const targetWidth = Math.max(node.size[0], 256);
-            const targetHeight = Math.max(node.size[1], img.naturalHeight * (targetWidth / img.naturalWidth) + 100);
-            node.setSize([targetWidth, targetHeight]);
+            if (!node.properties) node.properties = {};
+            node.properties._loadedFramePosition = 0;
 
             node.setDirtyCanvas(true, true);
             app.graph.setDirtyCanvas(true, true);
         };
 
         img.onerror = () => {
+            if (isStalePreviewRequest(node, requestId, filename)) {
+                return;
+            }
             console.error(`[LoadImagePlus] Failed to load image: ${filename}`);
-            showPlaceholder(node);
+            showPlaceholder(node, requestId);
         };
 
         img.src = `${fileUrl}&${Date.now()}`;
     } catch (error) {
         console.error("[LoadImagePlus] Error loading image:", error);
-        showPlaceholder(node);
+        showPlaceholder(node, requestId);
     }
 }
 
 /**
  * Load a video frame from the server-side PyAV endpoint (for H265/yuv444 videos).
  */
-function loadVideoFrameFromServer(node, filename, framePosition, viewType) {
+function loadVideoFrameFromServer(node, filename, framePosition, viewType, requestId) {
     const frameUrl = `/fbnodes/video-frame?filename=${encodeURIComponent(filename)}&source=${viewType}&position=${framePosition}`;
     const img = new Image();
     img.onload = () => {
+        if (isStalePreviewRequest(node, requestId, filename)) {
+            return;
+        }
         node.imgs = [img];
         node.imageIndex = 0;
-        node._loadedImageFilename = filename;
-        node._loadedFramePosition = framePosition;
+        if (!node.properties) node.properties = {};
+        node.properties._loadedFramePosition = framePosition;
 
         // Cache as base64 for Python backend
         const canvas = document.createElement('canvas');
@@ -381,17 +406,15 @@ function loadVideoFrameFromServer(node, filename, framePosition, viewType) {
         const frameData = canvas.toDataURL('image/png');
         cacheVideoFrame(filename, frameData, framePosition);
 
-        // Resize node to fit image
-        const targetWidth = Math.max(node.size[0], 256);
-        const targetHeight = Math.max(node.size[1], img.naturalHeight * (targetWidth / img.naturalWidth) + 100);
-        node.setSize([targetWidth, targetHeight]);
-
         node.setDirtyCanvas(true, true);
         app.graph.setDirtyCanvas(true, true);
     };
     img.onerror = () => {
+        if (isStalePreviewRequest(node, requestId, filename)) {
+            return;
+        }
         console.error(`[LoadImagePlus] Server-side frame extraction failed for: ${filename}`);
-        showPlaceholder(node);
+        showPlaceholder(node, requestId);
     };
     img.src = frameUrl;
 }
@@ -399,10 +422,12 @@ function loadVideoFrameFromServer(node, filename, framePosition, viewType) {
 /**
  * Load frame from a video file at specified position
  */
-async function loadVideoFrame(node, filename) {
+async function loadVideoFrame(node, filename, requestId = null) {
+    let activeRequestId = requestId;
     try {
         const framePositionWidget = node.widgets?.find(w => w.name === "frame_position");
         const framePosition = framePositionWidget ? framePositionWidget.value : 0.0;
+        activeRequestId = requestId ?? beginPreviewRequest(node, filename, framePosition);
         const viewType = node._sourceFolder || 'input';
 
         let actualFilename = filename;
@@ -421,7 +446,7 @@ async function loadVideoFrame(node, filename) {
 
         // If this video is already known to be non-browser-decodable, go straight to server
         if (_nonBrowserDecodableVideos.has(filename)) {
-            loadVideoFrameFromServer(node, filename, framePosition, viewType);
+            loadVideoFrameFromServer(node, filename, framePosition, viewType, activeRequestId);
             return;
         }
 
@@ -454,17 +479,17 @@ async function loadVideoFrame(node, filename) {
 
             const img = new Image();
             img.onload = () => {
+                if (isStalePreviewRequest(node, activeRequestId, filename)) {
+                    cleanupVideo();
+                    return;
+                }
                 node.imgs = [img];
                 node.imageIndex = 0;
-                node._loadedImageFilename = filename;
-                node._loadedFramePosition = framePosition;
+                if (!node.properties) node.properties = {};
+                node.properties._loadedFramePosition = framePosition;
 
                 const frameData = canvas.toDataURL('image/png');
                 cacheVideoFrame(filename, frameData, framePosition);
-
-                const targetWidth = Math.max(node.size[0], 256);
-                const targetHeight = Math.max(node.size[1], img.naturalHeight * (targetWidth / img.naturalWidth) + 100);
-                node.setSize([targetWidth, targetHeight]);
 
                 node.setDirtyCanvas(true, true);
                 app.graph.setDirtyCanvas(true, true);
@@ -472,46 +497,57 @@ async function loadVideoFrame(node, filename) {
             };
 
             img.onerror = () => {
+                if (isStalePreviewRequest(node, activeRequestId, filename)) {
+                    cleanupVideo();
+                    return;
+                }
                 console.error(`[LoadImagePlus] Failed to create image from video frame`);
                 cleanupVideo();
-                showPlaceholder(node);
+                showPlaceholder(node, activeRequestId);
             };
 
             img.src = canvas.toDataURL('image/png');
         };
 
         video.onerror = () => {
+            if (isStalePreviewRequest(node, activeRequestId, filename)) {
+                cleanupVideo();
+                return;
+            }
             console.log(`[LoadImagePlus] Browser cannot decode video, using server-side extraction: ${filename}`);
             // Remember this video can't be decoded by browser - skip browser attempt on future scrubs
             _nonBrowserDecodableVideos.add(filename);
             cleanupVideo();
-            loadVideoFrameFromServer(node, filename, framePosition, viewType);
+            loadVideoFrameFromServer(node, filename, framePosition, viewType, activeRequestId);
         };
 
         document.body.appendChild(video);
         video.src = videoUrl + `&${Date.now()}`;
     } catch (error) {
         console.error("[LoadImagePlus] Error loading video:", error);
-        showPlaceholder(node);
+        if (activeRequestId != null) {
+            showPlaceholder(node, activeRequestId);
+        }
     }
 }
 
 /**
  * Show placeholder image
  */
-function showPlaceholder(node) {
-    node._loadedImageFilename = null;
-    node._loadedFramePosition = null;
+function showPlaceholder(node, requestId = null) {
+    if (requestId != null && node._previewRequestId !== requestId) {
+        return;
+    }
+    // Clear persisted state
+    if (!node.properties) node.properties = {};
+    node.properties._loadedImageFilename = null;
+    node.properties._loadedFramePosition = null;
 
     const placeholderImg = new Image();
     placeholderImg.src = PLACEHOLDER_IMAGE_PATH;
     placeholderImg.onload = () => {
         node.imgs = [placeholderImg];
         node.imageIndex = 0;
-
-        const targetWidth = Math.max(node.size[0], 256);
-        const targetHeight = Math.max(node.size[1], placeholderImg.naturalHeight * (targetWidth / placeholderImg.naturalWidth) + 100);
-        node.setSize([targetWidth, targetHeight]);
 
         node.setDirtyCanvas(true, true);
         app.graph.setDirtyCanvas(true, true);
@@ -553,8 +589,9 @@ app.registerExtension({
             const result = onNodeCreated?.apply(this, arguments);
             const node = this;
 
-            node._loadedImageFilename = null;
-            node._loadedFramePosition = null;
+            // Initialize properties for persistence across tab switches
+            if (!node.properties) node.properties = {};
+            node._configuredFromWorkflow = false;
             node._sourceFolder = 'input';
 
             const framePositionWidget = this.widgets?.find(w => w.name === "frame_position");
@@ -604,7 +641,11 @@ app.registerExtension({
                         }
                     }
 
-                    loadAndDisplayImage(node, value);
+                    // Only reload if not already configured from workflow (prevents execution re-load)
+                    if (!node._configuredFromWorkflow || node.properties?._loadedImageFilename !== value) {
+                        loadAndDisplayImage(node, value);
+                    }
+                    node._configuredFromWorkflow = false;
                 };
 
                 // Browse Files button
@@ -638,9 +679,10 @@ app.registerExtension({
                     node.setDirtyCanvas(true);
                 };
 
-                const wrappedCallback = imageWidget.callback;
+                // Wrap callback to update UI visibility while preserving existing logic
+                const originalWidgetCallback = imageWidget.callback;
                 imageWidget.callback = function(value) {
-                    if (wrappedCallback) wrappedCallback.apply(this, arguments);
+                    if (originalWidgetCallback) originalWidgetCallback.apply(this, arguments);
                     updateVideoUIVisibility();
                 };
 
@@ -672,25 +714,21 @@ app.registerExtension({
             // Restore on workflow load
             const onConfigure = node.onConfigure;
             node.onConfigure = function(info) {
+                // Mark as configured from workflow - prevents re-loading during execution
+                node._configuredFromWorkflow = true;
+
                 const result = onConfigure ? onConfigure.apply(this, arguments) : undefined;
 
+                // Restore source folder
                 const sfWidget = this.widgets?.find(w => w.name === "source_folder");
                 if (sfWidget) node._sourceFolder = sfWidget.value || 'input';
 
-                if (node._sourceFolder === 'output' && imageWidget) {
-                    api.fetchApi(`/fbnodes/list-files?source=output`).then(resp => {
-                        if (resp.ok) return resp.json();
-                    }).then(data => {
-                        if (data && data.files) {
-                            const savedValue = imageWidget.value;
-                            imageWidget.options.values = ["(none)", ...data.files];
-                            if (savedValue && data.files.includes(savedValue)) {
-                                imageWidget.value = savedValue;
-                            }
-                        }
-                    }).catch(() => {});
-                }
+                // Restore persisted display state from properties (survives tab switches)
+                if (!node.properties) node.properties = {};
+                const persistedImageFilename = node.properties._loadedImageFilename;
+                const persistedFramePosition = node.properties._loadedFramePosition;
 
+                // Restore frame position from saved widgets_values if available
                 if (info && info.widgets_values && framePositionWidget) {
                     const idx = this.widgets.findIndex(w => w.name === "frame_position");
                     if (idx >= 0 && info.widgets_values[idx] !== undefined) {
@@ -698,27 +736,42 @@ app.registerExtension({
                     }
                 }
 
-                if (imageWidget && imageWidget.value && imageWidget.value !== "(none)") {
-                    const isVideo = isVideoFile(imageWidget.value);
-                    const currentFramePos = framePositionWidget ? framePositionWidget.value : 0.0;
-                    const expectedFilename = encodeURIComponent(imageWidget.value);
-                    const hasCorrectImage = node.imgs && node.imgs[0] &&
-                        node.imgs[0].src && node.imgs[0].src.includes(expectedFilename);
-                    const alreadyLoaded = node._loadedImageFilename === imageWidget.value &&
-                        (!isVideo || node._loadedFramePosition === currentFramePos) &&
-                        hasCorrectImage;
-                    if (!alreadyLoaded) {
-                        loadAndDisplayImage(node, imageWidget.value);
-                    }
+                // Check if display state matches current widget value
+                const imageWidget_val = imageWidget?.value;
+                const currentFramePos = framePositionWidget ? framePositionWidget.value : 0.0;
+                const imageValueMatches = imageWidget_val === persistedImageFilename;
+                const frameValueMatches = !isVideoFile(imageWidget_val) || currentFramePos === persistedFramePosition;
+                const hasCorrectImage = node.imgs && node.imgs[0];
+                const alreadyLoaded = persistedImageFilename && imageValueMatches && frameValueMatches && hasCorrectImage;
+
+                // Restore from persisted state synchronously if no image is loaded yet.
+                // During workflow execution, _configuredFromWorkflow stays true so no reload happens.
+                if (persistedImageFilename && !hasCorrectImage) {
+                    loadAndDisplayImage(node, persistedImageFilename);
+                } else if (imageWidget_val && imageWidget_val !== "(none)" && !alreadyLoaded) {
+                    // Only reload if widget value changed from persisted state
+                    loadAndDisplayImage(node, imageWidget_val);
                 }
+
                 return result;
+            };
+
+            // After execution: reload from the source file so the correct image
+            // is always shown (prevents ComfyUI's default behaviour from replacing
+            // node.imgs with whatever temp preview Python returned).
+            node.onExecuted = function(output) {
+                const iw = node.widgets?.find(w => w.name === "image");
+                if (iw?.value && iw.value !== "(none)") {
+                    loadAndDisplayImage(node, iw.value);
+                }
             };
 
             // Initial load
             if (imageWidget) {
                 setTimeout(() => {
                     if (imageWidget.value && imageWidget.value !== "(none)") {
-                        if (node._loadedImageFilename !== imageWidget.value) {
+                        const persistedFilename = node.properties?._loadedImageFilename;
+                        if (persistedFilename !== imageWidget.value || !node.imgs) {
                             loadAndDisplayImage(node, imageWidget.value);
                         }
                     } else {

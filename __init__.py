@@ -36,10 +36,6 @@ NODE_CLASS_MAPPINGS = {
     "SwitchAnyBool": SwitchAnyBool,
     "VACEStitcher": VACEStitcher,
     "VACEStitcher_Options": VACEStitcher_Options,
-
-    # compatibility aliases
-    "BetterImageLoader": LoadImagePlus,
-    "SaveVideoH26x": SaveVideoPlus,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -54,10 +50,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "SwitchAnyBool": "Switch Any (Boolean)",
     "VACEStitcher": "VACE Stitcher",
     "VACEStitcher_Options": "VACE Stitcher Options",
-
-    # compatibility aliases
-    "BetterImageLoader": "Load Image+ (legacy)",
-    "SaveVideoH26x": "Save Video+ (legacy)",
 }
 
 WEB_DIRECTORY = "./js"

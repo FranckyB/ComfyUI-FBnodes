@@ -488,6 +488,8 @@ def load_image_as_tensor(file_path):
                 continue
 
             image_np = np.array(image).astype(np.float32) / 255.0
+            if image_np.ndim == 3 and image_np.shape[2] != 3:
+                image_np = image_np[:, :, :3]
             image_tensor = torch.from_numpy(image_np)[None,]
 
             if 'A' in i.getbands():
@@ -529,7 +531,9 @@ def get_placeholder_image_tensor():
         png_path = os.path.join(current_dir, '..', 'js', 'placeholder.png')
 
         if os.path.exists(png_path):
-            return load_image_as_tensor(png_path)
+            img, _ = load_image_as_tensor(png_path)
+            if img is not None:
+                return img
     except Exception as e:
         print(f"[FBnodes] Could not load placeholder PNG: {e}")
 

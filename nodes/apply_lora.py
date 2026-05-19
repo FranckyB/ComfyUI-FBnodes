@@ -21,6 +21,7 @@ class ApplyLoraPlus:
             "required": {
                 "model": ("MODEL",),
                 "lora_stack": ("LORA_STACK",),
+                "strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.01}),
             },
             "optional": {
                 "clip_optional": ("CLIP",),
@@ -31,9 +32,9 @@ class ApplyLoraPlus:
     RETURN_NAMES = ("model", "clip")
     FUNCTION = "apply_stack"
     CATEGORY = "FBnodes"
-    DESCRIPTION = "Apply a LoRA stack to a model and optional CLIP."
+    DESCRIPTION = "Apply a LoRA stack to a model and optional CLIP, with a global strength multiplier."
 
-    def apply_stack(self, model, lora_stack, clip_optional=None):
+    def apply_stack(self, model, lora_stack, strength=1.0, clip_optional=None):
         clip = clip_optional
         if not lora_stack:
             return (model, clip)
@@ -42,8 +43,11 @@ class ApplyLoraPlus:
         clip_out = clip
 
         for lora_name, model_strength, clip_strength in lora_stack:
+            scaled_model_strength = model_strength * strength
+            scaled_clip_strength = clip_strength * strength
+
             # Skip if no strength
-            if model_strength == 0 and clip_strength == 0:
+            if scaled_model_strength == 0 and scaled_clip_strength == 0:
                 continue
 
             # Resolve LoRA using fuzzy matching (handles renamed LoRAs, WAN tokens, etc.)
@@ -57,7 +61,7 @@ class ApplyLoraPlus:
 
             # Apply to model and clip
             model_out, clip_out = comfy.sd.load_lora_for_models(
-                model_out, clip_out, lora, model_strength, clip_strength
+                model_out, clip_out, lora, scaled_model_strength, scaled_clip_strength
             )
 
         return (model_out, clip_out)
