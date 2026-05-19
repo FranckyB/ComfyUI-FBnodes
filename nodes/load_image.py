@@ -22,6 +22,10 @@ except ImportError:
 # Cache for video frames extracted by JavaScript
 _video_frames_cache = {}
 
+# Shared file-browser extension sets
+LIST_FILES_MEDIA_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp', '.mp4', '.webm', '.mov', '.avi']
+LIST_FILES_AUDIO_EXTENSIONS = ['.wav', '.flac', '.mp3', '.m4a']
+
 
 # ---------------------------------------------------------------------------
 # PyAV-based video frame extraction (for H265/yuv444 that browsers can't decode)
@@ -375,13 +379,20 @@ async def list_files(request):
     """List supported files in input or output directory, including subfolders."""
     try:
         source = request.rel_url.query.get('source', 'input')
+        kind = request.rel_url.query.get('kind', 'media')
         if source == 'output':
             base_dir = folder_paths.get_output_directory()
         else:
             base_dir = folder_paths.get_input_directory()
 
         files = []
-        supported_extensions = ['.png', '.jpg', '.jpeg', '.webp', '.mp4', '.webm', '.mov', '.avi']
+        if kind == 'audio':
+            supported_extensions = LIST_FILES_AUDIO_EXTENSIONS
+        elif kind == 'all':
+            supported_extensions = list(set(LIST_FILES_MEDIA_EXTENSIONS + LIST_FILES_AUDIO_EXTENSIONS))
+        else:
+            # Keep current default behavior for existing nodes.
+            supported_extensions = LIST_FILES_MEDIA_EXTENSIONS
 
         if os.path.exists(base_dir):
             for root, dirs, filenames in os.walk(base_dir):

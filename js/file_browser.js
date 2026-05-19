@@ -7,11 +7,140 @@
 let currentSubfolder = '';
 // Track current source folder (input or output)
 let currentSourceFolder = 'input';
+// Track selected list mode and backend query kind.
+let currentListMode = 'media';
+let currentListKind = 'media';
+let currentAllowedTypes = null;
+// Track active audio preview in modal
+let activeAudioPreview = null;
+let activeAudioPreviewFilename = null;
+let activeAudioPreviewItem = null;
+
+function normalizeListMode(mode) {
+    if (mode === 'all' || mode === 'audio' || mode === 'video' || mode === 'media') {
+        return mode;
+    }
+    return 'media';
+}
+
+function setListMode(mode) {
+    currentListMode = normalizeListMode(mode);
+    if (currentListMode === 'all') {
+        currentListKind = 'all';
+    } else if (currentListMode === 'audio') {
+        currentListKind = 'audio';
+    } else {
+        // Backend has media/all/audio. Video mode uses media + client-side filter.
+        currentListKind = 'media';
+    }
+}
+
+function normalizeAllowedTypes(types) {
+    if (!Array.isArray(types) || types.length === 0) return null;
+    const allowed = ['image', 'video', 'audio', 'json', 'other'];
+    const normalized = types
+        .map(t => String(t || '').toLowerCase())
+        .filter(t => allowed.includes(t));
+    return normalized.length > 0 ? normalized : null;
+}
+
+function normalizeFilterTypeOptions(types, fallback) {
+    const allowed = ['all', 'image', 'video', 'audio', 'json'];
+    if (!Array.isArray(types) || types.length === 0) return fallback;
+
+    const normalized = [];
+    for (const t of types) {
+        const value = String(t || '').toLowerCase();
+        if (allowed.includes(value) && !normalized.includes(value)) {
+            normalized.push(value);
+        }
+    }
+
+    return normalized.length > 0 ? normalized : fallback;
+}
+
+function buildViewUrl(filename) {
+    let subfolder = '';
+    let basename = filename;
+    if (filename.includes('/')) {
+        const lastSlash = filename.lastIndexOf('/');
+        subfolder = filename.substring(0, lastSlash);
+        basename = filename.substring(lastSlash + 1);
+    }
+
+    let url = `/view?filename=${encodeURIComponent(basename)}&type=${currentSourceFolder}`;
+    if (subfolder) {
+        url += `&subfolder=${encodeURIComponent(subfolder)}`;
+    }
+    return url;
+}
+
+function clearPreviewItemState() {
+    if (!activeAudioPreviewItem) return;
+    activeAudioPreviewItem.style.boxShadow = '';
+    activeAudioPreviewItem = null;
+}
+
+function stopAudioPreview() {
+    if (activeAudioPreview) {
+        try {
+            activeAudioPreview.pause();
+            activeAudioPreview.currentTime = 0;
+        } catch (error) {
+            // Ignore preview stop errors.
+        }
+    }
+    activeAudioPreviewFilename = null;
+    clearPreviewItemState();
+}
+
+function closeBrowserModal(overlay) {
+    stopAudioPreview();
+    if (overlay && overlay.parentNode) {
+        overlay.parentNode.removeChild(overlay);
+    }
+}
+
+async function toggleAudioPreview(filename, item) {
+    const sourceUrl = `${buildViewUrl(filename)}&${Date.now()}`;
+
+    if (!activeAudioPreview) {
+        activeAudioPreview = document.createElement('audio');
+        activeAudioPreview.preload = 'metadata';
+        activeAudioPreview.style.display = 'none';
+        activeAudioPreview.onended = () => {
+            activeAudioPreviewFilename = null;
+            clearPreviewItemState();
+        };
+        document.body.appendChild(activeAudioPreview);
+    }
+
+    if (activeAudioPreviewFilename === filename && !activeAudioPreview.paused) {
+        stopAudioPreview();
+        return;
+    }
+
+    stopAudioPreview();
+    activeAudioPreviewFilename = filename;
+    activeAudioPreviewItem = item;
+    activeAudioPreviewItem.style.boxShadow = 'inset 0 0 0 1px rgba(64, 192, 255, 0.85)';
+
+    try {
+        activeAudioPreview.src = sourceUrl;
+        await activeAudioPreview.play();
+    } catch (error) {
+        console.warn('[FileBrowser] Failed to preview audio:', error);
+        stopAudioPreview();
+    }
+}
 
 export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder, options) {
     const opts = options || {};
+    const showListKindSelector = opts.showListKindSelector === true;
     // Store source folder
     currentSourceFolder = sourceFolder || 'input';
+    setListMode(opts.listKind || 'media');
+    currentAllowedTypes = normalizeAllowedTypes(opts.allowedTypes);
     // If a file is currently selected and lives in a subfolder, open in that folder
     if (currentFile && currentFile.includes('/')) {
         currentSubfolder = currentFile.substring(0, currentFile.lastIndexOf('/'));
@@ -110,6 +239,22 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder, 
         display: flex;
         gap: 10px;
     `;
+
+    const defaultFilterValues = showListKindSelector
+        ? ['all', 'audio', 'video']
+        : ['all', 'image', 'video', 'audio', 'json'];
+    const filterValues = normalizeFilterTypeOptions(opts.filterTypeOptions, defaultFilterValues);
+    const filterLabels = {
+        all: 'All Files',
+        image: 'Images',
+        video: 'Videos',
+        audio: 'Audio',
+        json: 'JSON',
+    };
+    const typeFilterOptions = filterValues
+        .map(value => `<option value="${value}">${filterLabels[value] || value}</option>`)
+        .join('');
+
     filterBar.innerHTML = `
         <input type="text" placeholder="Search files..." class="search-input" style="
             flex: 1;
@@ -126,10 +271,7 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder, 
             border-radius: 6px;
             color: #ccc;
         ">
-            <option value="all">All Files</option>
-            <option value="image">Images</option>
-            <option value="video">Videos</option>
-            <option value="json">JSON</option>
+            ${typeFilterOptions}
         </select>
     `;
 
@@ -171,9 +313,9 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder, 
 
     // Close button handler
     const closeBtn = topRow.querySelector('.close-btn');
-    closeBtn.onclick = () => document.body.removeChild(overlay);
+    closeBtn.onclick = () => closeBrowserModal(overlay);
     overlay.onclick = (e) => {
-        if (e.target === overlay) document.body.removeChild(overlay);
+        if (e.target === overlay) closeBrowserModal(overlay);
     };
 
     // Regenerate cache button handler
@@ -192,18 +334,35 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder, 
     const filterType = filterBar.querySelector('.filter-type');
 
     // Apply default filter if specified
-    if (opts.defaultFilter) {
+    if (opts.defaultFilter && filterValues.includes(opts.defaultFilter)) {
         filterType.value = opts.defaultFilter;
+    } else if (showListKindSelector) {
+        filterType.value = currentListMode === 'audio' ? 'audio'
+            : currentListMode === 'video' ? 'video'
+            : 'all';
+    } else if (filterValues.length > 0) {
+        filterType.value = filterValues[0];
+    }
+
+    if (showListKindSelector) {
+        setListMode(filterType.value || 'all');
     }
     
     searchInput.oninput = () => filterThumbnails(gridContainer, searchInput.value, filterType.value);
-    filterType.onchange = () => filterThumbnails(gridContainer, searchInput.value, filterType.value);
+    filterType.onchange = () => {
+        if (showListKindSelector) {
+            setListMode(filterType.value || 'all');
+            loadFileThumbnails(gridContainer, currentFile, onFileSelect, overlay, breadcrumb).then(() => {
+                filterThumbnails(gridContainer, searchInput.value, filterType.value);
+            });
+            return;
+        }
+        filterThumbnails(gridContainer, searchInput.value, filterType.value);
+    };
 
     // Load files then apply initial filter
     loadFileThumbnails(gridContainer, currentFile, onFileSelect, overlay, breadcrumb).then(() => {
-        if (opts.defaultFilter) {
-            filterThumbnails(gridContainer, searchInput.value, filterType.value);
-        }
+        filterThumbnails(gridContainer, searchInput.value, filterType.value);
     });
 }
 
@@ -217,7 +376,7 @@ async function loadFileThumbnails(container, currentFile, onFileSelect, overlay,
         }
         
         // Fetch file list from server
-        const response = await fetch(`/fbnodes/list-files?source=${encodeURIComponent(currentSourceFolder)}`);
+        const response = await fetch(`/fbnodes/list-files?source=${encodeURIComponent(currentSourceFolder)}&kind=${encodeURIComponent(currentListKind)}`);
         const data = await response.json();
         
         container.innerHTML = '';
@@ -448,6 +607,7 @@ function createThumbnailItem(filename, currentFile, onFileSelect, overlay) {
     const ext = filename.split('.').pop().toLowerCase();
     const imageExts = ['png', 'jpg', 'jpeg', 'webp'];
     const videoExts = ['mp4', 'webm', 'mov', 'avi'];
+    const audioExts = ['wav', 'flac', 'mp3', 'm4a'];
 
     if (imageExts.includes(ext)) {
         const img = document.createElement('img');
@@ -466,6 +626,19 @@ function createThumbnailItem(filename, currentFile, onFileSelect, overlay) {
             img.src = new URL("./placeholder.png", import.meta.url).href;
         };
         preview.appendChild(img);
+    } else if (audioExts.includes(ext) && (currentListMode === 'audio' || !videoExts.includes(ext))) {
+        const audioBadge = document.createElement('div');
+        audioBadge.style.cssText = `
+            color: #9ec5fe;
+            font-size: 12px;
+            letter-spacing: 0.08em;
+            border: 1px solid rgba(158, 197, 254, 0.4);
+            border-radius: 999px;
+            padding: 4px 10px;
+            font-family: sans-serif;
+        `;
+        audioBadge.textContent = 'AUDIO';
+        preview.appendChild(audioBadge);
     } else if (videoExts.includes(ext)) {
         // Extract video thumbnail via server-side PyAV
         extractVideoThumbnailServer(filename, preview);
@@ -517,14 +690,31 @@ function createThumbnailItem(filename, currentFile, onFileSelect, overlay) {
     };
 
     // Click handler
-    item.onclick = (e) => {
-        // Don't select if clicking to close context menu
-        if (document.querySelector('.thumbnail-context-menu')) {
-            return;
-        }
-        onFileSelect(filename);
-        document.body.removeChild(overlay);
-    };
+    if (item.dataset.type === 'audio') {
+        item.onclick = async (e) => {
+            // Don't preview if clicking to close context menu
+            if (document.querySelector('.thumbnail-context-menu')) {
+                return;
+            }
+            await toggleAudioPreview(filename, item);
+        };
+
+        item.ondblclick = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            onFileSelect(filename);
+            closeBrowserModal(overlay);
+        };
+    } else {
+        item.onclick = (e) => {
+            // Don't select if clicking to close context menu
+            if (document.querySelector('.thumbnail-context-menu')) {
+                return;
+            }
+            onFileSelect(filename);
+            closeBrowserModal(overlay);
+        };
+    }
 
     // Right-click context menu - only for video thumbnails
     if (videoExts.includes(ext)) {
@@ -543,7 +733,9 @@ function getFileType(filename) {
     const ext = filename.split('.').pop().toLowerCase();
     const imageExts = ['png', 'jpg', 'jpeg', 'webp'];
     const videoExts = ['mp4', 'webm', 'mov', 'avi'];
+    const audioExts = ['wav', 'flac', 'mp3', 'm4a'];
     
+    if (audioExts.includes(ext) && (currentListMode === 'audio' || !videoExts.includes(ext))) return 'audio';
     if (imageExts.includes(ext)) return 'image';
     if (videoExts.includes(ext)) return 'video';
     if (ext === 'json') return 'json';
@@ -645,8 +837,9 @@ function filterThumbnails(container, searchText, fileType) {
         
         const matchesSearch = !searchText || filename.includes(search);
         const matchesType = fileType === 'all' || type === fileType;
+        const matchesAllowedTypes = !currentAllowedTypes || currentAllowedTypes.includes(type);
         
-        item.style.display = (matchesSearch && matchesType) ? 'flex' : 'none';
+        item.style.display = (matchesSearch && matchesType && matchesAllowedTypes) ? 'flex' : 'none';
     });
 }
 

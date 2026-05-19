@@ -661,7 +661,12 @@ app.registerExtension({
                             imageWidget.value = selectedFile;
                             if (imageWidget.callback) imageWidget.callback(selectedFile);
                             node.setDirtyCanvas(true);
-                        }, sourceFolder);
+                        }, sourceFolder, {
+                            defaultFilter: 'all',
+                            listKind: 'media',
+                            allowedTypes: ['image', 'video'],
+                            filterTypeOptions: ['all', 'image', 'video'],
+                        });
                     },
                     serialize: false
                 };

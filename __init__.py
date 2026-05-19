@@ -8,6 +8,7 @@ __license__ = "GPL-3.0"
 
 from .nodes import (
     ApplyLoraPlus,
+    LoadAudioPlus,
     MonoToStereo,
     GetVideoComponentsPlus,
     LoadImagePlus,
@@ -26,6 +27,7 @@ install_latent_preview_hook()
 
 NODE_CLASS_MAPPINGS = {
     "ApplyLoraPlus": ApplyLoraPlus,
+    "LoadAudioPlus": LoadAudioPlus,
     "AudioMonoToStereo": MonoToStereo,
     "GetVideoComponentsPlus": GetVideoComponentsPlus,
     "LoadImagePlus": LoadImagePlus,
@@ -40,6 +42,7 @@ NODE_CLASS_MAPPINGS = {
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "ApplyLoraPlus": "Apply LoRA+",
+    "LoadAudioPlus": "Load Audio+",
     "AudioMonoToStereo": "Audio Mono to Stereo",
     "GetVideoComponentsPlus": "Get Video Components+",
     "LoadImagePlus": "Load Image+",
