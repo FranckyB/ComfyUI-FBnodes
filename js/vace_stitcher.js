@@ -270,22 +270,42 @@ function showThumbnailContextMenu(event, filename, previewElement) {
     btn.style.cssText = 'padding:8px 12px;color:#ccc;cursor:pointer;border-radius:4px;font-size:13px;';
     btn.onmouseenter = () => { btn.style.background = 'rgba(66,153,225,0.3)'; };
     btn.onmouseleave = () => { btn.style.background = 'transparent'; };
+    const cleanup = () => {
+        if (!menu.isConnected) return;
+        menu.remove();
+        document.removeEventListener('pointerdown', closeOnPointerDown, true);
+        document.removeEventListener('contextmenu', closeOnContextMenu, true);
+        document.removeEventListener('keydown', closeOnEscape, true);
+        window.removeEventListener('scroll', closeOnScroll, true);
+    };
     btn.onclick = () => {
         refreshIndividualThumbnail(filename, previewElement);
-        menu.remove();
+        cleanup();
     };
 
     menu.appendChild(btn);
     document.body.appendChild(menu);
 
-    const closeMenu = (e) => {
+    const closeOnPointerDown = (e) => {
         if (!menu.contains(e.target)) {
-            e.stopPropagation();
-            menu.remove();
-            document.removeEventListener('click', closeMenu, true);
+            cleanup();
         }
     };
-    setTimeout(() => document.addEventListener('click', closeMenu, true), 10);
+    const closeOnContextMenu = (e) => {
+        if (!menu.contains(e.target)) {
+            cleanup();
+        }
+    };
+    const closeOnEscape = (e) => {
+        if (e.key === 'Escape') cleanup();
+    };
+    const closeOnScroll = () => cleanup();
+    setTimeout(() => {
+        document.addEventListener('pointerdown', closeOnPointerDown, true);
+        document.addEventListener('contextmenu', closeOnContextMenu, true);
+        document.addEventListener('keydown', closeOnEscape, true);
+        window.addEventListener('scroll', closeOnScroll, true);
+    }, 0);
 }
 
 // ── Multi-select file browser modal ──────────────────────────────────────────
@@ -708,10 +728,35 @@ app.registerExtension({
 
             // ── internal state ──
             // Each entry: { file: "relative/path.mp4", enabled: true }
+            let _clipUidCounter = 1;
+            const allocateClipUid = () => _clipUidCounter++;
+            function normalizeClipEntries(rawEntries) {
+                if (!Array.isArray(rawEntries)) return [];
+                const usedUids = new Set();
+                return rawEntries.map((raw) => {
+                    const next = { ...(raw || {}) };
+                    let uid = Number.isInteger(next._uid) ? next._uid : null;
+                    if (uid === null || usedUids.has(uid)) {
+                        uid = allocateClipUid();
+                    }
+                    usedUids.add(uid);
+                    if (uid >= _clipUidCounter) _clipUidCounter = uid + 1;
+                    next._uid = uid;
+                    if (typeof next.enabled !== "boolean") next.enabled = true;
+                    return next;
+                });
+            }
+            function cloneClipEntry(entry) {
+                return {
+                    ...(entry || {}),
+                    _uid: allocateClipUid(),
+                    enabled: entry?.enabled !== false,
+                };
+            }
             let clipEntries = [];
             try {
                 const parsed = JSON.parse(clipListWidget.value || "[]");
-                if (Array.isArray(parsed)) clipEntries = parsed;
+                clipEntries = normalizeClipEntries(parsed);
             } catch (_) {}
 
             function syncWidget() {
@@ -730,7 +775,7 @@ app.registerExtension({
                     const sf = sourceFolderWidget?.value || "input";
                     openClipBrowserModal(sf, clipEntries, (newFiles, sourceFolder) => {
                         for (const f of newFiles) {
-                            clipEntries.push({ file: f, enabled: true, source: sourceFolder });
+                            clipEntries.push(cloneClipEntry({ file: f, enabled: true, source: sourceFolder }));
                         }
                         syncWidget();
                         rebuildClipListDisplay();
@@ -1050,7 +1095,7 @@ app.registerExtension({
                     cb.title = "Enable/disable this clip";
                     cb.style.cssText = "cursor:pointer;flex-shrink:0;accent-color:rgba(66,153,225,0.9);";
                     cb.onchange = () => {
-                        entry.enabled = cb.checked;
+                        clipEntries[idx] = { ...clipEntries[idx], enabled: cb.checked };
                         syncWidget();
                         rebuildClipListDisplay();
                     };
@@ -1178,9 +1223,32 @@ app.registerExtension({
                     item.style.cssText = `padding:6px 14px;color:#ccc;cursor:pointer;`;
                     item.onmouseenter = () => { item.style.background = "rgba(66,153,225,0.3)"; };
                     item.onmouseleave = () => { item.style.background = "none"; };
-                    item.onclick = () => { menu.remove(); onClick(); };
+                    item.onclick = () => { cleanup(); onClick(); };
                     menu.appendChild(item);
                 }
+
+                function addMenuSeparator() {
+                    const sep = document.createElement("div");
+                    sep.style.cssText = "height:1px;margin:4px 0;background:rgba(255,255,255,0.12);";
+                    menu.appendChild(sep);
+                }
+
+                const cleanup = () => {
+                    if (!menu.isConnected) return;
+                    menu.remove();
+                    document.removeEventListener("pointerdown", closeOnPointerDown, true);
+                    document.removeEventListener("contextmenu", closeOnContextMenu, true);
+                    document.removeEventListener("keydown", closeOnEscape, true);
+                    window.removeEventListener("scroll", closeOnScroll, true);
+                };
+
+                addMenuItem("\u2398 Duplicate Clip", () => {
+                    clipEntries.splice(idx + 1, 0, cloneClipEntry(entry));
+                    syncWidget();
+                    rebuildClipListDisplay();
+                });
+
+                addMenuSeparator();
 
                 addMenuItem("\u267B\uFE0F Regenerate Transitions", async () => {
                     try {
@@ -1207,10 +1275,13 @@ app.registerExtension({
                 });
 
                 addMenuItem(entry.enabled !== false ? "\u23F8 Disable Clip" : "\u25B6 Enable Clip", () => {
-                    entry.enabled = entry.enabled === false;
+                    const current = clipEntries[idx];
+                    clipEntries[idx] = { ...current, enabled: current?.enabled === false };
                     syncWidget();
                     rebuildClipListDisplay();
                 });
+
+                addMenuSeparator();
 
                 addMenuItem("\u2715 Remove Clip", () => {
                     clipEntries.splice(idx, 1);
@@ -1219,13 +1290,26 @@ app.registerExtension({
                 });
 
                 // Close on click outside
-                const closeMenu = (e) => {
+                const closeOnPointerDown = (e) => {
                     if (!menu.contains(e.target)) {
-                        menu.remove();
-                        document.removeEventListener("mousedown", closeMenu);
+                        cleanup();
                     }
                 };
-                setTimeout(() => document.addEventListener("mousedown", closeMenu), 0);
+                const closeOnContextMenu = (e) => {
+                    if (!menu.contains(e.target)) {
+                        cleanup();
+                    }
+                };
+                const closeOnEscape = (e) => {
+                    if (e.key === "Escape") cleanup();
+                };
+                const closeOnScroll = () => cleanup();
+                setTimeout(() => {
+                    document.addEventListener("pointerdown", closeOnPointerDown, true);
+                    document.addEventListener("contextmenu", closeOnContextMenu, true);
+                    document.addEventListener("keydown", closeOnEscape, true);
+                    window.addEventListener("scroll", closeOnScroll, true);
+                }, 0);
 
                 document.body.appendChild(menu);
             }
@@ -1245,7 +1329,7 @@ app.registerExtension({
                 const res = onConfigure ? onConfigure.apply(this, arguments) : undefined;
                 try {
                     const parsed = JSON.parse(clipListWidget.value || "[]");
-                    if (Array.isArray(parsed)) clipEntries = parsed;
+                    clipEntries = normalizeClipEntries(parsed);
                 } catch (_) {
                     clipEntries = [];
                 }
