@@ -81,7 +81,12 @@ Place models in `/models/diffusion_models/` or '/models/unet' if GGUF
 Load a `.latent` file saved by Save Video+. Companion node for video+latent workflows.
 
 ### Get Video Components+
-Like ComfyUI's built-in GetVideoComponents but also outputs the file path and automatically loads a matching `.latent` file if one exists alongside the video.
+Memory-efficient video inspector/extractor for VIDEO inputs.
+
+- Metadata-first by default (does not decode frames/audio/latent unless those outputs are connected)
+- Internal chunked frame decoding uses a fixed chunk size of 128 for to reduce memory needs.
+- Outputs: `images`, `audio`, `fps`, `filepath`, `latent`, `width`, `height`, `frame_count`, `duration`
+- Automatically loads matching `.latent` file if one exists beside the video
 
 ### Audio Mono to Stereo
 Convert mono audio to stereo by duplicating the channel. Useful for video models that output mono audio.

@@ -591,58 +591,321 @@ class MonoToStereo:
 
 class GetVideoComponentsPlus:
     """
-    Extract video components (images, audio, fps) plus the filepath.
-    Like ComfyUI's GetVideoComponents but also outputs the file path as a string,
-    and automatically loads a matching .latent file if one exists.
+    Efficient video inspection/extraction node.
+
+    By default this node only probes metadata and returns placeholders for heavy outputs,
+    so it does not decode the full video into memory unless explicitly requested.
     """
+
+    IMAGE_OUTPUT_INDEX = 0
+    AUDIO_OUTPUT_INDEX = 1
+    LATENT_OUTPUT_INDEX = 4
+    IMAGE_CHUNK_SIZE = 128
 
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
                 "video": ("VIDEO", {"tooltip": "The video to extract components from."}),
-            }
+            },
+            "hidden": {
+                "unique_id": "UNIQUE_ID",
+                "prompt": "PROMPT",
+            },
         }
 
-    RETURN_TYPES = ("IMAGE", "AUDIO", "FLOAT", "STRING", "LATENT")
-    RETURN_NAMES = ("images", "audio", "fps", "filepath", "latent")
+    RETURN_TYPES = ("IMAGE", "AUDIO", "FLOAT", "STRING", "LATENT", "INT", "INT", "INT", "FLOAT")
+    RETURN_NAMES = ("images", "audio", "fps", "filepath", "latent", "width", "height", "frame_count", "duration")
     FUNCTION = "get_components"
     CATEGORY = "FBnodes"
-    DESCRIPTION = "Extract video frames, audio, fps, filepath, and matching latent file if found."
+    DESCRIPTION = "Extract metadata and auto-decode images/audio only when those outputs are connected."
 
-    def get_components(self, video):
-        # Get video components using the standard API
-        components = video.get_components()
-        images = components.images
-        audio = components.audio
-        fps = float(components.frame_rate)
+    @staticmethod
+    def _empty_image():
+        return torch.zeros((1, 1, 1, 3), dtype=torch.float32)
 
-        # Try to get the file path from the video object
-        video_path = ""
+    @staticmethod
+    def _get_video_path(video) -> str:
         try:
             source = video.get_stream_source()
             if isinstance(source, str):
-                video_path = source
+                return source
         except Exception as e:
             print(f"[GetVideoComponentsPlus] Could not get video path: {e}")
+        return ""
 
-        # Check for matching .latent file
+    @staticmethod
+    def _load_matching_latent(video_path: str):
         latent = None
         if video_path and os.path.exists(video_path):
             latent_path = os.path.splitext(video_path)[0] + '.latent'
             if os.path.exists(latent_path):
                 try:
-                    # Load the latent file (same logic as LoadLatentFile)
                     latent_data = safetensors.torch.load_file(latent_path, device="cpu")
-
-                    # Handle version differences
                     multiplier = 1.0
                     if "latent_format_version_0" not in latent_data:
                         multiplier = 1.0 / 0.18215
-
                     latent = {"samples": latent_data["latent_tensor"].float() * multiplier}
-                    print(f"[GetVideoComponentsPlus] Loaded matching latent: {latent_path}")
                 except Exception as e:
                     print(f"[GetVideoComponentsPlus] Could not load latent file: {e}")
+        return latent
 
-        return (images, audio, fps, video_path, latent)
+    @staticmethod
+    def _probe_video_metadata(video, video_path: str, trim_in: float = 0.0, trim_out: float = 0.0):
+        fps = 0.0
+        width = 0
+        height = 0
+        frame_count = 0
+        duration = 0.0
+
+        if video_path and os.path.exists(video_path):
+            try:
+                with av.open(video_path) as container:
+                    stream = next((s for s in container.streams if s.type == "video"), None)
+                    if stream is not None:
+                        if stream.average_rate is not None:
+                            fps = float(stream.average_rate)
+                        width = int(getattr(stream, "width", 0) or 0)
+                        height = int(getattr(stream, "height", 0) or 0)
+                        frame_count = int(getattr(stream, "frames", 0) or 0)
+
+                        if stream.duration is not None and stream.time_base is not None:
+                            duration = float(stream.duration * stream.time_base)
+                        elif container.duration is not None:
+                            duration = float(container.duration) / float(av.time_base)
+
+                        if frame_count <= 0 and fps > 0.0 and duration > 0.0:
+                            frame_count = int(round(duration * fps))
+            except Exception as e:
+                print(f"[GetVideoComponentsPlus] Metadata probe failed: {e}")
+
+        if duration > 0.0:
+            clip_start = max(0.0, float(trim_in or 0.0))
+            clip_end = float(trim_out or 0.0)
+            if clip_end > clip_start:
+                duration = max(0.0, min(duration, clip_end) - clip_start)
+            elif clip_start > 0.0:
+                duration = max(0.0, duration - clip_start)
+
+            if fps > 0.0:
+                frame_count = int(round(duration * fps))
+
+        if (width <= 0 or height <= 0) and video is not None:
+            try:
+                dims = video.get_dimensions()
+                if isinstance(dims, (tuple, list)) and len(dims) >= 2:
+                    width = int(dims[0])
+                    height = int(dims[1])
+            except Exception:
+                pass
+
+        return fps, width, height, frame_count, duration
+
+    @staticmethod
+    def _decode_images_chunked(video_path: str, chunk_size: int, trim_in: float = 0.0, trim_out: float = 0.0):
+        import numpy as np
+
+        chunks = []
+        frame_buffer = []
+        decoded_frames = 0
+
+        with av.open(video_path) as container:
+            stream = next((s for s in container.streams if s.type == "video"), None)
+            if stream is None:
+                return GetVideoComponentsPlus._empty_image(), 0
+
+            for frame in container.decode(video=stream.index):
+                if frame.pts is not None and frame.time_base is not None:
+                    t = float(frame.pts * frame.time_base)
+                    if t < trim_in:
+                        continue
+                    if trim_out > trim_in and t >= trim_out:
+                        break
+
+                arr = frame.to_ndarray(format="rgb24")
+                tensor = torch.from_numpy(arr.astype(np.float32, copy=False) / 255.0)
+                frame_buffer.append(tensor)
+                decoded_frames += 1
+
+                if len(frame_buffer) >= chunk_size:
+                    chunks.append(torch.stack(frame_buffer, dim=0))
+                    frame_buffer = []
+
+        if frame_buffer:
+            chunks.append(torch.stack(frame_buffer, dim=0))
+
+        if not chunks:
+            return GetVideoComponentsPlus._empty_image(), 0
+
+        return torch.cat(chunks, dim=0), decoded_frames
+
+    @staticmethod
+    def _decode_audio(video_path: str, trim_in: float = 0.0, trim_out: float = 0.0):
+        import numpy as np
+
+        with av.open(video_path) as container:
+            stream = next((s for s in container.streams if s.type == "audio"), None)
+            if stream is None:
+                return None
+
+            sample_rate = int(getattr(stream, "rate", 0) or 0)
+            if sample_rate <= 0:
+                sample_rate = 44100
+
+            layout_name = None
+            if stream.layout is not None:
+                layout_name = stream.layout.name
+            if not layout_name:
+                channels = int(getattr(stream, "channels", 0) or 0)
+                layout_name = "mono" if channels <= 1 else "stereo"
+
+            resampler = av.audio.resampler.AudioResampler(
+                format="fltp",
+                layout=layout_name,
+                rate=sample_rate,
+            )
+
+            chunks = []
+            for frame in container.decode(audio=stream.index):
+                resampled = resampler.resample(frame)
+                if resampled is None:
+                    continue
+
+                frame_list = resampled if isinstance(resampled, list) else [resampled]
+                for audio_frame in frame_list:
+                    arr = audio_frame.to_ndarray()
+                    if arr is None or arr.size == 0:
+                        continue
+
+                    if arr.ndim == 1:
+                        arr = arr[None, :]
+                    elif arr.ndim == 2 and arr.shape[0] > arr.shape[1] and arr.shape[1] <= 8:
+                        arr = arr.T
+
+                    chunks.append(arr.astype(np.float32, copy=False))
+
+        if not chunks:
+            return None
+
+        waveform_np = np.concatenate(chunks, axis=1)
+        start_sample = int(max(0.0, float(trim_in or 0.0)) * sample_rate)
+        end_sample = waveform_np.shape[1]
+        if trim_out > trim_in:
+            end_sample = min(end_sample, int(float(trim_out) * sample_rate))
+        end_sample = max(start_sample, end_sample)
+        waveform_np = waveform_np[:, start_sample:end_sample]
+        if waveform_np.shape[1] == 0:
+            waveform_np = np.zeros((waveform_np.shape[0], 1), dtype=np.float32)
+
+        waveform = torch.from_numpy(waveform_np).unsqueeze(0).contiguous()
+        return {"waveform": waveform, "sample_rate": sample_rate}
+
+    @staticmethod
+    def _is_output_connected(prompt, unique_id, output_index: int) -> bool:
+        if prompt is None or unique_id is None:
+            return True
+
+        try:
+            uid = str(unique_id)
+            for node_data in prompt.values():
+                if not isinstance(node_data, dict):
+                    continue
+                inputs = node_data.get("inputs", {})
+                if not isinstance(inputs, dict):
+                    continue
+                for value in inputs.values():
+                    if not isinstance(value, (list, tuple)) or len(value) < 2:
+                        continue
+                    src_id, src_output = value[0], value[1]
+                    if str(src_id) != uid:
+                        continue
+                    try:
+                        if int(src_output) == int(output_index):
+                            return True
+                    except Exception:
+                        continue
+        except Exception as e:
+            print(f"[GetVideoComponentsPlus] Connection detection failed: {e}")
+            return True
+
+        return False
+
+    @staticmethod
+    def _get_trim_points(video):
+        if video is None:
+            return 0.0, 0.0
+        getter = getattr(video, "get_trim_points", None)
+        if getter is None:
+            return 0.0, 0.0
+        try:
+            trim = getter()
+            if isinstance(trim, (tuple, list)) and len(trim) >= 2:
+                trim_in = max(0.0, float(trim[0] or 0.0))
+                trim_out = max(0.0, float(trim[1] or 0.0))
+                return trim_in, trim_out
+        except Exception:
+            pass
+        return 0.0, 0.0
+
+    def get_components(self, video, unique_id=None, prompt=None):
+        if video is None:
+            return (self._empty_image(), None, 0.0, "", None, 0, 0, 0, 0.0)
+
+        video_path = self._get_video_path(video)
+        trim_in, trim_out = self._get_trim_points(video)
+
+        fps, width, height, frame_count, duration = self._probe_video_metadata(video, video_path, trim_in=trim_in, trim_out=trim_out)
+
+        decode_images = self._is_output_connected(prompt, unique_id, self.IMAGE_OUTPUT_INDEX)
+        decode_audio = self._is_output_connected(prompt, unique_id, self.AUDIO_OUTPUT_INDEX)
+        load_latent = self._is_output_connected(prompt, unique_id, self.LATENT_OUTPUT_INDEX)
+
+        latent = self._load_matching_latent(video_path) if load_latent else None
+
+        images = self._empty_image()
+        audio = None
+
+        # Fast path: metadata only, no expensive decode.
+        if not decode_images and not decode_audio:
+            return (images, audio, fps, video_path, latent, width, height, frame_count, duration)
+
+        decoded_with_pyav = False
+        if video_path and os.path.exists(video_path):
+            try:
+                if decode_images:
+                    images, decoded_count = self._decode_images_chunked(
+                        video_path,
+                        self.IMAGE_CHUNK_SIZE,
+                        trim_in=trim_in,
+                        trim_out=trim_out,
+                    )
+                    frame_count = decoded_count or frame_count
+                    if duration <= 0.0 and fps > 0.0 and decoded_count > 0:
+                        duration = float(decoded_count) / float(fps)
+
+                if decode_audio:
+                    audio = self._decode_audio(video_path, trim_in=trim_in, trim_out=trim_out)
+
+                decoded_with_pyav = True
+            except Exception as e:
+                print(f"[GetVideoComponentsPlus] PyAV decode failed, falling back to Comfy VIDEO API: {e}")
+
+        if not decoded_with_pyav:
+            # Fallback path for unusual VIDEO providers where stream source is unavailable.
+            try:
+                components = video.get_components()
+                fps = float(components.frame_rate)
+
+                if decode_images:
+                    images = components.images
+                    frame_count = int(images.shape[0])
+
+                if decode_audio:
+                    audio = components.audio
+
+                if duration <= 0.0 and fps > 0.0 and frame_count > 0:
+                    duration = float(frame_count) / float(fps)
+            except Exception as e:
+                raise RuntimeError(f"Could not extract video components: {e}") from e
+
+        return (images, audio, fps, video_path, latent, width, height, frame_count, duration)

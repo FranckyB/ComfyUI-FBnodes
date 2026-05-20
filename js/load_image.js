@@ -815,9 +815,17 @@ app.registerExtension({
                     if (response.ok) {
                         const data = await response.json();
                         if (imageWidget) {
+                            if (sourceFolderWidget && node._sourceFolder !== 'input') {
+                                sourceFolderWidget.value = 'input';
+                                if (typeof sourceFolderWidget.callback === 'function') {
+                                    await sourceFolderWidget.callback('input');
+                                } else {
+                                    node._sourceFolder = 'input';
+                                }
+                            }
+
                             try {
-                                const sf = node._sourceFolder || 'input';
-                                const listResponse = await api.fetchApi(`/fbnodes/list-files?source=${encodeURIComponent(sf)}`);
+                                const listResponse = await api.fetchApi(`/fbnodes/list-files?source=input`);
                                 if (listResponse.ok) {
                                     const result = await listResponse.json();
                                     imageWidget.options.values = ["(none)", ...(result.files || [])];

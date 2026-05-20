@@ -70,7 +70,7 @@ class LoadVideoPlus:
 
     def load(self, video="", source_folder="input", unique_id=None):
         if not video or video == "(none)":
-            raise ValueError("No video file selected. Please select a video using the file browser.")
+            return (None,)
 
         file_path, annotated_type = self._parse_video_path(video)
         if annotated_type:

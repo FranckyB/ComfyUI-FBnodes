@@ -872,7 +872,11 @@ app.registerExtension({
 
                         if (sourceFolderWidget && node._sourceFolder !== "input") {
                             sourceFolderWidget.value = "input";
-                            node._sourceFolder = "input";
+                            if (typeof sourceFolderWidget.callback === "function") {
+                                await sourceFolderWidget.callback("input");
+                            } else {
+                                node._sourceFolder = "input";
+                            }
                         }
 
                         if (audioWidget) {
