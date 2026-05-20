@@ -305,7 +305,12 @@ app.registerExtension({
                             videoWidget.value = selectedFile;
                             if (videoWidget.callback) videoWidget.callback(selectedFile);
                             node.setDirtyCanvas(true);
-                        }, sourceFolder, { defaultFilter: 'video' });
+                        }, sourceFolder, {
+                            defaultFilter: 'all',
+                            listKind: 'media',
+                            allowedTypes: ['video'],
+                            filterTypeOptions: ['all', 'video'],
+                        });
                     },
                     serialize: false
                 };

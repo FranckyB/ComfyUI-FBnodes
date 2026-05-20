@@ -124,6 +124,13 @@ GPL-3.0
 
 ## Changelog
 
+### version 1.1.12
+- **Load Audio+**: Added a load audio node, similar to other loaders.  As the ability to trim the In and Out point.
+- **Polish**:  Tweaked the UIs of Load Image+ and Load Video+, matching tweaks that were done to Load Audio+
+
+### version 1.1.11
+- **Apply Lora+**: Added a simple "apply Lora Stack" node, with a strength multiplier
+
 ### version 1.1.10
 - **Load Image+ Mask Support**: Added MASK output with alpha channel extraction from images
 - **Mask Editor Integration**: MaskEditor now works correctly — painted masks display in the node preview with transparency
