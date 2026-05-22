@@ -104,6 +104,37 @@ Boolean switch — passes through `on_true` or `on_false` based on a condition t
 ### Apply LoRA+
 Apply a LORA_STACK (list of LoRA tuples) to a model and optional CLIP. Works with Prompt Manager Advanced's LoRA stack output.
 
+## Missing Model Remap Tool
+Adds a top-bar button in ComfyUI: **Remap Missing Models**.
+
+When clicked, it scans the current graph and tries to remap missing model-like widget values.
+
+Matching order:
+1. Exact basename match (case-insensitive)
+2. Precision-token equivalent fallback (fp8/fp16/bf16)
+3. Version variations (v1.1, v1_2, v2)
+
+Example:
+- workflow value: `wan21.safetensors`
+- local file exists as: `wan/wan21.safetensors`
+- tool remaps node widget to: `wan/wan21.safetensors`
+
+Supported categories in v1:
+- checkpoints/unet
+- loras
+- text encoders/clip
+- vae (including audio-vae related widget keys)
+- controlnet
+- upscale models (including latent upscale related widget keys)
+- Power Lora Loader (rgthree)
+
+Rules and limits:
+- Exact filename match first (case-insensitive)
+- If exact fails, tries precision-token equivalents (fp8/fp16/bf16)
+- If duplicate basenames exist in a category, result is marked ambiguous and skipped
+- Updates only the current in-memory graph (no workflow file overwrite)
+- Rejects unsafe values (absolute paths or traversal-like paths)
+
 ## Animated Latent Preview
 Provides animated video previews during KSampler execution for video models (Wan, HunyuanVideo, Mochi, LTXV, Cosmos). Compatible with VideoHelperSuite — automatically defers if VHS is installed.
 
@@ -128,6 +159,10 @@ pip install -r ComfyUI-FBnodes/requirements.txt
 GPL-3.0
 
 ## Changelog
+
+### version 1.2.00
+- **Repath Models**  Added a new repath utility.  Allowing for 1 click repathing of all models and loras.  Uses minimal fuzzy logic to find models with different quantizations or versions.
+- **Show Text+**  Added a simple Show Text node, that unlike Preview  as Text, is saved with Workflow and is maintained when switching tabs.
 
 ### version 1.1.12
 - **Load Audio+**: Added a load audio node, similar to other loaders.  As the ability to trim the In and Out point.

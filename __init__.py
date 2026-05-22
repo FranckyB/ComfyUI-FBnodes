@@ -2,7 +2,7 @@
 ComfyUI-FBnodes - Utility nodes for ComfyUI
 """
 
-__version__ = "1.1.13"
+__version__ = "1.2.0"
 __author__ = "François Beaudry"
 __license__ = "GPL-3.0"
 
@@ -15,12 +15,14 @@ from .nodes import (
     LoadLatentFile,
     LoadVideoPlus,
     SaveVideoPlus,
+    ShowTextPlus,
     SwitchAny,
     SwitchAnyBool,
     VACEStitcher,
     VACEStitcher_Options,
     install_latent_preview_hook,
 )
+from .py import repath_util  # noqa: F401
 
 # Initialize latent preview hook (with VHS conflict detection)
 install_latent_preview_hook()
@@ -34,6 +36,7 @@ NODE_CLASS_MAPPINGS = {
     "LoadLatentFile": LoadLatentFile,
     "LoadVideoPlus": LoadVideoPlus,
     "SaveVideoPlus": SaveVideoPlus,
+    "ShowTextPlus": ShowTextPlus,
     "SwitchAny": SwitchAny,
     "SwitchAnyBool": SwitchAnyBool,
     "VACEStitcher": VACEStitcher,
@@ -49,6 +52,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "LoadLatentFile": "Load Latent File",
     "LoadVideoPlus": "Load Video+",
     "SaveVideoPlus": "Save Video+",
+    "ShowTextPlus": "Show Text+",
     "SwitchAny": "Switch Any",
     "SwitchAnyBool": "Switch Any (Boolean)",
     "VACEStitcher": "VACE Stitcher",
