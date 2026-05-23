@@ -9,7 +9,7 @@ const NODE_MIN_SIZE_H = NODE_MIN_H;
 const HANDLE_MIN_SIZE = 20;
 const HANDLE_MAX_SIZE = 24;
 const BRACKET_THICKNESS = 3;
-const CORNER_HIT_SIZE = 34;
+const CORNER_HIT_SIZE = 24;
 const SIDE_HANDLE_HIT_THICKNESS = 14;
 const CANVAS_PAD = 4;
 const SIDE_HANDLE_LENGTH_MULT = 1.5;
@@ -543,20 +543,26 @@ function buildUI(node) {
 
     function startDrag(mode, startEvent, handle = null) {
         startEvent.preventDefault();
-        const startRect = rectToDisplay(state);
         drag = {
             mode,
             handle,
             x: startEvent.clientX,
             y: startEvent.clientY,
-            rect: { ...startRect },
         };
 
         const onMove = (e) => {
             if (!drag) return;
-            const dx = e.clientX - drag.x;
-            const dy = e.clientY - drag.y;
-            const r = drag.mode === "move" ? { ...rectToDisplay(state) } : { ...drag.rect };
+            const dxScreen = e.clientX - drag.x;
+            const dyScreen = e.clientY - drag.y;
+
+            // Convert mouse deltas from screen space to overlay-local space (accounts for canvas zoom).
+            const overlayRect = state.overlay.getBoundingClientRect();
+            const scaleX = overlayRect.width > 0 ? overlayRect.width / Math.max(1, state.overlay.clientWidth) : 1;
+            const scaleY = overlayRect.height > 0 ? overlayRect.height / Math.max(1, state.overlay.clientHeight) : 1;
+            const dx = dxScreen / (scaleX || 1);
+            const dy = dyScreen / (scaleY || 1);
+
+            const r = { ...rectToDisplay(state) };
 
             if (drag.mode === "move") {
                 const rw = r.right - r.left;
@@ -576,10 +582,6 @@ function buildUI(node) {
                 r.right = left + rw;
                 r.top = top;
                 r.bottom = top + rh;
-
-                // Consume mouse motion every frame so clamped overflow does not accumulate.
-                drag.x = e.clientX;
-                drag.y = e.clientY;
             } else {
                 if (drag.handle.includes("w")) r.left += dx;
                 if (drag.handle.includes("e")) r.right += dx;
@@ -602,6 +604,10 @@ function buildUI(node) {
             if (ratio) fitRectToRatio(state.rect, state.imageW, state.imageH, ratio);
             updateWidgetValues(node, state);
             redraw();
+
+            // Consume mouse motion every frame so clamped overflow does not accumulate.
+            drag.x = e.clientX;
+            drag.y = e.clientY;
         };
 
         const onUp = () => {
