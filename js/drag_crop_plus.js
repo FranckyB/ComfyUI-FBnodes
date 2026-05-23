@@ -126,10 +126,15 @@ function parseRatioLabel(label, landscape) {
 }
 
 function clampRect(rect, w, h) {
-    rect.left = Math.max(0, Math.min(rect.left, w - 1));
-    rect.right = Math.max(rect.left + 1, Math.min(rect.right, w));
-    rect.top = Math.max(0, Math.min(rect.top, h - 1));
-    rect.bottom = Math.max(rect.top + 1, Math.min(rect.bottom, h));
+    const left = Math.round(rect.left);
+    const right = Math.round(rect.right);
+    const top = Math.round(rect.top);
+    const bottom = Math.round(rect.bottom);
+
+    rect.left = Math.max(0, Math.min(left, w - 1));
+    rect.right = Math.max(rect.left + 1, Math.min(right, w));
+    rect.top = Math.max(0, Math.min(top, h - 1));
+    rect.bottom = Math.max(rect.top + 1, Math.min(bottom, h));
 }
 
 function fitRectToRatio(rect, w, h, ratio) {
@@ -189,6 +194,112 @@ function fitRectByAreaAndRatio(rect, w, h, ratio) {
     rect.bottom = Math.round(cy + rh / 2);
 
     fitRectToRatio(rect, w, h, ratio);
+}
+
+function applyRatioForHandle(rect, handle, ratio, w, h) {
+    if (!ratio || ratio <= 0 || !handle) return;
+
+    const projectCorner = (candW, candH, maxW, maxH) => {
+        const vx = 1;
+        const vy = 1 / ratio;
+        const denom = vx * vx + vy * vy;
+        const t = (candW * vx + candH * vy) / Math.max(1e-9, denom);
+
+        let tw = Math.max(1, t * vx);
+        let th = Math.max(1, t * vy);
+
+        const sW = maxW / Math.max(1e-9, tw);
+        const sH = maxH / Math.max(1e-9, th);
+        const s = Math.min(1, sW, sH);
+        tw *= s;
+        th *= s;
+
+        return { tw: Math.max(1, tw), th: Math.max(1, th) };
+    };
+
+    if (handle === "se") {
+        const ax = rect.left;
+        const ay = rect.top;
+        const candW = Math.max(1, rect.right - ax);
+        const candH = Math.max(1, rect.bottom - ay);
+        const { tw, th } = projectCorner(candW, candH, w - ax, h - ay);
+        rect.right = ax + tw;
+        rect.bottom = ay + th;
+    } else if (handle === "sw") {
+        const ax = rect.right;
+        const ay = rect.top;
+        const candW = Math.max(1, ax - rect.left);
+        const candH = Math.max(1, rect.bottom - ay);
+        const { tw, th } = projectCorner(candW, candH, ax, h - ay);
+        rect.left = ax - tw;
+        rect.bottom = ay + th;
+    } else if (handle === "ne") {
+        const ax = rect.left;
+        const ay = rect.bottom;
+        const candW = Math.max(1, rect.right - ax);
+        const candH = Math.max(1, ay - rect.top);
+        const { tw, th } = projectCorner(candW, candH, w - ax, ay);
+        rect.right = ax + tw;
+        rect.top = ay - th;
+    } else if (handle === "nw") {
+        const ax = rect.right;
+        const ay = rect.bottom;
+        const candW = Math.max(1, ax - rect.left);
+        const candH = Math.max(1, ay - rect.top);
+        const { tw, th } = projectCorner(candW, candH, ax, ay);
+        rect.left = ax - tw;
+        rect.top = ay - th;
+    } else if (handle === "e") {
+        const ax = rect.left;
+        const cy = (rect.top + rect.bottom) / 2;
+        let tw = Math.max(1, rect.right - ax);
+        let th = tw / ratio;
+        const maxThByCenter = Math.max(1, 2 * Math.min(cy, h - cy));
+        th = Math.min(th, maxThByCenter);
+        tw = Math.min(th * ratio, w - ax);
+        th = tw / ratio;
+        rect.right = ax + tw;
+        rect.top = cy - th / 2;
+        rect.bottom = cy + th / 2;
+    } else if (handle === "w") {
+        const ax = rect.right;
+        const cy = (rect.top + rect.bottom) / 2;
+        let tw = Math.max(1, ax - rect.left);
+        let th = tw / ratio;
+        const maxThByCenter = Math.max(1, 2 * Math.min(cy, h - cy));
+        th = Math.min(th, maxThByCenter);
+        tw = Math.min(th * ratio, ax);
+        th = tw / ratio;
+        rect.left = ax - tw;
+        rect.top = cy - th / 2;
+        rect.bottom = cy + th / 2;
+    } else if (handle === "s") {
+        const ay = rect.top;
+        const cx = (rect.left + rect.right) / 2;
+        let th = Math.max(1, rect.bottom - ay);
+        let tw = th * ratio;
+        const maxTwByCenter = Math.max(1, 2 * Math.min(cx, w - cx));
+        tw = Math.min(tw, maxTwByCenter);
+        th = Math.min(tw / ratio, h - ay);
+        tw = th * ratio;
+        rect.bottom = ay + th;
+        rect.left = cx - tw / 2;
+        rect.right = cx + tw / 2;
+    } else if (handle === "n") {
+        const ay = rect.bottom;
+        const cx = (rect.left + rect.right) / 2;
+        let th = Math.max(1, ay - rect.top);
+        let tw = th * ratio;
+        const maxTwByCenter = Math.max(1, 2 * Math.min(cx, w - cx));
+        tw = Math.min(tw, maxTwByCenter);
+        th = Math.min(tw / ratio, ay);
+        tw = th * ratio;
+        rect.top = ay - th;
+        rect.left = cx - tw / 2;
+        rect.right = cx + tw / 2;
+    }
+
+    clampRect(rect, w, h);
 }
 
 function updateWidgetValues(node, state) {
@@ -287,6 +398,10 @@ function buildUI(node) {
     img.style.cssText = `position:absolute; inset:${CANVAS_PAD}px; width:calc(100% - ${CANVAS_PAD * 2}px); height:calc(100% - ${CANVAS_PAD * 2}px); object-fit:contain;`;
     img.draggable = false;
 
+    const emptyHint = document.createElement("div");
+    emptyHint.textContent = "Execute the node to display image";
+    emptyHint.style.cssText = "position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); color:rgba(220,230,240,0.62); font-size:13px; font-weight:500; text-align:center; pointer-events:none; user-select:none;";
+
     const overlay = document.createElement("div");
     overlay.style.cssText = `position:absolute; inset:${CANVAS_PAD}px; pointer-events:none;`;
 
@@ -330,11 +445,13 @@ function buildUI(node) {
     overlay.appendChild(box);
     overlay.appendChild(label);
     root.appendChild(img);
+    root.appendChild(emptyHint);
     root.appendChild(overlay);
 
     const state = {
         root,
         img,
+        emptyHint,
         overlay,
         shadeTop,
         shadeBottom,
@@ -471,6 +588,7 @@ function buildUI(node) {
         const overlayVisible = !!state.hasVisibleImage;
         state.box.style.display = overlayVisible ? "block" : "none";
         state.label.style.display = "none";
+        state.emptyHint.style.display = overlayVisible ? "none" : "block";
         state.shadeTop.style.display = overlayVisible ? "block" : "none";
         state.shadeBottom.style.display = overlayVisible ? "block" : "none";
         state.shadeLeft.style.display = overlayVisible ? "block" : "none";
@@ -601,7 +719,11 @@ function buildUI(node) {
 
             const ratio = parseRatioLabel(getWidget(node, "aspect_ratio")?.value, !!getWidget(node, "landscape")?.value);
             displayToRect(state, r);
-            if (ratio) fitRectToRatio(state.rect, state.imageW, state.imageH, ratio);
+            if (ratio && drag.mode === "resize") {
+                applyRatioForHandle(state.rect, drag.handle, ratio, state.imageW, state.imageH);
+            } else if (ratio) {
+                fitRectToRatio(state.rect, state.imageW, state.imageH, ratio);
+            }
             updateWidgetValues(node, state);
             redraw();
 
