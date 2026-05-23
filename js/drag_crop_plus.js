@@ -9,15 +9,20 @@ const NODE_MIN_SIZE_H = NODE_MIN_H;
 const HANDLE_MIN_SIZE = 20;
 const HANDLE_MAX_SIZE = 24;
 const BRACKET_THICKNESS = 3;
+const CORNER_HIT_SIZE = 34;
+const SIDE_HANDLE_HIT_THICKNESS = 14;
 const CANVAS_PAD = 4;
+const SIDE_HANDLE_LENGTH_MULT = 1.5;
+const INFO_WIDGET_RESERVED_H = 30;
 const PREVIEW_CACHE = new Map();
 
 function styleCornerHandle(el, key, size) {
     const t = BRACKET_THICKNESS;
-    const r = Math.max(3, Math.round(t * 1.6));
+    const r = Math.max(4, Math.round(t * 2.0));
+    const hit = Math.max(size, CORNER_HIT_SIZE);
     el.innerHTML = "";
-    el.style.width = `${size}px`;
-    el.style.height = `${size}px`;
+    el.style.width = `${hit}px`;
+    el.style.height = `${hit}px`;
     el.style.background = "transparent";
 
     const h = document.createElement("div");
@@ -26,17 +31,17 @@ function styleCornerHandle(el, key, size) {
     v.style.cssText = `position:absolute; background:#fff; width:${t}px;`;
 
     if (key === "nw") {
-        h.style.left = "0"; h.style.top = "0"; h.style.right = "0"; h.style.borderRadius = `${r}px 0 0 0`;
-        v.style.left = "0"; v.style.top = "0"; v.style.bottom = "0"; v.style.borderRadius = `${r}px 0 0 0`;
+        h.style.left = "0"; h.style.top = "0"; h.style.width = `${size}px`; h.style.borderRadius = `${r}px ${r}px 0 0`;
+        v.style.left = "0"; v.style.top = "0"; v.style.height = `${size}px`; v.style.borderRadius = `${r}px 0 0 ${r}px`;
     } else if (key === "ne") {
-        h.style.left = "0"; h.style.top = "0"; h.style.right = "0"; h.style.borderRadius = `0 ${r}px 0 0`;
-        v.style.right = "0"; v.style.top = "0"; v.style.bottom = "0"; v.style.borderRadius = `0 ${r}px 0 0`;
+        h.style.right = "0"; h.style.top = "0"; h.style.width = `${size}px`; h.style.borderRadius = `${r}px ${r}px 0 0`;
+        v.style.right = "0"; v.style.top = "0"; v.style.height = `${size}px`; v.style.borderRadius = `0 ${r}px ${r}px 0`;
     } else if (key === "sw") {
-        h.style.left = "0"; h.style.bottom = "0"; h.style.right = "0"; h.style.borderRadius = `0 0 0 ${r}px`;
-        v.style.left = "0"; v.style.top = "0"; v.style.bottom = "0"; v.style.borderRadius = `0 0 0 ${r}px`;
+        h.style.left = "0"; h.style.bottom = "0"; h.style.width = `${size}px`; h.style.borderRadius = `0 0 ${r}px ${r}px`;
+        v.style.left = "0"; v.style.bottom = "0"; v.style.height = `${size}px`; v.style.borderRadius = `${r}px 0 0 ${r}px`;
     } else {
-        h.style.left = "0"; h.style.bottom = "0"; h.style.right = "0"; h.style.borderRadius = `0 0 ${r}px 0`;
-        v.style.right = "0"; v.style.top = "0"; v.style.bottom = "0"; v.style.borderRadius = `0 0 ${r}px 0`;
+        h.style.right = "0"; h.style.bottom = "0"; h.style.width = `${size}px`; h.style.borderRadius = `0 0 ${r}px ${r}px`;
+        v.style.right = "0"; v.style.bottom = "0"; v.style.height = `${size}px`; v.style.borderRadius = `0 ${r}px ${r}px 0`;
     }
 
     el.appendChild(h);
@@ -47,29 +52,65 @@ function styleSideHandle(el, key, length) {
     const t = BRACKET_THICKNESS;
     const r = Math.max(3, Math.round(t * 1.6));
     el.innerHTML = "";
-    el.style.background = "#fff";
+    el.style.background = "transparent";
+
+    const line = document.createElement("div");
+    line.style.cssText = "position:absolute; background:#fff;";
 
     if (key === "n") {
         el.style.width = `${length}px`;
-        el.style.height = `${t}px`;
-        el.style.borderRadius = `${r}px ${r}px 0 0`;
+        el.style.height = `${SIDE_HANDLE_HIT_THICKNESS}px`;
+        line.style.left = "0";
+        line.style.right = "0";
+        line.style.bottom = "0";
+        line.style.height = `${t}px`;
+        line.style.borderRadius = `${r}px ${r}px 0 0`;
     } else if (key === "s") {
         el.style.width = `${length}px`;
-        el.style.height = `${t}px`;
-        el.style.borderRadius = `0 0 ${r}px ${r}px`;
+        el.style.height = `${SIDE_HANDLE_HIT_THICKNESS}px`;
+        line.style.left = "0";
+        line.style.right = "0";
+        line.style.top = "0";
+        line.style.height = `${t}px`;
+        line.style.borderRadius = `0 0 ${r}px ${r}px`;
     } else if (key === "w") {
-        el.style.width = `${t}px`;
+        el.style.width = `${SIDE_HANDLE_HIT_THICKNESS}px`;
         el.style.height = `${length}px`;
-        el.style.borderRadius = `${r}px 0 0 ${r}px`;
+        line.style.right = "0";
+        line.style.top = "0";
+        line.style.bottom = "0";
+        line.style.width = `${t}px`;
+        line.style.borderRadius = `${r}px 0 0 ${r}px`;
     } else {
-        el.style.width = `${t}px`;
+        el.style.width = `${SIDE_HANDLE_HIT_THICKNESS}px`;
         el.style.height = `${length}px`;
-        el.style.borderRadius = `0 ${r}px ${r}px 0`;
+        line.style.left = "0";
+        line.style.top = "0";
+        line.style.bottom = "0";
+        line.style.width = `${t}px`;
+        line.style.borderRadius = `0 ${r}px ${r}px 0`;
     }
+
+    el.appendChild(line);
 }
 
 function getWidget(node, name) {
     return node.widgets?.find((w) => w?.name === name) || null;
+}
+
+function updateInfoWidget(node, state) {
+    const w = getWidget(node, "crop_info_display");
+    if (!w) return;
+    if (!state.hasVisibleImage) {
+        w.value = "--";
+        return;
+    }
+
+    const rw = Math.max(1, state.rect.right - state.rect.left);
+    const rh = Math.max(1, state.rect.bottom - state.rect.top);
+    const pctW = Math.round((rw / Math.max(1, state.imageW)) * 100);
+    const pctH = Math.round((rh / Math.max(1, state.imageH)) * 100);
+    w.value = `${pctW}% x ${pctH}% | ${rw}px x ${rh}px`;
 }
 
 function parseRatioLabel(label, landscape) {
@@ -259,7 +300,7 @@ function buildUI(node) {
     }
 
     const box = document.createElement("div");
-    box.style.cssText = "position:absolute; border:1px solid rgba(255,255,255,0.52); box-sizing:border-box; pointer-events:auto; cursor:move;";
+    box.style.cssText = "position:absolute; border:1px solid rgba(255,255,255,0.52); box-sizing:border-box; pointer-events:auto; cursor:move; z-index:2;";
 
     const gridV1 = document.createElement("div");
     gridV1.style.cssText = "position:absolute; top:0; bottom:0; left:33.333%; width:1px; transform:translateX(-0.5px); background:rgba(255,255,255,0.38); pointer-events:none;";
@@ -281,7 +322,7 @@ function buildUI(node) {
     for (const key of ["n","s","e","w","nw","ne","sw","se"]) {
         const h = document.createElement("div");
         h.dataset.handle = key;
-        h.style.cssText = "position:absolute; box-sizing:border-box; pointer-events:auto;";
+        h.style.cssText = "position:absolute; box-sizing:border-box; pointer-events:auto; z-index:4;";
         handles[key] = h;
         overlay.appendChild(h);
     }
@@ -340,7 +381,8 @@ function buildUI(node) {
             if (["nw", "ne", "sw", "se"].includes(key)) {
                 styleCornerHandle(el, key, size);
             } else {
-                styleSideHandle(el, key, Math.max(HANDLE_MIN_SIZE, Math.round(size * 0.9)));
+                const baseLen = Math.max(HANDLE_MIN_SIZE, Math.round(size * 0.9));
+                styleSideHandle(el, key, Math.round(baseLen * SIDE_HANDLE_LENGTH_MULT));
             }
             el.style.cursor = cursor;
 
@@ -370,17 +412,22 @@ function buildUI(node) {
         placeCenter(e, x2, ym, "ew-resize");
 
         // Corner L-brackets: flat inner sides exactly align with crop edges.
+        const nwHit = parseFloat(nw.style.width) || size;
+        const neHit = parseFloat(ne.style.width) || size;
+        const swHit = parseFloat(sw.style.width) || size;
+        const seHit = parseFloat(se.style.width) || size;
+
         nw.style.left = `${x1 - t}px`;
         nw.style.top = `${y1 - t}px`;
 
-        ne.style.left = `${x2 - size + t}px`;
+        ne.style.left = `${x2 - neHit + t}px`;
         ne.style.top = `${y1 - t}px`;
 
         sw.style.left = `${x1 - t}px`;
-        sw.style.top = `${y2 - size + t}px`;
+        sw.style.top = `${y2 - swHit + t}px`;
 
-        se.style.left = `${x2 - size + t}px`;
-        se.style.top = `${y2 - size + t}px`;
+        se.style.left = `${x2 - seHit + t}px`;
+        se.style.top = `${y2 - seHit + t}px`;
 
         // Side handles: flat inner side exactly aligns with crop edges.
         const nWidth = parseFloat(n.style.width) || Math.max(HANDLE_MIN_SIZE, Math.round(size * 0.9));
@@ -388,13 +435,18 @@ function buildUI(node) {
         const wHeight = parseFloat(w.style.height) || Math.max(HANDLE_MIN_SIZE, Math.round(size * 0.9));
         const eHeight = parseFloat(e.style.height) || Math.max(HANDLE_MIN_SIZE, Math.round(size * 0.9));
 
+        const nHeight = parseFloat(n.style.height) || SIDE_HANDLE_HIT_THICKNESS;
+        const sHeight = parseFloat(s.style.height) || SIDE_HANDLE_HIT_THICKNESS;
+        const wWidth = parseFloat(w.style.width) || SIDE_HANDLE_HIT_THICKNESS;
+        const eWidth = parseFloat(e.style.width) || SIDE_HANDLE_HIT_THICKNESS;
+
         n.style.left = `${xm - nWidth / 2}px`;
-        n.style.top = `${y1 - t}px`;
+        n.style.top = `${y1 - nHeight}px`;
 
         s.style.left = `${xm - sWidth / 2}px`;
         s.style.top = `${y2}px`;
 
-        w.style.left = `${x1 - t}px`;
+        w.style.left = `${x1 - wWidth}px`;
         w.style.top = `${ym - wHeight / 2}px`;
 
         e.style.left = `${x2}px`;
@@ -418,7 +470,7 @@ function buildUI(node) {
 
         const overlayVisible = !!state.hasVisibleImage;
         state.box.style.display = overlayVisible ? "block" : "none";
-        state.label.style.display = overlayVisible ? "block" : "none";
+        state.label.style.display = "none";
         state.shadeTop.style.display = overlayVisible ? "block" : "none";
         state.shadeBottom.style.display = overlayVisible ? "block" : "none";
         state.shadeLeft.style.display = overlayVisible ? "block" : "none";
@@ -427,6 +479,8 @@ function buildUI(node) {
             h.style.display = overlayVisible ? "block" : "none";
         }
 
+        updateInfoWidget(node, state);
+
         if (!overlayVisible) return;
 
         state.box.style.left = `${d.left}px`;
@@ -434,32 +488,36 @@ function buildUI(node) {
         state.box.style.width = `${Math.max(1, d.right - d.left)}px`;
         state.box.style.height = `${Math.max(1, d.bottom - d.top)}px`;
 
-        state.shadeTop.style.left = `${state.offsetX}px`;
-        state.shadeTop.style.top = `${state.offsetY}px`;
-        state.shadeTop.style.width = `${state.dispW}px`;
-        state.shadeTop.style.height = `${Math.max(0, d.top - state.offsetY)}px`;
+        // Pixel-snap mask bounds to avoid 1px seams from fractional display coordinates.
+        const imgLeft = Math.floor(state.offsetX);
+        const imgTop = Math.floor(state.offsetY);
+        const imgRight = Math.ceil(state.offsetX + state.dispW);
+        const imgBottom = Math.ceil(state.offsetY + state.dispH);
 
-        state.shadeBottom.style.left = `${state.offsetX}px`;
-        state.shadeBottom.style.top = `${d.bottom}px`;
-        state.shadeBottom.style.width = `${state.dispW}px`;
-        state.shadeBottom.style.height = `${Math.max(0, state.offsetY + state.dispH - d.bottom)}px`;
+        const cropLeft = Math.max(imgLeft, Math.floor(d.left));
+        const cropTop = Math.max(imgTop, Math.floor(d.top));
+        const cropRight = Math.min(imgRight, Math.ceil(d.right));
+        const cropBottom = Math.min(imgBottom, Math.ceil(d.bottom));
 
-        state.shadeLeft.style.left = `${state.offsetX}px`;
-        state.shadeLeft.style.top = `${d.top}px`;
-        state.shadeLeft.style.width = `${Math.max(0, d.left - state.offsetX)}px`;
-        state.shadeLeft.style.height = `${Math.max(0, d.bottom - d.top)}px`;
+        state.shadeTop.style.left = `${imgLeft}px`;
+        state.shadeTop.style.top = `${imgTop}px`;
+        state.shadeTop.style.width = `${Math.max(0, imgRight - imgLeft)}px`;
+        state.shadeTop.style.height = `${Math.max(0, cropTop - imgTop)}px`;
 
-        state.shadeRight.style.left = `${d.right}px`;
-        state.shadeRight.style.top = `${d.top}px`;
-        state.shadeRight.style.width = `${Math.max(0, state.offsetX + state.dispW - d.right)}px`;
-        state.shadeRight.style.height = `${Math.max(0, d.bottom - d.top)}px`;
+        state.shadeBottom.style.left = `${imgLeft}px`;
+        state.shadeBottom.style.top = `${cropBottom}px`;
+        state.shadeBottom.style.width = `${Math.max(0, imgRight - imgLeft)}px`;
+        state.shadeBottom.style.height = `${Math.max(0, imgBottom - cropBottom)}px`;
 
-        const rw = state.rect.right - state.rect.left;
-        const rh = state.rect.bottom - state.rect.top;
-        const pctW = Math.round((rw / state.imageW) * 100);
-        const pctH = Math.round((rh / state.imageH) * 100);
-        state.label.style.left = `${state.viewW / 2}px`;
-        state.label.textContent = `${pctW}% x ${pctH}% | ${rw}px x ${rh}px`;
+        state.shadeLeft.style.left = `${imgLeft}px`;
+        state.shadeLeft.style.top = `${cropTop}px`;
+        state.shadeLeft.style.width = `${Math.max(0, cropLeft - imgLeft)}px`;
+        state.shadeLeft.style.height = `${Math.max(0, cropBottom - cropTop)}px`;
+
+        state.shadeRight.style.left = `${cropRight}px`;
+        state.shadeRight.style.top = `${cropTop}px`;
+        state.shadeRight.style.width = `${Math.max(0, imgRight - cropRight)}px`;
+        state.shadeRight.style.height = `${Math.max(0, cropBottom - cropTop)}px`;
 
         layoutHandles(d);
     }
@@ -498,18 +556,18 @@ function buildUI(node) {
             if (!drag) return;
             const dx = e.clientX - drag.x;
             const dy = e.clientY - drag.y;
-            const r = { ...drag.rect };
+            const r = drag.mode === "move" ? { ...rectToDisplay(state) } : { ...drag.rect };
 
             if (drag.mode === "move") {
-                const rw = drag.rect.right - drag.rect.left;
-                const rh = drag.rect.bottom - drag.rect.top;
+                const rw = r.right - r.left;
+                const rh = r.bottom - r.top;
                 const minX = state.offsetX;
                 const minY = state.offsetY;
                 const maxX = state.offsetX + state.dispW;
                 const maxY = state.offsetY + state.dispH;
 
-                let left = drag.rect.left + dx;
-                let top = drag.rect.top + dy;
+                let left = r.left + dx;
+                let top = r.top + dy;
 
                 left = Math.max(minX, Math.min(left, maxX - rw));
                 top = Math.max(minY, Math.min(top, maxY - rh));
@@ -518,6 +576,10 @@ function buildUI(node) {
                 r.right = left + rw;
                 r.top = top;
                 r.bottom = top + rh;
+
+                // Consume mouse motion every frame so clamped overflow does not accumulate.
+                drag.x = e.clientX;
+                drag.y = e.clientY;
             } else {
                 if (drag.handle.includes("w")) r.left += dx;
                 if (drag.handle.includes("e")) r.right += dx;
@@ -634,17 +696,27 @@ app.registerExtension({
             const ui = buildUI(this);
             this._dragCropUI = ui;
 
+            if (!getWidget(this, "crop_info_display")) {
+                const infoWidget = this.addWidget("text", "crop_info_display", "--", () => {}, {});
+                if (infoWidget?.inputEl) {
+                    infoWidget.inputEl.readOnly = true;
+                }
+            }
+
             const domWidget = this.addDOMWidget("drag_crop_preview", "customwidget", ui.state.root, {
                 serialize: false,
                 hideOnZoom: false,
             });
-            domWidget.computeSize = (w) => [Math.max(120, w), Math.max(120, (this.size?.[1] || NODE_MIN_H) - 205)];
+            // Keep a stable minimum; do not depend on current node height or it will ratchet upward.
+            domWidget.computeSize = (w) => [Math.max(120, w), 120];
 
             clampNodeSize(this);
 
             const resizeRoot = () => {
                 const width = Math.max(120, (this.size?.[0] || NODE_MIN_W) - 22);
-                const height = Math.max(120, (this.size?.[1] || NODE_MIN_H) - 205);
+                const hasInfoWidget = !!getWidget(this, "crop_info_display");
+                const reserved = 205 + (hasInfoWidget ? INFO_WIDGET_RESERVED_H : 0);
+                const height = Math.max(120, (this.size?.[1] || NODE_MIN_H) - reserved);
                 ui.state.root.style.width = `${width}px`;
                 ui.state.root.style.height = `${height}px`;
                 ui.redraw();
