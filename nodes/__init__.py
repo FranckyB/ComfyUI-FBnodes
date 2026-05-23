@@ -11,3 +11,4 @@ from .load_video import LoadVideoPlus
 from .vace_stitcher import VACEStitcher, VACEStitcher_Options
 from .show_text import ShowTextPlus
 from .save_image import SaveImagePlus
+from .drag_crop import DragCropPlus
