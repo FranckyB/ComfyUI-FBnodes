@@ -7,8 +7,22 @@ const SUMMARY_BACKDROP_ID = "fbnodes-repath-summary-backdrop";
 const COMFY_MENU_MODE_KEY = "Comfy.UseNewMenu";
 const MENU_MODE_DISABLED = "Disabled";
 const SEARCH_ICON_URL = new URL("./search.png", import.meta.url).href;
+const SETUP_GUARD_KEY = "__fbnodesRepathSetupDone";
 
 let lastRunState = "idle";
+
+function dedupeTopBarButtons() {
+    const all = Array.from(document.querySelectorAll(`#${BUTTON_ID}, [data-fbnodes-repath-btn="1"]`));
+    if (all.length <= 1) {
+        return all[0] || null;
+    }
+
+    const keep = all[0];
+    for (let i = 1; i < all.length; i++) {
+        all[i].remove();
+    }
+    return keep;
+}
 
 function placeButtonByMenuMode(button) {
     const menuMode = app.extensionManager?.setting?.get?.(COMFY_MENU_MODE_KEY);
@@ -445,11 +459,12 @@ async function runRemap(button) {
 }
 
 function ensureTopBarButton() {
-    let button = document.getElementById(BUTTON_ID);
+    let button = dedupeTopBarButtons() || document.getElementById(BUTTON_ID);
 
     if (!button) {
         button = document.createElement("button");
         button.id = BUTTON_ID;
+        button.dataset.fbnodesRepathBtn = "1";
         button.type = "button";
         button.title = "Find and remap missing model paths";
         button.ariaLabel = "Find and remap missing model paths";
@@ -481,6 +496,7 @@ function ensureTopBarButton() {
 
     const attached = placeButtonByMenuMode(button);
     if (attached) {
+        dedupeTopBarButtons();
         matchToolbarButtonGeometry(button);
         console.log("[FBnodes] Repath button attached", { menuMode: app.extensionManager?.setting?.get?.(COMFY_MENU_MODE_KEY) });
     }
@@ -497,11 +513,17 @@ app.registerExtension({
     ],
     menuCommands: [
         {
-            path: ["Extensions", "FBnodes"],
+            path: ["FBnodes"],
             commands: ["fbnodes.remapMissingModels"],
         },
     ],
     async setup() {
+        if (globalThis[SETUP_GUARD_KEY]) {
+            ensureTopBarButton();
+            return;
+        }
+        globalThis[SETUP_GUARD_KEY] = true;
+
         console.log("[FBnodes] Repath extension setup");
         ensureStyles();
         const tryAttach = () => {

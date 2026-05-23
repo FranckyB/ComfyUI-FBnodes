@@ -21,7 +21,7 @@ class ShowTextPlus:
     OUTPUT_NODE = True
     OUTPUT_IS_LIST = (True,)
 
-    CATEGORY = "FBnodes/utils"
+    CATEGORY = "FBnodes"
 
     def notify(self, text, unique_id=None, extra_pnginfo=None):
         if unique_id is not None and extra_pnginfo is not None:
