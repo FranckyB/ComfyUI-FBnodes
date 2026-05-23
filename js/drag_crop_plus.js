@@ -13,7 +13,7 @@ const CORNER_HIT_SIZE = 24;
 const SIDE_HANDLE_HIT_THICKNESS = 14;
 const CANVAS_PAD = 4;
 const SIDE_HANDLE_LENGTH_MULT = 1.5;
-const INFO_WIDGET_RESERVED_H = 30;
+const INFO_ROW_WIDGET_H = 24;
 const PREVIEW_CACHE = new Map();
 
 function styleCornerHandle(el, key, size) {
@@ -99,10 +99,10 @@ function getWidget(node, name) {
 }
 
 function updateInfoWidget(node, state) {
-    const w = getWidget(node, "crop_info_display");
+    const w = node._dragCropInfoEl;
     if (!w) return;
     if (!state.hasVisibleImage) {
-        w.value = "--";
+        w.textContent = "--";
         return;
     }
 
@@ -110,7 +110,11 @@ function updateInfoWidget(node, state) {
     const rh = Math.max(1, state.rect.bottom - state.rect.top);
     const pctW = Math.round((rw / Math.max(1, state.imageW)) * 100);
     const pctH = Math.round((rh / Math.max(1, state.imageH)) * 100);
-    w.value = `${pctW}% x ${pctH}% | ${rw}px x ${rh}px`;
+    const pctWS = String(pctW).padStart(2, "0");
+    const pctHS = String(pctH).padStart(2, "0");
+    const rwS = String(rw).padStart(3, "0");
+    const rhS = String(rh).padStart(3, "0");
+    w.textContent = `${pctWS}% x ${pctHS}% | ${rwS}px x ${rhS}px`;
 }
 
 function parseRatioLabel(label, landscape) {
@@ -399,8 +403,8 @@ function buildUI(node) {
     img.draggable = false;
 
     const emptyHint = document.createElement("div");
-    emptyHint.textContent = "Execute the node to display image";
-    emptyHint.style.cssText = "position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); color:rgba(220,230,240,0.62); font-size:13px; font-weight:500; text-align:center; pointer-events:none; user-select:none;";
+    emptyHint.textContent = "Execute the node\nto display image";
+    emptyHint.style.cssText = "position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); color:rgba(220,230,240,0.62); font-size:13px; font-weight:500; line-height:1.2; white-space:pre-line; text-align:center; pointer-events:none; user-select:none;";
 
     const overlay = document.createElement("div");
     overlay.style.cssText = `position:absolute; inset:${CANVAS_PAD}px; pointer-events:none;`;
@@ -824,29 +828,36 @@ app.registerExtension({
             const ui = buildUI(this);
             this._dragCropUI = ui;
 
-            if (!getWidget(this, "crop_info_display")) {
-                const infoWidget = this.addWidget("text", "crop_info_display", "--", () => {}, {});
-                if (infoWidget?.inputEl) {
-                    infoWidget.inputEl.readOnly = true;
-                }
-            }
+            const panelEl = document.createElement("div");
+            panelEl.style.cssText = "display:flex; flex-direction:column; width:100%; height:100%; box-sizing:border-box;";
 
-            const domWidget = this.addDOMWidget("drag_crop_preview", "customwidget", ui.state.root, {
+            const infoEl = document.createElement("div");
+            infoEl.textContent = "--";
+            infoEl.style.cssText = "height:100%; display:flex; align-items:center; justify-content:center; color:rgba(220,230,240,0.8); font-size:12px; font-weight:600; font-family:'Cascadia Mono','Consolas','Courier New',monospace; user-select:none; pointer-events:none;";
+            this._dragCropInfoEl = infoEl;
+
+            panelEl.appendChild(ui.state.root);
+            panelEl.appendChild(infoEl);
+
+            const domWidget = this.addDOMWidget("drag_crop_preview", "customwidget", panelEl, {
                 serialize: false,
                 hideOnZoom: false,
             });
             // Keep a stable minimum; do not depend on current node height or it will ratchet upward.
-            domWidget.computeSize = (w) => [Math.max(120, w), 120];
+            domWidget.computeSize = (w) => [Math.max(120, w), 120 + INFO_ROW_WIDGET_H];
 
             clampNodeSize(this);
 
             const resizeRoot = () => {
                 const width = Math.max(120, (this.size?.[0] || NODE_MIN_W) - 22);
-                const hasInfoWidget = !!getWidget(this, "crop_info_display");
-                const reserved = 205 + (hasInfoWidget ? INFO_WIDGET_RESERVED_H : 0);
-                const height = Math.max(120, (this.size?.[1] || NODE_MIN_H) - reserved);
+                const reserved = 205 + INFO_ROW_WIDGET_H;
+                const previewHeight = Math.max(120, (this.size?.[1] || NODE_MIN_H) - reserved);
+                const totalHeight = previewHeight + INFO_ROW_WIDGET_H;
+                panelEl.style.width = `${width}px`;
+                panelEl.style.height = `${totalHeight}px`;
                 ui.state.root.style.width = `${width}px`;
-                ui.state.root.style.height = `${height}px`;
+                ui.state.root.style.height = `${previewHeight}px`;
+                infoEl.style.height = `${INFO_ROW_WIDGET_H}px`;
                 ui.redraw();
             };
             resizeRoot();
@@ -870,10 +881,24 @@ app.registerExtension({
                 };
             };
 
-            wireWidget("crop_left", () => { syncRectFromWidgets(this, ui.state); ui.redraw(); });
-            wireWidget("crop_right", () => { syncRectFromWidgets(this, ui.state); ui.redraw(); });
-            wireWidget("crop_top", () => { syncRectFromWidgets(this, ui.state); ui.redraw(); });
-            wireWidget("crop_bottom", () => { syncRectFromWidgets(this, ui.state); ui.redraw(); });
+            const onNumericCropChanged = (handle) => {
+                syncRectFromWidgets(this, ui.state);
+
+                const ratio = parseRatioLabel(getWidget(this, "aspect_ratio")?.value, !!getWidget(this, "landscape")?.value);
+                if (ratio) {
+                    applyRatioForHandle(ui.state.rect, handle, ratio, ui.state.imageW, ui.state.imageH);
+                    updateWidgetValues(this, ui.state);
+                } else {
+                    persistCropState(this, ui.state);
+                }
+
+                ui.redraw();
+            };
+
+            wireWidget("crop_left", () => onNumericCropChanged("w"));
+            wireWidget("crop_right", () => onNumericCropChanged("e"));
+            wireWidget("crop_top", () => onNumericCropChanged("n"));
+            wireWidget("crop_bottom", () => onNumericCropChanged("s"));
             wireWidget("aspect_ratio", () => ui.applyAspectFromWidgets());
             wireWidget("landscape", () => ui.applyAspectFromWidgets());
 
