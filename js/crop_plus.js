@@ -98,6 +98,10 @@ function getWidget(node, name) {
     return node.widgets?.find((w) => w?.name === name) || null;
 }
 
+function getCropWidget(node, name) {
+    return getWidget(node, name) || getWidget(node, `crop_${name}`);
+}
+
 function updateInfoWidget(node, state) {
     const w = node._dragCropInfoEl;
     if (!w) return;
@@ -307,19 +311,23 @@ function applyRatioForHandle(rect, handle, ratio, w, h) {
 }
 
 function updateWidgetValues(node, state) {
-    getWidget(node, "crop_left").value = state.rect.left;
-    getWidget(node, "crop_right").value = state.rect.right;
-    getWidget(node, "crop_top").value = state.rect.top;
-    getWidget(node, "crop_bottom").value = state.rect.bottom;
+    const wl = getCropWidget(node, "left");
+    const wr = getCropWidget(node, "right");
+    const wt = getCropWidget(node, "top");
+    const wb = getCropWidget(node, "bottom");
+    if (wl) wl.value = state.rect.left;
+    if (wr) wr.value = state.rect.right;
+    if (wt) wt.value = state.rect.top;
+    if (wb) wb.value = state.rect.bottom;
     state._persistCrop?.();
     node.setDirtyCanvas?.(true, true);
 }
 
 function syncRectFromWidgets(node, state) {
-    state.rect.left = Number(getWidget(node, "crop_left")?.value ?? 0);
-    state.rect.right = Number(getWidget(node, "crop_right")?.value ?? state.imageW);
-    state.rect.top = Number(getWidget(node, "crop_top")?.value ?? 0);
-    state.rect.bottom = Number(getWidget(node, "crop_bottom")?.value ?? state.imageH);
+    state.rect.left = Number(getCropWidget(node, "left")?.value ?? 0);
+    state.rect.right = Number(getCropWidget(node, "right")?.value ?? state.imageW);
+    state.rect.top = Number(getCropWidget(node, "top")?.value ?? 0);
+    state.rect.bottom = Number(getCropWidget(node, "bottom")?.value ?? state.imageH);
     clampRect(state.rect, state.imageW, state.imageH);
 }
 
@@ -356,10 +364,10 @@ function ensurePersistState(node) {
 
 function persistCropState(node, state) {
     const p = ensurePersistState(node);
-    p.crop_left = state.rect.left;
-    p.crop_right = state.rect.right;
-    p.crop_top = state.rect.top;
-    p.crop_bottom = state.rect.bottom;
+    p.left = state.rect.left;
+    p.right = state.rect.right;
+    p.top = state.rect.top;
+    p.bottom = state.rect.bottom;
     p.has_saved_crop = true;
 }
 
@@ -376,10 +384,10 @@ function getNodeCacheKey(node) {
 }
 
 function hasLikelySavedCrop(node) {
-    const left = Number(getWidget(node, "crop_left")?.value ?? 0);
-    const right = Number(getWidget(node, "crop_right")?.value ?? 640);
-    const top = Number(getWidget(node, "crop_top")?.value ?? 0);
-    const bottom = Number(getWidget(node, "crop_bottom")?.value ?? 480);
+    const left = Number(getCropWidget(node, "left")?.value ?? 0);
+    const right = Number(getCropWidget(node, "right")?.value ?? 640);
+    const top = Number(getCropWidget(node, "top")?.value ?? 0);
+    const bottom = Number(getCropWidget(node, "bottom")?.value ?? 480);
     if (![left, right, top, bottom].every(Number.isFinite)) return false;
     return !(left === 0 && right === 640 && top === 0 && bottom === 480);
 }
@@ -778,10 +786,14 @@ function buildUI(node) {
                 state.imageKey = imageKey;
                 state.signature = signature;
                 syncRectFromWidgets(node, state);
-                if (Number.isFinite(info.crop_left)) state.rect.left = Number(info.crop_left);
-                if (Number.isFinite(info.crop_right)) state.rect.right = Number(info.crop_right);
-                if (Number.isFinite(info.crop_top)) state.rect.top = Number(info.crop_top);
-                if (Number.isFinite(info.crop_bottom)) state.rect.bottom = Number(info.crop_bottom);
+                if (Number.isFinite(info.left)) state.rect.left = Number(info.left);
+                else if (Number.isFinite(info.crop_left)) state.rect.left = Number(info.crop_left);
+                if (Number.isFinite(info.right)) state.rect.right = Number(info.right);
+                else if (Number.isFinite(info.crop_right)) state.rect.right = Number(info.crop_right);
+                if (Number.isFinite(info.top)) state.rect.top = Number(info.top);
+                else if (Number.isFinite(info.crop_top)) state.rect.top = Number(info.crop_top);
+                if (Number.isFinite(info.bottom)) state.rect.bottom = Number(info.bottom);
+                else if (Number.isFinite(info.crop_bottom)) state.rect.bottom = Number(info.crop_bottom);
             } else if (isNewImage) {
                 state.imageKey = imageKey;
                 state.signature = signature;
@@ -789,13 +801,19 @@ function buildUI(node) {
                 state.rect.right = state.imageW;
                 state.rect.top = 0;
                 state.rect.bottom = state.imageH;
+                const aspectWidget = getWidget(node, "aspect_ratio");
+                if (aspectWidget) aspectWidget.value = "None";
                 updateWidgetValues(node, state);
             } else {
                 syncRectFromWidgets(node, state);
-                if (Number.isFinite(info.crop_left)) state.rect.left = Number(info.crop_left);
-                if (Number.isFinite(info.crop_right)) state.rect.right = Number(info.crop_right);
-                if (Number.isFinite(info.crop_top)) state.rect.top = Number(info.crop_top);
-                if (Number.isFinite(info.crop_bottom)) state.rect.bottom = Number(info.crop_bottom);
+                if (Number.isFinite(info.left)) state.rect.left = Number(info.left);
+                else if (Number.isFinite(info.crop_left)) state.rect.left = Number(info.crop_left);
+                if (Number.isFinite(info.right)) state.rect.right = Number(info.right);
+                else if (Number.isFinite(info.crop_right)) state.rect.right = Number(info.crop_right);
+                if (Number.isFinite(info.top)) state.rect.top = Number(info.top);
+                else if (Number.isFinite(info.crop_top)) state.rect.top = Number(info.crop_top);
+                if (Number.isFinite(info.bottom)) state.rect.bottom = Number(info.bottom);
+                else if (Number.isFinite(info.crop_bottom)) state.rect.bottom = Number(info.crop_bottom);
             }
 
             clampRect(state.rect, state.imageW, state.imageH);
@@ -817,9 +835,9 @@ function buildUI(node) {
 }
 
 app.registerExtension({
-    name: "FBnodes.DragCropPlus",
+    name: "FBnodes.CropImagePlus",
     beforeRegisterNodeDef(nodeType, nodeData) {
-        if (nodeData?.name !== "DragCropPlus") return;
+        if (nodeData?.name !== "CropImagePlus") return;
 
         const onNodeCreated = nodeType.prototype.onNodeCreated;
         nodeType.prototype.onNodeCreated = function () {
@@ -895,18 +913,18 @@ app.registerExtension({
                 ui.redraw();
             };
 
-            wireWidget("crop_left", () => onNumericCropChanged("w"));
-            wireWidget("crop_right", () => onNumericCropChanged("e"));
-            wireWidget("crop_top", () => onNumericCropChanged("n"));
-            wireWidget("crop_bottom", () => onNumericCropChanged("s"));
+            wireWidget("left", () => onNumericCropChanged("w"));
+            wireWidget("right", () => onNumericCropChanged("e"));
+            wireWidget("top", () => onNumericCropChanged("n"));
+            wireWidget("bottom", () => onNumericCropChanged("s"));
             wireWidget("aspect_ratio", () => ui.applyAspectFromWidgets());
             wireWidget("landscape", () => ui.applyAspectFromWidgets());
 
             const persistAfterWidget = () => persistCropState(this, ui.state);
-            wireWidget("crop_left", persistAfterWidget);
-            wireWidget("crop_right", persistAfterWidget);
-            wireWidget("crop_top", persistAfterWidget);
-            wireWidget("crop_bottom", persistAfterWidget);
+            wireWidget("left", persistAfterWidget);
+            wireWidget("right", persistAfterWidget);
+            wireWidget("top", persistAfterWidget);
+            wireWidget("bottom", persistAfterWidget);
 
             ui.redraw();
             return r;
@@ -945,15 +963,15 @@ app.registerExtension({
                 }
 
                 if (p?.has_saved_crop) {
-                    const left = Number(p.crop_left);
-                    const right = Number(p.crop_right);
-                    const top = Number(p.crop_top);
-                    const bottom = Number(p.crop_bottom);
+                    const left = Number(p.left ?? p.crop_left);
+                    const right = Number(p.right ?? p.crop_right);
+                    const top = Number(p.top ?? p.crop_top);
+                    const bottom = Number(p.bottom ?? p.crop_bottom);
                     if ([left, right, top, bottom].every(Number.isFinite)) {
-                        const wl = getWidget(this, "crop_left");
-                        const wr = getWidget(this, "crop_right");
-                        const wt = getWidget(this, "crop_top");
-                        const wb = getWidget(this, "crop_bottom");
+                        const wl = getCropWidget(this, "left");
+                        const wr = getCropWidget(this, "right");
+                        const wt = getCropWidget(this, "top");
+                        const wb = getCropWidget(this, "bottom");
                         if (wl) wl.value = left;
                         if (wr) wr.value = right;
                         if (wt) wt.value = top;

@@ -1,5 +1,5 @@
 """
-DragCropPlus - interactive crop node with aspect-ratio presets.
+CropImagePlus - interactive crop node with aspect-ratio presets.
 """
 
 from __future__ import annotations
@@ -134,15 +134,15 @@ def _preview_from_image_or_mask(image: Optional[torch.Tensor], mask: Optional[to
     return preview, 64, 64, "none"
 
 
-class DragCropPlus:
+class CropImagePlus:
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "crop_left": ("INT", {"default": 0, "min": 0, "max": 999999, "step": 1}),
-                "crop_right": ("INT", {"default": 640, "min": 1, "max": 999999, "step": 1}),
-                "crop_top": ("INT", {"default": 0, "min": 0, "max": 999999, "step": 1}),
-                "crop_bottom": ("INT", {"default": 480, "min": 1, "max": 999999, "step": 1}),
+                "left": ("INT", {"default": 0, "min": 0, "max": 999999, "step": 1}),
+                "right": ("INT", {"default": 640, "min": 1, "max": 999999, "step": 1}),
+                "top": ("INT", {"default": 0, "min": 0, "max": 999999, "step": 1}),
+                "bottom": ("INT", {"default": 480, "min": 1, "max": 999999, "step": 1}),
                 "aspect_ratio": (ASPECT_RATIO_PRESETS, {"default": "None"}),
                 "landscape": ("BOOLEAN", {"default": False}),
             },
@@ -153,16 +153,16 @@ class DragCropPlus:
         }
 
     RETURN_TYPES = ("IMAGE", "MASK")
-    RETURN_NAMES = ("image", "mask_out")
+    RETURN_NAMES = ("image", "mask")
     FUNCTION = "crop"
     OUTPUT_NODE = True
     CATEGORY = "FBnodes"
     DESCRIPTION = "Interactive crop with draggable box and optional aspect-ratio lock."
 
-    def crop(self, crop_left, crop_right, crop_top, crop_bottom, aspect_ratio, landscape, image=None, mask=None):
+    def crop(self, left, right, top, bottom, aspect_ratio, landscape, image=None, mask=None):
         preview, width, height, signature = _preview_from_image_or_mask(image, mask)
 
-        left, right, top, bottom = _clamp_crop(crop_left, crop_right, crop_top, crop_bottom, width, height)
+        left, right, top, bottom = _clamp_crop(left, right, top, bottom, width, height)
 
         ratio = _parse_ratio(aspect_ratio)
         if ratio is not None and landscape:
@@ -187,10 +187,10 @@ class DragCropPlus:
                     "width": width,
                     "height": height,
                     "signature": signature,
-                    "crop_left": left,
-                    "crop_right": right,
-                    "crop_top": top,
-                    "crop_bottom": bottom,
+                    "left": left,
+                    "right": right,
+                    "top": top,
+                    "bottom": bottom,
                     "aspect_ratio": aspect_ratio,
                     "landscape": bool(landscape),
                 }]

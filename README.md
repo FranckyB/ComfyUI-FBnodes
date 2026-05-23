@@ -1,6 +1,6 @@
 # ComfyUI-FBnodes
 
-A grab bag of handy ComfyUI nodes I built for my own workflows and figured someone else might enjoy too. Video saving, universal switches, LoRA helpers, animated latent previews, and whatever else I end up needing next.
+A grab bag of handy ComfyUI nodes I built for my own workflows and figured someone else might enjoy too. Video saving, universal switches, LoRA helpers, animated latent previews, Crop tool and whatever else I end up needing next.
 
 ## Nodes
 
@@ -32,6 +32,14 @@ Video loader with the same file browser and UX as Load Image+, but for videos. O
 - **Video Preview**: Click-to-enlarge modal with playback controls
 - **Drag-and-Drop Support**: Drop video files directly onto the node
 - **VIDEO Output**: Outputs a VIDEO, ready to pipe into Get Video Components+
+
+### Crop Image+
+Interactive crop node with draggable crop box, optional aspect-ratio lock, and live preview.
+
+- **Interactive crop UI**: Drag the crop box and handles directly in-node
+- **Aspect ratio lock**: Includes ratio presets with landscape toggle
+- **Auto reset on new image**: New input image resets crop to full frame and ratio to `None`
+- **Dual output**: Crops both IMAGE and MASK outputs together
 
 ### VACE Stitcher
 Generate smooth AI-powered transitions between video clips using VACE conditioning and 2-stage sampling with a single node featuring a built-in clip browser, drag-to-reorder list, and cached .latent transitions for resumability.
@@ -159,6 +167,9 @@ pip install -r ComfyUI-FBnodes/requirements.txt
 GPL-3.0
 
 ## Changelog
+
+### version 1.3.0
+- **Crop Image+**: Added a new interactive crop node.
 
 ### version 1.2.00
 - **Repath Models**  Added a new repath utility.  Allowing for 1 click repathing of all models and loras.  Uses minimal fuzzy logic to find models with different quantizations or versions.
