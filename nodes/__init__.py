@@ -12,3 +12,4 @@ from .vace_stitcher import VACEStitcher, VACEStitcher_Options
 from .show_text import ShowTextPlus
 from .save_image import SaveImagePlus
 from .crop_image import CropImagePlus
+from .lora_list import LoraListPlus
