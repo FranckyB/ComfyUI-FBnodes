@@ -53,6 +53,9 @@ function openLoraBrowserModal(initialPath, onDone) {
     let parentPath = null;
     let roots = [];
     const selected = new Set();
+    let visibleFilePaths = [];
+    let fileDragSelecting = false;
+    let fileDragValue = true;
 
     const overlay = document.createElement("div");
     overlay.style.cssText = "position:fixed;inset:0;background:rgba(0,0,0,0.76);display:flex;align-items:center;justify-content:center;z-index:10000;";
@@ -115,6 +118,18 @@ function openLoraBrowserModal(initialPath, onDone) {
     const footer = document.createElement("div");
     footer.style.cssText = "padding:10px 14px;border-top:1px solid rgba(255,255,255,0.12);display:flex;justify-content:space-between;align-items:center;gap:10px;";
 
+    const footerLeft = document.createElement("div");
+    footerLeft.style.cssText = "display:flex;align-items:center;gap:12px;min-width:0;";
+
+    const selectAllWrap = document.createElement("label");
+    selectAllWrap.style.cssText = "display:flex;align-items:center;gap:6px;color:#c7d1dc;font-size:12px;cursor:pointer;user-select:none;";
+    const selectAllToggle = document.createElement("input");
+    selectAllToggle.type = "checkbox";
+    const selectAllText = document.createElement("span");
+    selectAllText.textContent = "Select All";
+    selectAllWrap.appendChild(selectAllToggle);
+    selectAllWrap.appendChild(selectAllText);
+
     const selectedCount = document.createElement("div");
     selectedCount.style.cssText = "color:#a9b6c4;font-size:12px;";
 
@@ -131,7 +146,9 @@ function openLoraBrowserModal(initialPath, onDone) {
 
     actions.appendChild(cancelBtn);
     actions.appendChild(addBtn);
-    footer.appendChild(selectedCount);
+    footerLeft.appendChild(selectAllWrap);
+    footerLeft.appendChild(selectedCount);
+    footer.appendChild(footerLeft);
     footer.appendChild(actions);
 
     modal.appendChild(header);
@@ -142,7 +159,29 @@ function openLoraBrowserModal(initialPath, onDone) {
     document.body.appendChild(overlay);
 
     function cleanup() {
+        document.removeEventListener("mouseup", onFileDragEnd);
         overlay.remove();
+    }
+
+    function updateSelectAllToggle() {
+        if (!visibleFilePaths.length) {
+            selectAllToggle.checked = false;
+            selectAllToggle.indeterminate = false;
+            selectAllToggle.disabled = true;
+            return;
+        }
+        selectAllToggle.disabled = false;
+        const selectedCountVisible = visibleFilePaths.filter((p) => selected.has(p)).length;
+        if (selectedCountVisible === 0) {
+            selectAllToggle.checked = false;
+            selectAllToggle.indeterminate = false;
+        } else if (selectedCountVisible === visibleFilePaths.length) {
+            selectAllToggle.checked = true;
+            selectAllToggle.indeterminate = false;
+        } else {
+            selectAllToggle.checked = false;
+            selectAllToggle.indeterminate = true;
+        }
     }
 
     function updateSelectedCount() {
@@ -150,6 +189,25 @@ function openLoraBrowserModal(initialPath, onDone) {
         addBtn.disabled = selected.size === 0;
         addBtn.style.opacity = selected.size === 0 ? "0.6" : "1";
         addBtn.style.cursor = selected.size === 0 ? "default" : "pointer";
+        updateSelectAllToggle();
+    }
+
+    function setFileSelected(path, isSelected) {
+        if (isSelected) selected.add(path);
+        else selected.delete(path);
+
+        const row = itemsList.querySelector(`[data-file-path="${encodeURIComponent(path)}"]`);
+        if (row) {
+            const cb = row.querySelector("input[type='checkbox']");
+            if (cb) cb.checked = isSelected;
+            row.style.background = isSelected ? "rgba(66,153,225,0.22)" : "transparent";
+        }
+    }
+
+    function onFileDragEnd() {
+        fileDragSelecting = false;
+        updateSelectedCount();
+        document.removeEventListener("mouseup", onFileDragEnd);
     }
 
     function renderRootsSelect() {
@@ -174,15 +232,15 @@ function openLoraBrowserModal(initialPath, onDone) {
     }
 
     function makeFileRow(file) {
-        const row = document.createElement("label");
+        const row = document.createElement("div");
+        row.dataset.filePath = encodeURIComponent(file.path);
         row.style.cssText = "display:flex;align-items:center;gap:8px;padding:7px 8px;border-radius:6px;color:#dce6f2;cursor:pointer;";
 
         const cb = document.createElement("input");
         cb.type = "checkbox";
         cb.checked = selected.has(file.path);
         cb.onchange = () => {
-            if (cb.checked) selected.add(file.path);
-            else selected.delete(file.path);
+            setFileSelected(file.path, cb.checked);
             updateSelectedCount();
         };
 
@@ -193,8 +251,32 @@ function openLoraBrowserModal(initialPath, onDone) {
 
         row.appendChild(cb);
         row.appendChild(txt);
-        row.onmouseenter = () => { row.style.background = "rgba(66,153,225,0.16)"; };
-        row.onmouseleave = () => { row.style.background = "transparent"; };
+        row.onmouseenter = () => {
+            if (fileDragSelecting) {
+                setFileSelected(file.path, fileDragValue);
+                updateSelectedCount();
+            } else if (selected.has(file.path)) {
+                row.style.background = "rgba(66,153,225,0.22)";
+            } else {
+                row.style.background = "rgba(66,153,225,0.16)";
+            }
+        };
+        row.onmouseleave = () => {
+            row.style.background = selected.has(file.path) ? "rgba(66,153,225,0.22)" : "transparent";
+        };
+
+        const startDragSelect = (e) => {
+            if (e.button !== 0) return;
+            e.preventDefault();
+            fileDragSelecting = true;
+            fileDragValue = !selected.has(file.path);
+            setFileSelected(file.path, fileDragValue);
+            updateSelectedCount();
+            document.addEventListener("mouseup", onFileDragEnd);
+        };
+
+        row.onmousedown = startDragSelect;
+        cb.onmousedown = startDragSelect;
 
         return row;
     }
@@ -226,6 +308,7 @@ function openLoraBrowserModal(initialPath, onDone) {
 
             const dirs = Array.isArray(data.dirs) ? data.dirs : [];
             const files = Array.isArray(data.files) ? data.files : [];
+            visibleFilePaths = files.map((f) => f.path);
 
             if (!dirs.length && !files.length) {
                 const empty = document.createElement("div");
@@ -238,6 +321,7 @@ function openLoraBrowserModal(initialPath, onDone) {
             for (const f of files) itemsList.appendChild(makeFileRow(f));
         } catch (e) {
             itemsList.innerHTML = "";
+            visibleFilePaths = [];
             const err = document.createElement("div");
             err.textContent = `Error: ${e.message || e}`;
             err.style.cssText = "padding:8px;color:#ff9090;font-size:12px;";
@@ -245,6 +329,12 @@ function openLoraBrowserModal(initialPath, onDone) {
         }
         updateSelectedCount();
     }
+
+    selectAllToggle.onchange = () => {
+        const next = !!selectAllToggle.checked;
+        for (const p of visibleFilePaths) setFileSelected(p, next);
+        updateSelectedCount();
+    };
 
     rootPathInput.addEventListener("keydown", (e) => {
         if (e.key !== "Enter") return;
@@ -323,6 +413,15 @@ function ensureUi(node) {
         flex-shrink:0;display:flex;gap:6px;
     `;
 
+    const nodeSelectAllWrap = document.createElement("label");
+    nodeSelectAllWrap.style.cssText = "display:flex;align-items:center;gap:5px;color:rgba(255,255,255,0.65);font-size:11px;user-select:none;padding:0 4px;";
+    const nodeSelectAllToggle = document.createElement("input");
+    nodeSelectAllToggle.type = "checkbox";
+    const nodeSelectAllText = document.createElement("span");
+    nodeSelectAllText.textContent = "All";
+    nodeSelectAllWrap.appendChild(nodeSelectAllToggle);
+    nodeSelectAllWrap.appendChild(nodeSelectAllText);
+
     const addBtn = document.createElement("button");
     addBtn.textContent = "Add LoRAs";
     addBtn.style.cssText = `
@@ -357,6 +456,7 @@ function ensureUi(node) {
         clearBtn.style.color = "rgba(255,255,255,0.5)";
     };
 
+    footer.appendChild(nodeSelectAllWrap);
     footer.appendChild(addBtn);
     footer.appendChild(clearBtn);
 
@@ -370,10 +470,13 @@ function ensureUi(node) {
         countLabel,
         addBtn,
         clearBtn,
+        nodeSelectAllToggle,
         items: [],
         lastPath: "",
         dragIndex: null,
         dragOverIndex: null,
+        enableDragActive: false,
+        enableDragValue: true,
     };
 
     node._loraListUi = ui;
@@ -409,9 +512,65 @@ function renderList(node) {
     const ui = node._loraListUi;
     if (!ui) return;
 
+    const updateHeaderAndToggle = () => {
+        const enabled = ui.items.filter((e) => e.enabled !== false).length;
+        const total = ui.items.length;
+        ui.countLabel.textContent = total > 0 ? `${enabled}/${total} enabled` : "";
+        if (!total) {
+            ui.nodeSelectAllToggle.checked = false;
+            ui.nodeSelectAllToggle.indeterminate = false;
+        } else if (enabled === 0) {
+            ui.nodeSelectAllToggle.checked = false;
+            ui.nodeSelectAllToggle.indeterminate = false;
+        } else if (enabled === total) {
+            ui.nodeSelectAllToggle.checked = true;
+            ui.nodeSelectAllToggle.indeterminate = false;
+        } else {
+            ui.nodeSelectAllToggle.checked = false;
+            ui.nodeSelectAllToggle.indeterminate = true;
+        }
+    };
+
+    const getRowColors = (isEnabled) => ({
+        bg: isEnabled ? "rgba(50, 112, 163, 0.35)" : "rgba(45, 55, 72, 0.5)",
+        border: isEnabled ? "rgba(66, 153, 225, 0.4)" : "rgba(226, 232, 240, 0.1)",
+        text: isEnabled ? "rgba(226, 232, 240, 0.95)" : "rgba(226, 232, 240, 0.4)",
+    });
+
+    const applyRowState = (row, isEnabled) => {
+        const c = getRowColors(isEnabled);
+        row.dataset.enabled = isEnabled ? "1" : "0";
+        row.style.background = c.bg;
+        row.style.borderColor = c.border;
+        const name = row.querySelector(".lora-name");
+        if (name) name.style.color = c.text;
+        const cb = row.querySelector("input[type='checkbox']");
+        if (cb) cb.checked = isEnabled;
+    };
+
+    const setEnabledAt = (idx, value) => {
+        if (idx < 0 || idx >= ui.items.length) return;
+        ui.items[idx].enabled = value;
+        const row = ui.list.querySelector(`[data-clip-idx="${idx}"]`);
+        if (row) applyRowState(row, value);
+        updateHeaderAndToggle();
+        syncNode(node);
+    };
+
+    const stopEnableDrag = () => {
+        ui.enableDragActive = false;
+        document.removeEventListener("mouseup", stopEnableDrag);
+    };
+
+    const startEnableDrag = (idx) => {
+        ui.enableDragActive = true;
+        ui.enableDragValue = !(ui.items[idx]?.enabled !== false);
+        setEnabledAt(idx, ui.enableDragValue);
+        document.addEventListener("mouseup", stopEnableDrag);
+    };
+
     ui.list.innerHTML = "";
-    const enabledCount = ui.items.filter((e) => e.enabled !== false).length;
-    ui.countLabel.textContent = ui.items.length > 0 ? `${enabledCount}/${ui.items.length} enabled` : "";
+    updateHeaderAndToggle();
 
     if (!ui.items.length) {
         const hint = document.createElement("div");
@@ -432,17 +591,16 @@ function renderList(node) {
 
     ui.items.forEach((item, idx) => {
         const isEnabled = item.enabled !== false;
-        const bgColor = isEnabled ? "rgba(50, 112, 163, 0.35)" : "rgba(45, 55, 72, 0.5)";
-        const borderColor = isEnabled ? "rgba(66, 153, 225, 0.4)" : "rgba(226, 232, 240, 0.1)";
-        const textColor = isEnabled ? "rgba(226, 232, 240, 0.95)" : "rgba(226, 232, 240, 0.4)";
+        const colors = getRowColors(isEnabled);
 
         const row = document.createElement("div");
         row.dataset.clipIdx = idx;
+        row.dataset.enabled = isEnabled ? "1" : "0";
         row.style.cssText = `
             display:flex;align-items:center;gap:4px;padding:3px 4px;
-            background:${bgColor};border-radius:4px;
-            border:1px solid ${borderColor};
-            font-size:11px;color:${textColor};min-height:24px;
+            background:${colors.bg};border-radius:4px;
+            border:1px solid ${colors.border};
+            font-size:11px;color:${colors.text};min-height:24px;
             transition:background 0.15s ease, border-color 0.15s ease;
         `;
         row.title = item.path;
@@ -518,8 +676,13 @@ function renderList(node) {
         checkbox.title = "Enable/disable this LoRA";
         checkbox.style.cssText = "cursor:pointer;flex-shrink:0;accent-color:rgba(66,153,225,0.9);";
         checkbox.onchange = () => {
-            item.enabled = checkbox.checked;
-            renderList(node);
+            setEnabledAt(idx, checkbox.checked);
+        };
+        checkbox.onmousedown = (e) => {
+            if (e.button !== 0) return;
+            e.preventDefault();
+            e.stopPropagation();
+            startEnableDrag(idx);
         };
 
         const textWrap = document.createElement("div");
@@ -527,9 +690,10 @@ function renderList(node) {
         textWrap.title = item.path;
 
         const name = document.createElement("div");
+        name.className = "lora-name";
         name.textContent = basename(item.path);
         name.style.cssText = `flex:1;overflow:hidden;text-overflow:ellipsis;
-            white-space:nowrap;color:${textColor};cursor:default;font-size:11px;`;
+            white-space:nowrap;color:${colors.text};cursor:default;font-size:11px;`;
         name.title = item.path;
 
         textWrap.appendChild(name);
@@ -562,20 +726,41 @@ function renderList(node) {
         row.appendChild(remove);
 
         row.onmouseenter = () => {
+            if (ui.enableDragActive) {
+                setEnabledAt(idx, ui.enableDragValue);
+                return;
+            }
             if (ui.dragIndex === null) {
-                row.style.background = isEnabled ? "rgba(50, 112, 163, 0.55)" : "rgba(50, 112, 163, 0.25)";
+                const enabled = row.dataset.enabled === "1";
+                row.style.background = enabled ? "rgba(50, 112, 163, 0.55)" : "rgba(50, 112, 163, 0.25)";
                 row.style.borderColor = "rgba(66, 153, 225, 0.6)";
             }
         };
         row.onmouseleave = () => {
             if (ui.dragIndex === null) {
-                row.style.background = bgColor;
-                row.style.borderColor = borderColor;
+                const enabled = row.dataset.enabled === "1";
+                const c = getRowColors(enabled);
+                row.style.background = c.bg;
+                row.style.borderColor = c.border;
             }
+        };
+
+        row.onmousedown = (e) => {
+            if (e.button !== 0) return;
+            if (e.target === handle || e.target === remove) return;
+            startEnableDrag(idx);
         };
 
         ui.list.appendChild(row);
     });
+
+    ui.nodeSelectAllToggle.onchange = () => {
+        const next = !!ui.nodeSelectAllToggle.checked;
+        ui.items.forEach((_, i) => {
+            ui.items[i].enabled = next;
+        });
+        renderList(node);
+    };
 
     node.setDirtyCanvas?.(true, true);
     syncNode(node);
