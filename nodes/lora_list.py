@@ -135,11 +135,11 @@ class LoraListPlus:
         }
 
     CATEGORY = "FBnodes"
-    DESCRIPTION = "Build an ordered LoRA list with enable/disable and output enabled paths as multiline text."
-    RETURN_TYPES = ("STRING",)
-    RETURN_NAMES = ("loras",)
+    DESCRIPTION = "Build an ordered LoRA list with enable/disable and output enabled paths as multiline text.\nFor use with Outputlist Combiner for LoRA testing"
+    RETURN_TYPES = ("STRING", "STRING")
+    RETURN_NAMES = ("loras", "names")
     FUNCTION = "build"
-    OUTPUT_NODE = True
+    OUTPUT_NODE = False
 
     def build(self, loras_state: str, loras_text: str):
         enabled_paths = []
@@ -163,7 +163,11 @@ class LoraListPlus:
             enabled_paths = [line.strip() for line in loras_text.splitlines() if line.strip()]
 
         output = "\n".join(enabled_paths)
+        output_basename = "\n".join(
+            os.path.splitext(os.path.basename(path))[0]
+            for path in enabled_paths
+        )
         return {
             "ui": {"text": [output]},
-            "result": (output,),
+            "result": (output, output_basename),
         }

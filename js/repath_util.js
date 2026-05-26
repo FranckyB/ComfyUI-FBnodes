@@ -9,8 +9,6 @@ const MENU_MODE_DISABLED = "Disabled";
 const SEARCH_ICON_URL = new URL("./search.png", import.meta.url).href;
 const SETUP_GUARD_KEY = "__fbnodesRepathSetupDone";
 
-let lastRunState = "idle";
-
 function dedupeTopBarButtons() {
     const all = Array.from(document.querySelectorAll(`#${BUTTON_ID}, [data-fbnodes-repath-btn="1"]`));
     if (all.length <= 1) {
@@ -270,14 +268,6 @@ function setButtonBusy(button, busy) {
         return;
     }
 
-    if (lastRunState === "ok") {
-        button.innerHTML = `<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true" style="display:block"><path fill="currentColor" d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2m4.1 7.8l-4.8 5.6a1 1 0 0 1-1.5.1l-2-2a1 1 0 0 1 1.4-1.4l1.2 1.2l4.1-4.8a1 1 0 0 1 1.5 1.3"/></svg>`;
-        button.style.borderColor = "rgba(110, 220, 160, 0.75)";
-        button.style.background = "rgba(37, 120, 78, 0.45)";
-        button.title = "All model paths resolved on last run";
-        return;
-    }
-
     button.innerHTML = `<img src="${SEARCH_ICON_URL}" alt="" aria-hidden="true" style="display:block;width:100%;height:100%;object-fit:cover;border-radius:2px;"/>`;
     button.style.borderColor = "rgba(255,255,255,0.22)";
     button.style.background = "rgba(42, 118, 170, 0.35)";
@@ -430,12 +420,9 @@ async function runRemap(button) {
         }
 
         const applied = applyRemaps(result.updates);
-        const unresolvedCount = (result?.stats?.unresolved || 0) + (result?.stats?.ambiguous || 0);
-        lastRunState = unresolvedCount === 0 ? "ok" : "idle";
         showSummary(result, applied);
     } catch (err) {
         console.error("[FBnodes] Remap failed:", err);
-        lastRunState = "idle";
         showSummary(
             {
                 stats: { scanned: 0, remapped: 0, unchanged: 0, unresolved: 0, ambiguous: 0 },

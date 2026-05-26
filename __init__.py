@@ -2,7 +2,7 @@
 ComfyUI-FBnodes - Utility nodes for ComfyUI
 """
 
-__version__ = "1.3.0"
+__version__ = "1.3.2"
 __author__ = "François Beaudry"
 __license__ = "GPL-3.0"
 
@@ -61,7 +61,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "LoadVideoPlus": "Load Video+",
     "SaveImagePlus": "Save Image+",
     "SaveVideoPlus": "Save Video+",
-    "ShowTextPlus": "Show Text+",
+    "ShowTextPlus": "Show as Text",
     "SwitchAny": "Switch Any",
     "SwitchAnyBool": "Switch Any (Boolean)",
     "VACEStitcher": "VACE Stitcher",

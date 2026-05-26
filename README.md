@@ -112,6 +112,21 @@ Boolean switch — passes through `on_true` or `on_false` based on a condition t
 ### Apply LoRA+
 Apply a LORA_STACK (list of LoRA tuples) to a model and optional CLIP. Works with Prompt Manager Advanced's LoRA stack output.
 
+### LoRA List+
+Build a reorderable, toggleable list of LoRAs for quick testing workflows.
+
+- Browse folders and add `.safetensors` files from disk
+- Enable/disable individual LoRAs and drag to reorder
+- Outputs enabled entries as newline-separated full paths
+- Also outputs `basenames` (filename-only, extension removed), one per line
+
+### Show as Text
+Display any input as text in-node, with values persisted in the workflow.
+
+- Accepts any input type (`*`) and converts values to string internally
+- Useful for inspecting intermediate values without extra conversion nodes
+- Persists displayed text across workflow reloads and tab switching
+
 ## Missing Model Remap Tool
 Adds a top-bar button in ComfyUI: **Remap Missing Models**.
 
@@ -168,12 +183,15 @@ GPL-3.0
 
 ## Changelog
 
+### version 1.3.1
+- **Lora List+**: Utility node for testing Loras, allows adding loras to a list from anywhere on disk. Used with Outputlists-Combiner
+
 ### version 1.3.0
 - **Crop Image+**: Added a new interactive crop node.
 
 ### version 1.2.00
 - **Repath Models**  Added a new repath utility.  Allowing for 1 click repathing of all models and loras.  Uses minimal fuzzy logic to find models with different quantizations or versions.
-- **Show Text+**  Added a simple Show Text node, that unlike Preview  as Text, is saved with Workflow and is maintained when switching tabs.
+- **Show as Text**  Added a simple Show Text node, that unlike Preview  as Text, is saved with Workflow and is maintained when switching tabs.
 
 ### version 1.1.12
 - **Load Audio+**: Added a load audio node, similar to other loaders.  As the ability to trim the In and Out point.

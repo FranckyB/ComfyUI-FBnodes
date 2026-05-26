@@ -821,7 +821,7 @@ app.registerExtension({
             dom.computeSize = (width) => {
                 const ROW_H = 30;
                 const HEADER_FOOTER = 78;
-                const visibleRows = Math.max(3, Math.min(10, ui.items.length));
+                const visibleRows = 10;
                 const h = HEADER_FOOTER + visibleRows * ROW_H;
                 return [Math.max(260, width), h];
             };
