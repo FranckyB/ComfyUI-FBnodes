@@ -5,6 +5,7 @@ Save IMAGE tensors as PNG or JPG with date-token path expansion.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from datetime import datetime
@@ -106,10 +107,10 @@ class SaveImagePlus:
                 if not args.disable_metadata:
                     pnginfo = PngInfo()
                     if prompt is not None:
-                        pnginfo.add_text("prompt", str(prompt))
+                        pnginfo.add_text("prompt", json.dumps(prompt))
                     if extra_pnginfo is not None:
                         for k, v in extra_pnginfo.items():
-                            pnginfo.add_text(k, str(v))
+                            pnginfo.add_text(k, json.dumps(v))
                 pil_image.save(file_path, pnginfo=pnginfo, compress_level=4)
             else:
                 pil_image = pil_image.convert("RGB")
