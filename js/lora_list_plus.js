@@ -1,6 +1,29 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 
+const SETTING_DEFAULT_PATH = "FBnodes.LoraListDefaultPath";
+
+/**
+ * Return the path to open the browser at.
+ * Priority: per-node last_path > preference setting > first ComfyUI lora root.
+ */
+async function resolveInitialPath(savedPath) {
+    if (savedPath) return savedPath;
+
+    // Check the preference setting.
+    const pref = app.ui?.settings?.getSettingValue(SETTING_DEFAULT_PATH) || "";
+    if (typeof pref === "string" && pref.trim()) return pref.trim();
+
+    // Fall back to the first root returned by the backend (ComfyUI lora folder).
+    try {
+        const data = await fetchBrowser("");
+        if (Array.isArray(data.roots) && data.roots.length) return data.roots[0];
+    } catch {
+        // ignore
+    }
+    return "";
+}
+
 function getWidget(node, name) {
     return node.widgets?.find((w) => w?.name === name) || null;
 }
@@ -399,7 +422,7 @@ function ensureUi(node) {
     const list = document.createElement("div");
     list.style.cssText = `
         flex:1;overflow-y:auto;padding:4px 6px;display:flex;
-        flex-direction:column;gap:2px;min-height:0;
+        flex-direction:column;gap:2px;min-height:0;user-select:none;
     `;
     list.oncontextmenu = (e) => {
         e.preventDefault();
@@ -544,8 +567,6 @@ function renderList(node) {
         row.style.borderColor = c.border;
         const name = row.querySelector(".lora-name");
         if (name) name.style.color = c.text;
-        const cb = row.querySelector("input[type='checkbox']");
-        if (cb) cb.checked = isEnabled;
     };
 
     const setEnabledAt = (idx, value) => {
@@ -610,10 +631,9 @@ function renderList(node) {
         handle.style.cssText = `
             flex-shrink:0;width:16px;height:20px;cursor:grab;
             display:flex;align-items:center;justify-content:center;
-            color:rgba(255,255,255,0.3);font-size:11px;user-select:none;
-            letter-spacing:2px;line-height:1;
+            color:rgba(255,255,255,0.3);font-size:14px;user-select:none;
         `;
-        handle.textContent = "\u22EE\u22EE";
+        handle.textContent = "\u2630";
         handle.onmouseenter = () => { handle.style.color = "rgba(66,153,225,0.9)"; };
         handle.onmouseleave = () => { handle.style.color = "rgba(255,255,255,0.3)"; };
 
@@ -642,6 +662,10 @@ function renderList(node) {
                             ? "2px solid rgba(66,153,225,0.9)" : "";
                     });
                     ui.dragOverIndex = overIdx;
+                } else if (overIdx === ui.dragIndex) {
+                    // Dragged back to original slot — cancel the pending drop.
+                    rows.forEach((r) => { r.style.borderTop = ""; r.style.borderBottom = ""; });
+                    ui.dragOverIndex = null;
                 }
             };
 
@@ -668,21 +692,6 @@ function renderList(node) {
 
             document.addEventListener("mousemove", onMouseMove);
             document.addEventListener("mouseup", onMouseUp);
-        };
-
-        const checkbox = document.createElement("input");
-        checkbox.type = "checkbox";
-        checkbox.checked = isEnabled;
-        checkbox.title = "Enable/disable this LoRA";
-        checkbox.style.cssText = "cursor:pointer;flex-shrink:0;accent-color:rgba(66,153,225,0.9);";
-        checkbox.onchange = () => {
-            setEnabledAt(idx, checkbox.checked);
-        };
-        checkbox.onmousedown = (e) => {
-            if (e.button !== 0) return;
-            e.preventDefault();
-            e.stopPropagation();
-            startEnableDrag(idx);
         };
 
         const textWrap = document.createElement("div");
@@ -721,7 +730,6 @@ function renderList(node) {
         };
 
         row.appendChild(handle);
-        row.appendChild(checkbox);
         row.appendChild(textWrap);
         row.appendChild(remove);
 
@@ -748,6 +756,7 @@ function renderList(node) {
         row.onmousedown = (e) => {
             if (e.button !== 0) return;
             if (e.target === handle || e.target === remove) return;
+            e.preventDefault();
             startEnableDrag(idx);
         };
 
@@ -768,6 +777,16 @@ function renderList(node) {
 
 app.registerExtension({
     name: "FBnodes.LoraListPlus",
+    settings: [
+        {
+            id: SETTING_DEFAULT_PATH,
+            category: ["FBnodes", "2. LoRA List", "1. Default LoRA Path"],
+            name: "Default LoRA List Path",
+            tooltip: "Starting folder for the LoRA browser. Leave empty to use ComfyUI's default LoRA folder.",
+            type: "text",
+            defaultValue: "",
+        },
+    ],
     beforeRegisterNodeDef(nodeType, nodeData) {
         if (nodeData?.name !== "LoraListPlus") return;
 
@@ -795,8 +814,9 @@ app.registerExtension({
             ui.items = initial;
             ui.lastPath = String(this.properties?.fb_lora_list?.last_path || "");
 
-            ui.addBtn.onclick = () => {
-                openLoraBrowserModal(ui.lastPath, (selectedPaths, currentPath) => {
+            ui.addBtn.onclick = async () => {
+                const startPath = await resolveInitialPath(ui.lastPath);
+                openLoraBrowserModal(startPath, (selectedPaths, currentPath) => {
                     ui.lastPath = currentPath || ui.lastPath;
                     const seen = new Set(ui.items.map((x) => x.path));
                     for (const p of selectedPaths) {
