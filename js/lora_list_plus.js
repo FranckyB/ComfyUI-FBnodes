@@ -3,24 +3,56 @@ import { api } from "../../scripts/api.js";
 
 const SETTING_DEFAULT_PATH = "FBnodes.LoraListDefaultPath";
 
+function getPreferredPath() {
+    const pref = app.ui?.settings?.getSettingValue(SETTING_DEFAULT_PATH) || "";
+    return typeof pref === "string" ? pref.trim() : "";
+}
+
+async function getBrowserRoots() {
+    try {
+        const data = await fetchBrowser("");
+        return Array.isArray(data?.roots) ? data.roots : [];
+    } catch {
+        return [];
+    }
+}
+
+async function isValidBrowserPath(path) {
+    const value = String(path || "").trim();
+    if (!value) return false;
+    try {
+        const data = await fetchBrowser(value);
+        return data?.ok !== false && data?.mode === "browse";
+    } catch {
+        return false;
+    }
+}
+
 /**
  * Return the path to open the browser at.
  * Priority: per-node last_path > preference setting > first ComfyUI lora root.
  */
 async function resolveInitialPath(savedPath) {
-    if (savedPath) return savedPath;
+    const trimmedSaved = String(savedPath || "").trim();
+    const pref = getPreferredPath();
+    const roots = await getBrowserRoots();
+    const comfyRoot = roots[0] || "";
 
-    // Check the preference setting.
-    const pref = app.ui?.settings?.getSettingValue(SETTING_DEFAULT_PATH) || "";
-    if (typeof pref === "string" && pref.trim()) return pref.trim();
-
-    // Fall back to the first root returned by the backend (ComfyUI lora folder).
-    try {
-        const data = await fetchBrowser("");
-        if (Array.isArray(data.roots) && data.roots.length) return data.roots[0];
-    } catch {
-        // ignore
+    // Prefer per-node path, but only when it still exists.
+    if (trimmedSaved && await isValidBrowserPath(trimmedSaved)) {
+        return trimmedSaved;
     }
+
+    // Next preference path, if configured and valid.
+    if (pref && await isValidBrowserPath(pref)) {
+        return pref;
+    }
+
+    // Final default: first backend root (ComfyUI LoRA root).
+    if (comfyRoot) {
+        return comfyRoot;
+    }
+
     return "";
 }
 
@@ -75,6 +107,7 @@ function openLoraBrowserModal(initialPath, onDone) {
     let currentPath = initialPath || "";
     let parentPath = null;
     let roots = [];
+    let pathSuggestions = [];
     const selected = new Set();
     let visibleFilePaths = [];
     let fileDragSelecting = false;
@@ -103,14 +136,22 @@ function openLoraBrowserModal(initialPath, onDone) {
     const controls = document.createElement("div");
     controls.style.cssText = "padding:10px 14px;border-bottom:1px solid rgba(255,255,255,0.12);display:flex;gap:8px;align-items:center;";
 
+    const pathWrap = document.createElement("div");
+    pathWrap.style.cssText = "flex:1;min-width:0;position:relative;display:flex;align-items:stretch;";
+
     const rootPathInput = document.createElement("input");
-    const rootsList = document.createElement("datalist");
-    const rootsListId = `lora-roots-${Math.random().toString(36).slice(2)}`;
     rootPathInput.type = "text";
-    rootPathInput.setAttribute("list", rootsListId);
-    rootsList.id = rootsListId;
     rootPathInput.placeholder = "Paste folder path and press Enter";
-    rootPathInput.style.cssText = "flex:1;min-width:0;font-size:12px;color:#dce6f2;background:#222a33;border:1px solid rgba(255,255,255,0.2);border-radius:6px;padding:6px 8px;";
+    rootPathInput.style.cssText = "flex:1;min-width:0;font-size:12px;color:#dce6f2;background:#222a33;border:1px solid rgba(255,255,255,0.2);border-right:none;border-radius:6px 0 0 6px;padding:6px 8px;";
+
+    const pathDropdownBtn = document.createElement("button");
+    pathDropdownBtn.type = "button";
+    pathDropdownBtn.textContent = "\u25BE";
+    pathDropdownBtn.title = "Quick folders";
+    pathDropdownBtn.style.cssText = "width:28px;min-width:28px;border:1px solid rgba(255,255,255,0.2);border-radius:0 6px 6px 0;background:#222a33;color:#dce6f2;cursor:pointer;font-size:11px;";
+
+    const pathDropdown = document.createElement("div");
+    pathDropdown.style.cssText = "position:absolute;left:0;right:0;top:calc(100% + 4px);display:none;max-height:220px;overflow:auto;background:rgba(35,39,46,0.98);border:1px solid rgba(255,255,255,0.16);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.35);z-index:6;";
 
     const upBtn = document.createElement("button");
     upBtn.textContent = "Up";
@@ -122,8 +163,10 @@ function openLoraBrowserModal(initialPath, onDone) {
 
     controls.appendChild(upBtn);
     controls.appendChild(refreshBtn);
-    controls.appendChild(rootPathInput);
-    controls.appendChild(rootsList);
+    pathWrap.appendChild(rootPathInput);
+    pathWrap.appendChild(pathDropdownBtn);
+    pathWrap.appendChild(pathDropdown);
+    controls.appendChild(pathWrap);
 
     const body = document.createElement("div");
     body.style.cssText = "flex:1;display:flex;flex-direction:column;min-height:0;";
@@ -181,7 +224,74 @@ function openLoraBrowserModal(initialPath, onDone) {
     overlay.appendChild(modal);
     document.body.appendChild(overlay);
 
+    function hidePathDropdown() {
+        pathDropdown.style.display = "none";
+    }
+
+    function renderPathDropdown() {
+        const preferredPath = getPreferredPath();
+        const comfyRoot = roots[0] || "";
+
+        pathDropdown.innerHTML = "";
+        if (!pathSuggestions.length) {
+            const empty = document.createElement("div");
+            empty.textContent = "No quick folders available";
+            empty.style.cssText = "padding:8px 10px;color:#9badc2;font-size:12px;";
+            pathDropdown.appendChild(empty);
+            return;
+        }
+
+        for (const path of pathSuggestions) {
+            const item = document.createElement("button");
+            item.type = "button";
+
+            let tag = "";
+            if (path === preferredPath) tag = "Preferred";
+            else if (path === comfyRoot) tag = "Comfy LoRA";
+
+            item.style.cssText = "width:100%;padding:8px 10px;border:none;background:transparent;color:#dce6f2;font-size:12px;text-align:left;display:flex;align-items:center;justify-content:space-between;gap:10px;cursor:pointer;";
+            item.onmouseenter = () => { item.style.background = "rgba(66,153,225,0.18)"; };
+            item.onmouseleave = () => { item.style.background = "transparent"; };
+
+            const pathText = document.createElement("span");
+            pathText.style.cssText = "white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
+            pathText.textContent = path;
+            item.appendChild(pathText);
+
+            if (tag) {
+                const tagText = document.createElement("span");
+                tagText.style.cssText = "flex-shrink:0;color:#9fc4ec;font-size:11px;";
+                tagText.textContent = tag;
+                item.appendChild(tagText);
+            }
+
+            item.onclick = () => {
+                rootPathInput.value = path;
+                hidePathDropdown();
+                loadPath(path);
+            };
+            pathDropdown.appendChild(item);
+        }
+    }
+
+    function togglePathDropdown() {
+        if (pathDropdown.style.display === "block") {
+            hidePathDropdown();
+            return;
+        }
+        renderPathDropdown();
+        pathDropdown.style.display = "block";
+    }
+
+    function onDocumentMouseDown(e) {
+        if (!pathWrap.contains(e.target)) {
+            hidePathDropdown();
+        }
+    }
+    document.addEventListener("mousedown", onDocumentMouseDown);
+
     function cleanup() {
+        document.removeEventListener("mousedown", onDocumentMouseDown);
         document.removeEventListener("mouseup", onFileDragEnd);
         overlay.remove();
     }
@@ -234,13 +344,29 @@ function openLoraBrowserModal(initialPath, onDone) {
     }
 
     function renderRootsSelect() {
-        rootsList.innerHTML = "";
-        for (const root of roots) {
-            const opt = document.createElement("option");
-            opt.value = root;
-            rootsList.appendChild(opt);
-        }
+        const preferredPath = getPreferredPath();
+        const comfyRoot = roots[0] || "";
+
+        const suggestions = [];
+        const addSuggestion = (value) => {
+            const path = String(value || "").trim();
+            if (!path) return;
+            if (suggestions.includes(path)) return;
+            suggestions.push(path);
+        };
+
+        // Keep high-value shortcuts first.
+        addSuggestion(preferredPath);
+        addSuggestion(comfyRoot);
+        for (const root of roots) addSuggestion(root);
+        addSuggestion(currentPath);
+
+        pathSuggestions = suggestions;
         if (currentPath) rootPathInput.value = currentPath;
+
+        if (pathDropdown.style.display === "block") {
+            renderPathDropdown();
+        }
     }
 
     function makeDirRow(dir) {
@@ -363,14 +489,22 @@ function openLoraBrowserModal(initialPath, onDone) {
         if (e.key !== "Enter") return;
         const nextPath = rootPathInput.value.trim();
         if (!nextPath) return;
+        hidePathDropdown();
         loadPath(nextPath);
     });
 
     rootPathInput.addEventListener("change", () => {
         const nextPath = rootPathInput.value.trim();
         if (!nextPath) return;
+        hidePathDropdown();
         loadPath(nextPath);
     });
+
+    pathDropdownBtn.onclick = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        togglePathDropdown();
+    };
 
     upBtn.onclick = () => {
         if (parentPath) loadPath(parentPath);
