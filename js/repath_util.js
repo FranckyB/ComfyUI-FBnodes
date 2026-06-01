@@ -8,6 +8,7 @@ const COMFY_MENU_MODE_KEY = "Comfy.UseNewMenu";
 const MENU_MODE_DISABLED = "Disabled";
 const SEARCH_ICON_URL = new URL("./search.png", import.meta.url).href;
 const SETUP_GUARD_KEY = "__fbnodesRepathSetupDone";
+const BUTTON_SINGLETON_KEY = "__fbnodesRepathButton";
 
 function dedupeTopBarButtons() {
     const all = Array.from(document.querySelectorAll(`#${BUTTON_ID}, [data-fbnodes-repath-btn="1"]`));
@@ -446,7 +447,15 @@ async function runRemap(button) {
 }
 
 function ensureTopBarButton() {
-    let button = dedupeTopBarButtons() || document.getElementById(BUTTON_ID);
+    let button = null;
+
+    if (globalThis[BUTTON_SINGLETON_KEY] instanceof HTMLElement) {
+        button = globalThis[BUTTON_SINGLETON_KEY];
+    }
+
+    if (!button) {
+        button = dedupeTopBarButtons() || document.getElementById(BUTTON_ID);
+    }
 
     if (!button) {
         button = document.createElement("button");
@@ -480,6 +489,8 @@ function ensureTopBarButton() {
         button.addEventListener("click", () => runRemap(button));
         setButtonBusy(button, false);
     }
+
+    globalThis[BUTTON_SINGLETON_KEY] = button;
 
     const attached = placeButtonByMenuMode(button);
     if (attached) {
