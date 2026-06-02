@@ -74,6 +74,96 @@ function basename(path) {
     return idx >= 0 ? norm.slice(idx + 1) : norm;
 }
 
+function dirname(path) {
+    if (!path) return "";
+    const norm = String(path).replace(/\\/g, "/").replace(/\/+$/, "");
+    const idx = norm.lastIndexOf("/");
+    if (idx <= 0) return "";
+    const dir = norm.slice(0, idx);
+    return path.includes("\\") ? dir.replace(/\//g, "\\") : dir;
+}
+
+function normalizeDroppedPath(value) {
+    let path = String(value || "").trim();
+    if (!path) return "";
+
+    if ((path.startsWith("\"") && path.endsWith("\"")) || (path.startsWith("'") && path.endsWith("'"))) {
+        path = path.slice(1, -1).trim();
+    }
+
+    if (/^file:/i.test(path)) {
+        try {
+            const url = new URL(path);
+            let decoded = decodeURIComponent(url.pathname || "");
+            if (/^\/[a-zA-Z]:/.test(decoded)) {
+                decoded = decoded.slice(1);
+            }
+            if (url.host && url.host !== "localhost") {
+                decoded = `//${url.host}${decoded}`;
+            }
+            path = decoded;
+        } catch {
+            // keep original if URI parsing fails
+        }
+    }
+
+    return path.replace(/\//g, "\\").trim();
+}
+
+function isSafetensorsPath(path) {
+    return /\.safetensors$/i.test(String(path || "").trim());
+}
+
+function hasDroppablePathData(dataTransfer) {
+    if (!dataTransfer) return false;
+    if ((dataTransfer.items?.length || 0) > 0) return true;
+    if ((dataTransfer.files?.length || 0) > 0) return true;
+    const types = Array.from(dataTransfer.types || []);
+    return types.includes("Files") || types.includes("text/uri-list") || types.includes("text/plain");
+}
+
+function extractDroppedSafetensorsPaths(dataTransfer) {
+    const out = [];
+    const seen = new Set();
+
+    const pushPath = (value) => {
+        const path = normalizeDroppedPath(value);
+        if (!path || !isSafetensorsPath(path)) return;
+        const key = path.toLowerCase();
+        if (seen.has(key)) return;
+        seen.add(key);
+        out.push(path);
+    };
+
+    if (!dataTransfer) return out;
+
+    for (const item of Array.from(dataTransfer.items || [])) {
+        if (item?.kind !== "file") continue;
+        const file = item.getAsFile?.();
+        pushPath(file?.path || file?.name || "");
+    }
+
+    for (const file of Array.from(dataTransfer.files || [])) {
+        pushPath(file?.path || file?.name || "");
+    }
+
+    const uriText = String(dataTransfer.getData("text/uri-list") || "");
+    for (const line of uriText.split(/\r?\n/)) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith("#")) continue;
+        pushPath(trimmed);
+    }
+
+    const plainText = String(dataTransfer.getData("text/plain") || "");
+    for (const line of plainText.split(/\r?\n/)) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        pushPath(trimmed);
+    }
+
+    return out;
+}
+
 function parseState(raw) {
     try {
         const arr = JSON.parse(raw || "[]");
@@ -634,6 +724,7 @@ function ensureUi(node) {
         dragOverIndex: null,
         enableDragActive: false,
         enableDragValue: true,
+        dropHandlersBound: false,
     };
 
     node._loraListUi = ui;
@@ -729,7 +820,7 @@ function renderList(node) {
 
     if (!ui.items.length) {
         const hint = document.createElement("div");
-        hint.textContent = "No LoRAs added. Use Add LoRAs to add files.";
+        hint.textContent = "No LoRAs added. Use Add LoRAs or drop .safetensors files here.";
         hint.style.cssText = "color:#888;font-size:11px;text-align:center;padding:8px;";
         ui.list.appendChild(hint);
         node.setDirtyCanvas?.(true, true);
@@ -948,18 +1039,123 @@ app.registerExtension({
             ui.items = initial;
             ui.lastPath = String(this.properties?.fb_lora_list?.last_path || "");
 
+            const addPathsToUi = (paths, nextLastPath = "") => {
+                if (!Array.isArray(paths) || !paths.length) return false;
+
+                const seen = new Set(ui.items.map((x) => String(x.path || "").trim().toLowerCase()));
+                let added = 0;
+                for (const raw of paths) {
+                    const path = String(raw || "").trim();
+                    if (!path) continue;
+                    const key = path.toLowerCase();
+                    if (seen.has(key)) continue;
+                    ui.items.push({ path, enabled: true });
+                    seen.add(key);
+                    added += 1;
+                }
+
+                if (added > 0) {
+                    const lastPath = String(nextLastPath || "").trim();
+                    if (lastPath) {
+                        ui.lastPath = lastPath;
+                    }
+                    renderList(this);
+                    return true;
+                }
+
+                return false;
+            };
+
+            if (!ui.dropHandlersBound) {
+                let dropDepth = 0;
+
+                const setDropActive = (active) => {
+                    ui.root.style.borderColor = active
+                        ? "rgba(66,153,225,0.7)"
+                        : "rgba(255,255,255,0.08)";
+                    ui.root.style.boxShadow = active
+                        ? "0 0 0 1px rgba(66,153,225,0.35) inset"
+                        : "none";
+                };
+
+                ui.root.addEventListener("dragenter", (e) => {
+                    if (!hasDroppablePathData(e.dataTransfer)) return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    dropDepth += 1;
+                    setDropActive(true);
+                });
+
+                ui.root.addEventListener("dragover", (e) => {
+                    if (!hasDroppablePathData(e.dataTransfer)) return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (e.dataTransfer) {
+                        e.dataTransfer.dropEffect = "copy";
+                    }
+                    setDropActive(true);
+                });
+
+                ui.root.addEventListener("dragleave", (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    dropDepth = Math.max(0, dropDepth - 1);
+                    if (dropDepth === 0) {
+                        setDropActive(false);
+                    }
+                });
+
+                ui.root.addEventListener("drop", (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+
+                    dropDepth = 0;
+                    setDropActive(false);
+
+                    const dropped = extractDroppedSafetensorsPaths(e.dataTransfer);
+                    addPathsToUi(dropped, dirname(dropped[0]));
+                });
+
+                ui.dropHandlersBound = true;
+            }
+
+            const prevOnDragOver = this.onDragOver;
+            this.onDragOver = function(e) {
+                if (e?.dataTransfer && e.dataTransfer.items) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    return true;
+                }
+                if (typeof prevOnDragOver === "function") {
+                    return prevOnDragOver.call(this, e);
+                }
+                return false;
+            };
+
+            const prevOnDragDrop = this.onDragDrop;
+            this.onDragDrop = async function(e) {
+                if (!hasDroppablePathData(e?.dataTransfer)) {
+                    if (typeof prevOnDragDrop === "function") {
+                        return await prevOnDragDrop.call(this, e);
+                    }
+                    return false;
+                }
+
+                e.preventDefault();
+                e.stopPropagation();
+
+                const dropped = extractDroppedSafetensorsPaths(e.dataTransfer);
+                if (!dropped.length) {
+                    return false;
+                }
+
+                return addPathsToUi(dropped, dirname(dropped[0]));
+            };
+
             ui.addBtn.onclick = async () => {
                 const startPath = await resolveInitialPath(ui.lastPath);
                 openLoraBrowserModal(startPath, (selectedPaths, currentPath) => {
-                    ui.lastPath = currentPath || ui.lastPath;
-                    const seen = new Set(ui.items.map((x) => x.path));
-                    for (const p of selectedPaths) {
-                        const path = String(p || "").trim();
-                        if (!path || seen.has(path)) continue;
-                        ui.items.push({ path, enabled: true });
-                        seen.add(path);
-                    }
-                    renderList(this);
+                    addPathsToUi(selectedPaths, currentPath || ui.lastPath);
                 });
             };
 
