@@ -595,6 +595,40 @@ app.registerExtension({
             node._sourceFolder = 'input';
 
             const framePositionWidget = this.widgets?.find(w => w.name === "frame_position");
+            let imageWidget = null;
+
+            const refreshImageOptionsForSource = async (source, options = {}) => {
+                const { resetSelection = false, preferredValue = null } = options;
+                if (!imageWidget) return;
+
+                try {
+                    const listResponse = await api.fetchApi(`/fbnodes/list-files?source=${encodeURIComponent(source || 'input')}`);
+                    if (!listResponse.ok) return;
+
+                    const result = await listResponse.json();
+                    const files = Array.isArray(result?.files) ? result.files : [];
+                    imageWidget.options.values = ["(none)", ...files];
+
+                    if (resetSelection) {
+                        if (imageWidget.value !== "(none)") {
+                            imageWidget.value = "(none)";
+                            if (imageWidget.callback) imageWidget.callback("(none)");
+                        }
+                        return;
+                    }
+
+                    const desiredRaw = preferredValue != null ? preferredValue : imageWidget.value;
+                    const desired = stripAnnotation(desiredRaw);
+                    if (desired && desired !== "(none)") {
+                        if (!imageWidget.options.values.includes(desired)) {
+                            imageWidget.options.values = ["(none)", desired, ...files.filter((f) => f !== desired)];
+                        }
+                        imageWidget.value = desired;
+                    }
+                } catch (err) {
+                    console.warn('[LoadImagePlus] Could not fetch file list:', err);
+                }
+            };
 
             // Source folder widget
             const sourceFolderWidget = this.widgets?.find(w => w.name === "source_folder");
@@ -604,25 +638,13 @@ app.registerExtension({
                 sourceFolderWidget.callback = async function(value) {
                     if (origSfCb) origSfCb.apply(this, arguments);
                     node._sourceFolder = value || 'input';
-                    try {
-                        const listResponse = await api.fetchApi(`/fbnodes/list-files?source=${encodeURIComponent(value)}`);
-                        if (listResponse.ok) {
-                            const result = await listResponse.json();
-                            if (imageWidget) {
-                                imageWidget.options.values = ["(none)", ...(result.files || [])];
-                                imageWidget.value = "(none)";
-                                if (imageWidget.callback) imageWidget.callback("(none)");
-                            }
-                        }
-                    } catch (err) {
-                        console.warn('[LoadImagePlus] Could not fetch file list:', err);
-                    }
+                    await refreshImageOptionsForSource(value, { resetSelection: true });
                     node.setDirtyCanvas(true);
                 };
             }
 
             // Image widget
-            const imageWidget = this.widgets?.find(w => w.name === "image");
+            imageWidget = this.widgets?.find(w => w.name === "image");
             if (imageWidget) {
                 const originalCallback = imageWidget.callback;
                 imageWidget.callback = function(value) {
@@ -727,6 +749,9 @@ app.registerExtension({
                 // Restore source folder
                 const sfWidget = this.widgets?.find(w => w.name === "source_folder");
                 if (sfWidget) node._sourceFolder = sfWidget.value || 'input';
+
+                // Keep filename combo aligned with current source folder after workflow restore.
+                refreshImageOptionsForSource(node._sourceFolder, { preferredValue: imageWidget?.value });
 
                 // Restore persisted display state from properties (survives tab switches)
                 if (!node.properties) node.properties = {};
