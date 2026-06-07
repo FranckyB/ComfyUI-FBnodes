@@ -16,6 +16,7 @@ from .nodes import (
     LoadImagePlus,
     LoadLatentFile,
     LoadVideoPlus,
+    PromptBatcher,
     SaveImagePlus,
     SaveVideoPlus,
     ShowTextPlus,
@@ -25,7 +26,7 @@ from .nodes import (
     VACEStitcher_Options,
     install_latent_preview_hook,
 )
-from .py import repath_util  # noqa: F401
+from .py import repath_util
 
 # Initialize latent preview hook (with VHS conflict detection)
 install_latent_preview_hook()
@@ -40,6 +41,7 @@ NODE_CLASS_MAPPINGS = {
     "LoadImagePlus": LoadImagePlus,
     "LoadLatentFile": LoadLatentFile,
     "LoadVideoPlus": LoadVideoPlus,
+    "PromptBatcher": PromptBatcher,
     "SaveImagePlus": SaveImagePlus,
     "SaveVideoPlus": SaveVideoPlus,
     "ShowTextPlus": ShowTextPlus,
@@ -59,6 +61,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "LoadImagePlus": "Load Image+",
     "LoadLatentFile": "Load Latent File",
     "LoadVideoPlus": "Load Video+",
+    "PromptBatcher": "Prompt Batcher",
     "SaveImagePlus": "Save Image+",
     "SaveVideoPlus": "Save Video+",
     "ShowTextPlus": "Show as Text",

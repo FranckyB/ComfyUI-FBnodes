@@ -13,3 +13,4 @@ from .show_text import ShowTextPlus
 from .save_image import SaveImagePlus
 from .crop_image import CropImagePlus
 from .lora_list import LoraListPlus
+from .prompt_batcher import PromptBatcher
