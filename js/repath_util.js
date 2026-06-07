@@ -168,6 +168,38 @@ function collectGraphWidgets() {
 function applyRemaps(updates) {
     let applied = 0;
 
+    const triggerWidgetRefresh = (node, widget, oldValue, newValue) => {
+        try {
+            if (typeof widget?.callback === "function") {
+                widget.callback.call(widget, newValue, app.canvas, node, null, null);
+            }
+        } catch (err) {
+            console.warn("[FBnodes] Repath widget callback failed", {
+                nodeId: node?.id,
+                widget: widget?.name,
+                error: err,
+            });
+        }
+
+        try {
+            if (typeof node?.onWidgetChanged === "function") {
+                node.onWidgetChanged(widget?.name, newValue, oldValue, widget);
+            }
+        } catch (err) {
+            console.warn("[FBnodes] Repath onWidgetChanged failed", {
+                nodeId: node?.id,
+                widget: widget?.name,
+                error: err,
+            });
+        }
+
+        try {
+            node?.graph?.change?.();
+        } catch (err) {
+            // no-op
+        }
+    };
+
     for (const update of updates || []) {
         if (!Object.prototype.hasOwnProperty.call(update, "new_value")) continue;
 
@@ -187,17 +219,21 @@ function applyRemaps(updates) {
             if (currentValue === update.new_value) continue;
 
             widget.value[valueField] = update.new_value;
+            triggerWidgetRefresh(node, widget, currentValue, widget.value);
         } else {
             if (typeof widget.value !== "string") continue;
             if (widget.value === update.new_value) continue;
 
+            const oldValue = widget.value;
             widget.value = update.new_value;
+            triggerWidgetRefresh(node, widget, oldValue, update.new_value);
         }
 
         node.setDirtyCanvas?.(true, true);
         applied += 1;
     }
 
+    app.graph?.change?.();
     app.graph?.setDirtyCanvas?.(true, true);
     app.canvas?.setDirty?.(true, true);
 

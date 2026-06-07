@@ -16,6 +16,7 @@ import server
 
 CATEGORY_FOLDERS = {
     "checkpoints_unet": ["checkpoints", "diffusion_models", "unet"],
+    "latent_upscale": ["latent_upscale_models"],
     "loras": ["loras"],
     "text_encoders": ["text_encoders", "clip"],
     "vae": ["vae", "audio_vae"],
@@ -40,8 +41,8 @@ DIRECT_WIDGET_CATEGORY = {
     "control_net_name": "controlnet",
     "upscale_model": "upscale_models",
     "upscale_model_name": "upscale_models",
-    "latent_upscale_model": "upscale_models",
-    "latent_upscale_model_name": "upscale_models",
+    "latent_upscale_model": "latent_upscale",
+    "latent_upscale_model_name": "latent_upscale",
 }
 
 PRECISION_TOKENS = ("fp8", "fp16", "bf16")
@@ -224,10 +225,18 @@ def _build_all_indexes():
     return indexes
 
 
-def _infer_category(widget_name, node_type, value_field=None):
+def _infer_category(widget_name, node_type, value=None, value_field=None):
     widget_key = str(widget_name or "").strip().lower()
     node_type_l = str(node_type or "").strip().lower()
+    node_type_compact = node_type_l.replace(" ", "").replace("_", "")
+    value_l = str(value or "").strip().lower().replace("\\", "/")
+    value_base = os.path.basename(value_l)
     value_field_l = str(value_field or "").strip().lower()
+
+    is_latent_upscale_node = (
+        ("latent" in node_type_l and "upscale" in node_type_l)
+        or "loadlatentupscalemodel" in node_type_compact
+    )
 
     if value_field_l == "lora":
         return "loras"
@@ -238,6 +247,8 @@ def _infer_category(widget_name, node_type, value_field=None):
 
     # Handle ambiguous fields by node type hints.
     if widget_key == "model_name":
+        if is_latent_upscale_node:
+            return "latent_upscale"
         if "control" in node_type_l:
             return "controlnet"
         if "upscale" in node_type_l:
@@ -245,11 +256,21 @@ def _infer_category(widget_name, node_type, value_field=None):
         if "unet" in node_type_l or "checkpoint" in node_type_l or "diffusion" in node_type_l:
             return "checkpoints_unet"
 
+        # Value-based hints for nodes whose type names don't contain clear category tokens.
+        if "upscaler" in value_base or "upscale" in value_base:
+            return "latent_upscale"
+
     if widget_key == "model":
+        if is_latent_upscale_node:
+            return "latent_upscale"
         if "upscale" in node_type_l:
             return "upscale_models"
         if "unet" in node_type_l or "checkpoint" in node_type_l:
             return "checkpoints_unet"
+
+        # Same fallback for generic model fields.
+        if "upscaler" in value_base or "upscale" in value_base:
+            return "latent_upscale"
 
     # rgthree Power Lora Loader uses dynamic lora_* inputs.
     if widget_key.startswith("lora_") and "power lora" in node_type_l:
@@ -295,7 +316,7 @@ def remap_missing_assets(nodes_payload):
             if not isinstance(value, str):
                 continue
 
-            category = _infer_category(widget_name, node_type, value_field)
+            category = _infer_category(widget_name, node_type, value, value_field)
             if not category:
                 continue
 

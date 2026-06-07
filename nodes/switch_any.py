@@ -116,6 +116,9 @@ class SwitchAnyBool:
             return []
         return [key]
 
-    def switch(self, condition, on_true=None, on_false=None):
+    def switch(self, condition, **kwargs):
+        # Explicitly force the inactive branch to None.
+        on_true = kwargs.get("on_true") if condition else None
+        on_false = kwargs.get("on_false") if not condition else None
         value = on_true if condition else on_false
         return (value,)
