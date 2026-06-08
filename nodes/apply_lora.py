@@ -4,6 +4,7 @@ ComfyUI Prompt Apply LoRA - Apply a LORA_STACK to model and clip
 import os
 
 import comfy.sd
+import comfy.lora
 import comfy.utils
 
 from ..py.lora_utils import resolve_lora_path
@@ -96,5 +97,104 @@ class ApplyLoraPlus:
             model_out, clip_out = comfy.sd.load_lora_for_models(
                 model_out, clip_out, lora, scaled_model_strength, scaled_clip_strength
             )
+
+        return (model_out, clip_out)
+
+
+class ApplyLTXLoraPlus:
+    """
+    Apply a LoRA stack to an LTX model with separate video/audio strength multipliers.
+    Accepts either a LORA_STACK (list of tuples) or a multiline STRING with one
+    LoRA path/name per line.
+    """
+
+    @classmethod
+    def INPUT_TYPES(s):
+        return {
+            "required": {
+                "model": ("MODEL",),
+                "lora_stack": ("*",),
+                "video_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.01}),
+                "audio_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.01}),
+            },
+            "optional": {
+                "clip_optional": ("CLIP",),
+            },
+        }
+
+    RETURN_TYPES = ("MODEL", "CLIP")
+    RETURN_NAMES = ("model", "clip")
+    FUNCTION = "apply_stack_ltx"
+    CATEGORY = "FBnodes"
+    DESCRIPTION = "Apply LoRAs to LTX MODEL from LORA_STACK or newline-separated STRING with separate video/audio strength multipliers."
+
+    @staticmethod
+    def _coerce_lora_stack(lora_stack):
+        return ApplyLoraPlus._coerce_lora_stack(lora_stack)
+
+    @staticmethod
+    def _resolve_lora_path_or_name(lora_name):
+        return ApplyLoraPlus._resolve_lora_path_or_name(lora_name)
+
+    @staticmethod
+    def _key_to_string(key):
+        if isinstance(key, str):
+            return key
+        if isinstance(key, tuple) and len(key) > 0:
+            return str(key[0])
+        return str(key)
+
+    @staticmethod
+    def _is_audio_key(key_str):
+        return (
+            "video_to_audio_attn" in key_str
+            or "audio_to_video_attn" in key_str
+            or "audio_attn" in key_str
+            or "audio_ff.net" in key_str
+        )
+
+    def apply_stack_ltx(self, model, lora_stack, video_strength=1.0, audio_strength=1.0, clip_optional=None):
+        clip_out = clip_optional
+        stack = self._coerce_lora_stack(lora_stack)
+        if not stack:
+            return (model, clip_out)
+
+        model_out = model
+
+        for lora_name, model_strength, _clip_strength in stack:
+            # Resolve LoRA using direct path first, then fuzzy matching.
+            lora_path, found = self._resolve_lora_path_or_name(lora_name)
+            if not found:
+                print(f"[ApplyLTXLoraPlus] Warning: LoRA not found, skipping: {lora_name}")
+                continue
+
+            lora = comfy.utils.load_torch_file(lora_path, safe_load=True)
+
+            key_map = comfy.lora.model_lora_keys_unet(model_out.model, {})
+            loaded = comfy.lora.load_lora(lora, key_map)
+
+            # Apply per-layer scaling using the same LTX audio/video naming pattern.
+            for key in list(loaded.keys()):
+                key_str = self._key_to_string(key)
+                mult = audio_strength if self._is_audio_key(key_str) else video_strength
+                effective = float(model_strength) * float(mult)
+
+                if effective == 0:
+                    del loaded[key]
+                    continue
+
+                value = loaded[key]
+                if hasattr(value, "weights"):
+                    weights_list = list(value.weights)
+                    current_alpha = weights_list[2] if weights_list[2] is not None else 1.0
+                    weights_list[2] = current_alpha * effective
+                    loaded[key].weights = tuple(weights_list)
+
+            if not loaded:
+                continue
+
+            model_next = model_out.clone()
+            model_next.add_patches(loaded, 1.0)
+            model_out = model_next
 
         return (model_out, clip_out)
