@@ -116,6 +116,7 @@ class ApplyLTXLoraPlus:
                 "lora_stack": ("*",),
                 "video_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.01}),
                 "audio_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.01}),
+                "other_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.01}),
             },
             "optional": {
                 "clip_optional": ("CLIP",),
@@ -126,7 +127,7 @@ class ApplyLTXLoraPlus:
     RETURN_NAMES = ("model", "clip")
     FUNCTION = "apply_stack_ltx"
     CATEGORY = "FBnodes"
-    DESCRIPTION = "Apply LoRAs to LTX MODEL from LORA_STACK or newline-separated STRING with separate video/audio strength multipliers."
+    DESCRIPTION = "Apply LoRAs to LTX MODEL from LORA_STACK or newline-separated STRING with separate video/audio/other strength multipliers."
 
     @staticmethod
     def _coerce_lora_stack(lora_stack):
@@ -141,7 +142,7 @@ class ApplyLTXLoraPlus:
         if isinstance(key, str):
             return key
         if isinstance(key, tuple) and len(key) > 0:
-            return str(key[0])
+            return " ".join(str(k) for k in key)
         return str(key)
 
     @staticmethod
@@ -153,7 +154,11 @@ class ApplyLTXLoraPlus:
             or "audio_ff.net" in key_str
         )
 
-    def apply_stack_ltx(self, model, lora_stack, video_strength=1.0, audio_strength=1.0, clip_optional=None):
+    @staticmethod
+    def _is_video_key(key_str):
+        return "attn" in key_str or "ff.net" in key_str
+
+    def apply_stack_ltx(self, model, lora_stack, video_strength=1.0, audio_strength=1.0, other_strength=1.0, clip_optional=None):
         clip_out = clip_optional
         stack = self._coerce_lora_stack(lora_stack)
         if not stack:
@@ -173,28 +178,39 @@ class ApplyLTXLoraPlus:
             key_map = comfy.lora.model_lora_keys_unet(model_out.model, {})
             loaded = comfy.lora.load_lora(lora, key_map)
 
-            # Apply per-layer scaling using the same LTX audio/video naming pattern.
+            keys_to_delete = []
+
+            # Apply per-layer scaling following the LTX2 advanced loader logic.
             for key in list(loaded.keys()):
                 key_str = self._key_to_string(key)
-                mult = audio_strength if self._is_audio_key(key_str) else video_strength
-                effective = float(model_strength) * float(mult)
+                if self._is_audio_key(key_str):
+                    strength_multiplier = float(audio_strength)
+                elif self._is_video_key(key_str):
+                    strength_multiplier = float(video_strength)
+                else:
+                    strength_multiplier = float(other_strength)
 
-                if effective == 0:
-                    del loaded[key]
+                if strength_multiplier == 0:
+                    keys_to_delete.append(key)
                     continue
 
                 value = loaded[key]
-                if hasattr(value, "weights"):
+                if hasattr(value, "weights") and strength_multiplier != 1.0:
                     weights_list = list(value.weights)
                     current_alpha = weights_list[2] if weights_list[2] is not None else 1.0
-                    weights_list[2] = current_alpha * effective
+                    weights_list[2] = current_alpha * strength_multiplier
                     loaded[key].weights = tuple(weights_list)
+
+            for key in keys_to_delete:
+                if key in loaded:
+                    del loaded[key]
 
             if not loaded:
                 continue
 
             model_next = model_out.clone()
-            model_next.add_patches(loaded, 1.0)
+            # Keep per-LoRA model strength at add_patches stage (reference behavior).
+            model_next.add_patches(loaded, float(model_strength))
             model_out = model_next
 
         return (model_out, clip_out)
