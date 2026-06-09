@@ -63,10 +63,11 @@ function markGraphChanged(node) {
 
 function applyDefaultNodeSize(node, force = false) {
     const computed = node.computeSize ? node.computeSize() : null;
-    const minWidth = 360;
+    const minWidth = 260;
+    const defaultWidth = 300;
     const minHeight = 204;
     const extraHeight = 4;
-    const creationWidthBoost = 8;
+    const creationWidthBoost = 0;
     const creationHeightBoost = 4;
 
     if (!computed || computed.length < 2) {
@@ -74,7 +75,9 @@ function applyDefaultNodeSize(node, force = false) {
     }
 
     const baseWidth = Math.max(minWidth, Math.ceil(computed[0]));
-    const targetWidth = force ? (baseWidth + creationWidthBoost) : baseWidth;
+    const targetWidth = force
+        ? Math.max(minWidth, defaultWidth + creationWidthBoost)
+        : baseWidth;
     const baseHeight = Math.max(minHeight, Math.ceil(computed[1]) + extraHeight);
     const targetHeight = force ? (baseHeight + creationHeightBoost) : baseHeight;
 
@@ -528,7 +531,7 @@ function ensureAudioPreview(node) {
         hideOnZoom: false,
     });
     previewWidget.serialize = false;
-    previewWidget.computeLayoutSize = () => ({ minHeight: 30, minWidth: 320 });
+    previewWidget.computeLayoutSize = () => ({ minHeight: 30, minWidth: 220 });
     if (previewWidget.element) {
         previewWidget.element.style.minHeight = "30px";
         previewWidget.element.style.height = "auto";
