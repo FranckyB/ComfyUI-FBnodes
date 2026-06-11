@@ -534,22 +534,8 @@ def load_image_as_tensor(file_path):
 
 
 def get_placeholder_image_tensor():
-    """Load the placeholder PNG as a tensor."""
-    if not IMAGE_SUPPORT:
-        return torch.zeros((1, 128, 128, 3), dtype=torch.float32)
-    try:
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        png_path = os.path.join(current_dir, '..', 'js', 'placeholder.png')
-
-        if os.path.exists(png_path):
-            img, _ = load_image_as_tensor(png_path)
-            if img is not None:
-                return img
-    except Exception as e:
-        print(f"[FBnodes] Could not load placeholder PNG: {e}")
-
-    img_array = np.full((128, 128, 3), 42 / 255.0, dtype=np.float32)
-    return torch.from_numpy(img_array).unsqueeze(0)
+    """Return a small black square tensor for missing/failed image loads."""
+    return torch.zeros((1, 64, 64, 3), dtype=torch.float32)
 
 
 # ---------------------------------------------------------------------------
@@ -648,11 +634,15 @@ class LoadImagePlus:
 
         mask_tensor = None
 
+        preview_images = []
+
         if resolved_path:
             ext = os.path.splitext(resolved_path)[1].lower()
 
             if ext in ['.png', '.jpg', '.jpeg', '.webp']:
                 image_tensor, mask_tensor = load_image_as_tensor(resolved_path)
+                # Reuse original file for preview instead of writing a temp copy.
+                preview_images = self._direct_preview_images(resolved_path, source_folder)
 
             elif ext in ['.mp4', '.webm', '.mov', '.avi']:
                 if source_folder == "output":
@@ -676,18 +666,64 @@ class LoadImagePlus:
                 if image_tensor is None:
                     image_tensor = get_placeholder_image_tensor()
 
+                # Video preview is an extracted frame tensor, so this still needs a temp image.
+                if image_tensor is not None:
+                    preview_images = self._save_preview_images(image_tensor, mask_tensor)
+
         if image_tensor is None:
             image_tensor = get_placeholder_image_tensor()
 
         if mask_tensor is None:
             mask_tensor = torch.zeros((64, 64), dtype=torch.float32, device="cpu").unsqueeze(0)
 
-        preview_images = self._save_preview_images(image_tensor, mask_tensor)
-
         return {
             "ui": {"images": preview_images},
             "result": (image_tensor, mask_tensor)
         }
+
+    def _direct_preview_images(self, resolved_path, source_folder="input"):
+        """Build /view-compatible preview metadata pointing at the original file."""
+        try:
+            normalized_path = os.path.realpath(resolved_path)
+
+            input_dir = os.path.realpath(folder_paths.get_input_directory())
+            output_dir = os.path.realpath(folder_paths.get_output_directory())
+            temp_dir = os.path.realpath(folder_paths.get_temp_directory())
+
+            if normalized_path.startswith(input_dir):
+                preview_type = "input"
+                rel_path = os.path.relpath(normalized_path, input_dir)
+            elif normalized_path.startswith(output_dir):
+                preview_type = "output"
+                rel_path = os.path.relpath(normalized_path, output_dir)
+            elif normalized_path.startswith(temp_dir):
+                preview_type = "temp"
+                rel_path = os.path.relpath(normalized_path, temp_dir)
+            else:
+                # Keep source_folder behavior for in-tree relative paths if possible.
+                if source_folder == "output":
+                    base_dir = output_dir
+                    preview_type = "output"
+                else:
+                    base_dir = input_dir
+                    preview_type = "input"
+
+                if normalized_path.startswith(base_dir):
+                    rel_path = os.path.relpath(normalized_path, base_dir)
+                else:
+                    return []
+
+            rel_path = rel_path.replace('\\', '/')
+            subfolder, filename = os.path.split(rel_path)
+
+            return [{
+                "filename": filename,
+                "subfolder": subfolder.replace('\\', '/'),
+                "type": preview_type
+            }]
+        except Exception as e:
+            print(f"[FBnodes] Failed to build direct preview path: {e}")
+            return []
 
     def _save_preview_images(self, images, masks=None):
         import random
