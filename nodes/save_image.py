@@ -33,6 +33,13 @@ def _expand_date_format(text: str) -> str:
     return re.sub(r"%date:([^%]+)%", _replace_date, text or "")
 
 
+def _tensor_to_pil(image_tensor):
+    """Convert a Comfy IMAGE tensor in [0,1] to a PIL image."""
+    array = image_tensor.cpu().numpy()
+    array = np.clip(array * 255.0, 0, 255).astype(np.uint8)
+    return Image.fromarray(array)
+
+
 class SaveImagePlus:
     FORMATS = ["png", "jpg"]
 
@@ -60,6 +67,9 @@ class SaveImagePlus:
                     },
                 ),
             },
+            "optional": {
+                "Compare": ("IMAGE",),
+            },
             "hidden": {
                 "prompt": "PROMPT",
                 "extra_pnginfo": "EXTRA_PNGINFO",
@@ -73,7 +83,7 @@ class SaveImagePlus:
     CATEGORY = "FBnodes"
     DESCRIPTION = "Save images as PNG or JPG with date-token filename support."
 
-    def save_images(self, images, filename_prefix, format, jpg_quality, prompt=None, extra_pnginfo=None):
+    def save_images(self, images, filename_prefix, format, jpg_quality, Compare=None, prompt=None, extra_pnginfo=None):
         if images is None or len(images) == 0:
             return ("",)
 
@@ -90,14 +100,14 @@ class SaveImagePlus:
             width,
             height,
         )
+        ui_subfolder = (subfolder or "").replace("\\", "/")
 
         ui_images = []
+        compare_ui_images = []
         last_file = ""
 
         for image in images:
-            array = image.cpu().numpy()
-            array = np.clip(array * 255.0, 0, 255).astype(np.uint8)
-            pil_image = Image.fromarray(array)
+            pil_image = _tensor_to_pil(image)
 
             file_name = f"{filename}_{counter:05}.{ext}"
             file_path = os.path.join(full_output_folder, file_name)
@@ -118,11 +128,32 @@ class SaveImagePlus:
 
             ui_images.append({
                 "filename": file_name,
-                "subfolder": subfolder,
+                "subfolder": ui_subfolder,
                 "type": "output",
             })
 
             last_file = file_name
             counter += 1
 
-        return {"ui": {"images": ui_images}, "result": (last_file,)}
+        if Compare is not None and len(Compare) > 0:
+            temp_dir = folder_paths.get_temp_directory()
+            compare_prefix = f"fbnodes_compare_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
+
+            for index, compare_image in enumerate(Compare):
+                compare_pil = _tensor_to_pil(compare_image)
+                compare_name = f"{compare_prefix}_{index:05}.png"
+                compare_path = os.path.join(temp_dir, compare_name)
+                compare_pil.save(compare_path, compress_level=4)
+
+                compare_ui_images.append({
+                    "filename": compare_name,
+                    "subfolder": "",
+                    "type": "temp",
+                })
+
+        ui_payload = {
+            "saved_images": ui_images,
+            "compare_images": compare_ui_images,
+            "compare_paired": [len(compare_ui_images) > 0 and len(compare_ui_images) == len(ui_images)],
+        }
+        return {"ui": ui_payload, "result": (last_file,)}
