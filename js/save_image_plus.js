@@ -101,6 +101,7 @@ function ensureCompareState(node) {
         paired: false,
         unpaired: false,
         split: 0.5,
+        hovering: false,
         imageCache: new Map(),
         previewRect: null,
         buttonZones: [],
@@ -412,7 +413,7 @@ function drawCompareCanvas(ctx, node) {
     const compareIndex = pairedView ? clampIndex(state.selectedSaved, state.compareItems.length) : state.selectedCompare;
     const compareItem = hasCompare ? state.compareItems[compareIndex] : null;
 
-    if (compareItem && savedDraw) {
+    if (compareItem && savedDraw && state.hovering) {
         const compareUrl = imageInfoToUrl(compareItem);
         const compareImg = getCachedImage(state, compareUrl, node);
 
@@ -513,19 +514,35 @@ function restoreCompareData(node, state) {
 function handlePointer(node, localPos) {
     const state = ensureCompareState(node);
     if (!state.previewRect || !state.compareItems.length) {
+        if (state.hovering) {
+            state.hovering = false;
+            node.setDirtyCanvas?.(true, false);
+        }
         return false;
     }
 
     const r = state.previewRect;
     const inside = localPos[0] >= r.x && localPos[0] <= r.x + r.w && localPos[1] >= r.y && localPos[1] <= r.y + r.h;
     if (!inside || r.w <= 0) {
+        if (state.hovering) {
+            state.hovering = false;
+            node.setDirtyCanvas?.(true, false);
+        }
         return false;
     }
 
     const split = (localPos[0] - r.x) / r.w;
     const clamped = Math.max(0, Math.min(1, split));
+    let dirty = false;
+    if (!state.hovering) {
+        state.hovering = true;
+        dirty = true;
+    }
     if (Math.abs(clamped - state.split) > 0.001) {
         state.split = clamped;
+        dirty = true;
+    }
+    if (dirty) {
         node.setDirtyCanvas?.(true, false);
     }
 
@@ -678,6 +695,17 @@ app.registerExtension({
                 return true;
             }
             return onMouseDown?.apply(this, arguments);
+        };
+
+        const onMouseLeave = nodeType.prototype.onMouseLeave;
+        nodeType.prototype.onMouseLeave = function () {
+            const result = onMouseLeave?.apply(this, arguments);
+            const state = ensureCompareState(this);
+            if (state.hovering) {
+                state.hovering = false;
+                this.setDirtyCanvas?.(true, false);
+            }
+            return result;
         };
     },
 });
