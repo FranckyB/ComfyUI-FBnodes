@@ -387,10 +387,12 @@ function drawCompareCanvas(ctx, node) {
 
     const controlsH = drawSelectionRows(ctx, node, state, contentTop, Number(node.size?.[0] || 320));
 
+    const footerH = 24;
+    const footerGap = 6;
     const frameX = 10;
     const frameY = contentTop + controlsH;
     const frameW = Math.max(40, Number(node.size?.[0] || 320) - 20);
-    const frameH = Math.max(80, contentBottom - frameY);
+    const frameH = Math.max(80, contentBottom - frameY - footerH - footerGap);
 
     ctx.save();
     ctx.beginPath();
@@ -441,6 +443,30 @@ function drawCompareCanvas(ctx, node) {
         state.previewRect = savedDraw;
     }
 
+    ctx.restore();
+
+    // Footer: image size box (uses the selected saved image's natural dimensions).
+    const footerX = frameX;
+    const footerY = frameY + frameH + footerGap;
+    const footerW = frameW;
+    ctx.save();
+    ctx.beginPath();
+    addRoundedRectPath(ctx, footerX, footerY, footerW, footerH, 8);
+    ctx.fillStyle = "rgba(42, 46, 54, 0.94)";
+    ctx.strokeStyle = "rgba(66, 72, 84, 0.95)";
+    ctx.lineWidth = 1;
+    ctx.fill();
+    ctx.stroke();
+
+    let sizeText = "—";
+    if (savedImg && savedImg.naturalWidth && savedImg.naturalHeight) {
+        sizeText = `${savedImg.naturalWidth} × ${savedImg.naturalHeight}`;
+    }
+    ctx.font = "600 10px Segoe UI";
+    ctx.fillStyle = "rgba(192, 206, 222, 0.95)";
+    ctx.textBaseline = "middle";
+    const tw = ctx.measureText(sizeText).width;
+    ctx.fillText(sizeText, footerX + (footerW - tw) * 0.5, footerY + footerH * 0.5);
     ctx.restore();
 }
 
