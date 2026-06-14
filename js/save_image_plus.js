@@ -100,11 +100,13 @@ function ensureCompareState(node) {
         selectedCompare: 0,
         paired: false,
         unpaired: false,
+        gridMode: false,
         split: 0.5,
         hovering: false,
         imageCache: new Map(),
         previewRect: null,
         buttonZones: [],
+        gridZones: [],
         drawDisabled: false,
         drawErrorLogged: false,
     };
@@ -202,66 +204,102 @@ function drawButton(ctx, rect, text, active) {
 
 function drawSelectionRows(ctx, node, state, topY, width) {
     state.buttonZones = [];
+    state.gridZones = [];
 
     const savedCount = state.savedItems.length;
     const compareCount = state.compareItems.length;
-    if (!savedCount || !compareCount) {
+    if (!savedCount) {
         return 0;
     }
 
-    const rows = [];
+    const hasCompare = compareCount > 0;
     const pairedView = state.paired && !state.unpaired;
-    if (pairedView) {
-        if (savedCount > 1) {
-            rows.push({ label: "Pair", count: savedCount, selected: state.selectedSaved, type: "pair" });
-        }
-    } else {
-        if (compareCount > 1) {
-            rows.push({ label: "A", count: compareCount, selected: state.selectedCompare, type: "A" });
-        }
-        if (savedCount > 1) {
-            rows.push({ label: "B", count: savedCount, selected: state.selectedSaved, type: "B" });
+    const MANY = 8;
+
+    const rows = [];
+    if (!state.gridMode) {
+        if (hasCompare && pairedView) {
+            if (savedCount > 1) {
+                rows.push({ label: "Pair", count: savedCount, selected: state.selectedSaved, type: "pair" });
+            }
+        } else if (hasCompare) {
+            if (compareCount > 1) {
+                rows.push({ label: "A", count: compareCount, selected: state.selectedCompare, type: "A" });
+            }
+            if (savedCount > 1) {
+                rows.push({ label: "B", count: savedCount, selected: state.selectedSaved, type: "B" });
+            }
+        } else if (savedCount > 1) {
+            rows.push({ label: "", count: savedCount, selected: state.selectedSaved, type: "B" });
         }
     }
 
-    if (!rows.length) {
+    const showGridToggle = savedCount > 1;
+    const showPairToggle = state.paired && savedCount > 1 && !state.gridMode;
+    const hasCheckboxes = showGridToggle || showPairToggle;
+
+    if (!rows.length && !hasCheckboxes) {
         return 0;
     }
 
     const labelFont = "600 10px Segoe UI";
     const btnFont = "600 10px Segoe UI";
+    const cbFont = "500 10px Segoe UI";
     const btnH = 18;
     const btnGap = 5;
     const groupGap = 16;
     const labelGap = 7;
     const padX = 10;
     const padY = 6;
-
-    ctx.save();
-    const measureRow = (row) => {
-        ctx.font = labelFont;
-        let w = Math.ceil(ctx.measureText(row.label).width) + labelGap;
-        ctx.font = btnFont;
-        for (let i = 0; i < row.count; i += 1) {
-            const text = String(i + 1);
-            w += Math.max(24, Math.ceil(ctx.measureText(text).width) + 14) + btnGap;
-        }
-        return w;
-    };
-    const rowWidths = rows.map(measureRow);
-    ctx.restore();
+    const lineGap = 6;
+    const navBtnW = 22;
+    const cbSize = 13;
 
     const panelX = 10;
     const panelW = Math.max(40, width - 20);
     const innerW = panelW - padX * 2;
 
+    // Width of the checkbox cluster drawn right-aligned on the first line.
+    let cbClusterW = 0;
+    ctx.save();
+    ctx.font = cbFont;
+    if (showGridToggle) {
+        cbClusterW += Math.ceil(ctx.measureText("Grid").width) + 5 + cbSize;
+    }
+    if (showPairToggle) {
+        if (cbClusterW > 0) {
+            cbClusterW += 14;
+        }
+        cbClusterW += Math.ceil(ctx.measureText("Pair").width) + 5 + cbSize;
+    }
+    ctx.restore();
+
+    const measureRow = (row) => {
+        ctx.save();
+        ctx.font = labelFont;
+        let w = row.label ? Math.ceil(ctx.measureText(row.label).width) + labelGap : 0;
+        ctx.font = btnFont;
+        if (row.count > MANY) {
+            const navText = `${row.selected + 1} / ${row.count}`;
+            w += navBtnW + btnGap + Math.ceil(ctx.measureText(navText).width) + 16 + btnGap + navBtnW;
+        } else {
+            for (let i = 0; i < row.count; i += 1) {
+                const text = String(i + 1);
+                w += Math.max(24, Math.ceil(ctx.measureText(text).width) + 14) + btnGap;
+            }
+        }
+        ctx.restore();
+        return w;
+    };
+
+    const rowWidths = rows.map(measureRow);
+
     let sideBySide = false;
-    if (rows.length === 2) {
-        sideBySide = rowWidths[0] + groupGap + rowWidths[1] <= innerW;
+    if (rows.length === 2 && rows[0].count <= MANY && rows[1].count <= MANY) {
+        sideBySide = rowWidths[0] + groupGap + rowWidths[1] + cbClusterW + groupGap <= innerW;
     }
 
-    const lineGap = 6;
-    const lines = sideBySide ? 1 : rows.length;
+    const lines = (sideBySide ? 1 : rows.length) || 1;
     const totalH = lines * btnH + (lines - 1) * lineGap + padY * 2;
     const panelY = topY;
 
@@ -278,89 +316,161 @@ function drawSelectionRows(ctx, node, state, topY, width) {
     const drawRow = (row, startX, lineY) => {
         let x = startX;
 
-        ctx.save();
-        ctx.font = labelFont;
-        ctx.fillStyle = "rgba(192, 206, 222, 0.95)";
-        ctx.textBaseline = "middle";
-        ctx.fillText(row.label, x, lineY + btnH * 0.5);
-        x += Math.ceil(ctx.measureText(row.label).width) + labelGap;
-        ctx.restore();
+        if (row.label) {
+            ctx.save();
+            ctx.font = labelFont;
+            ctx.fillStyle = "rgba(192, 206, 222, 0.95)";
+            ctx.textBaseline = "middle";
+            ctx.fillText(row.label, x, lineY + btnH * 0.5);
+            x += Math.ceil(ctx.measureText(row.label).width) + labelGap;
+            ctx.restore();
+        }
 
         ctx.save();
         ctx.font = btnFont;
-        for (let i = 0; i < row.count; i += 1) {
-            const text = String(i + 1);
-            const w = Math.max(24, Math.ceil(ctx.measureText(text).width) + 14);
-            const rect = { x, y: lineY, w, h: btnH };
-            drawButton(ctx, rect, text, i === row.selected);
-            state.buttonZones.push({ ...rect, type: row.type, index: i });
-            x += w + btnGap;
+        if (row.count > MANY) {
+            const prevRect = { x, y: lineY, w: navBtnW, h: btnH };
+            drawButton(ctx, prevRect, "\u2039", false);
+            state.buttonZones.push({ ...prevRect, type: "nav", navTarget: row.type, navDir: -1, index: 0 });
+            x += navBtnW + btnGap;
+
+            const navText = `${row.selected + 1} / ${row.count}`;
+            const tw = Math.ceil(ctx.measureText(navText).width) + 16;
+            ctx.fillStyle = "rgba(210, 224, 238, 0.96)";
+            ctx.textBaseline = "middle";
+            ctx.fillText(navText, x + 8, lineY + btnH * 0.5);
+            x += tw + btnGap;
+
+            const nextRect = { x, y: lineY, w: navBtnW, h: btnH };
+            drawButton(ctx, nextRect, "\u203A", false);
+            state.buttonZones.push({ ...nextRect, type: "nav", navTarget: row.type, navDir: 1, index: 0 });
+            x += navBtnW + btnGap;
+        } else {
+            for (let i = 0; i < row.count; i += 1) {
+                const text = String(i + 1);
+                const w = Math.max(24, Math.ceil(ctx.measureText(text).width) + 14);
+                const rect = { x, y: lineY, w, h: btnH };
+                drawButton(ctx, rect, text, i === row.selected);
+                state.buttonZones.push({ ...rect, type: row.type, index: i });
+                x += w + btnGap;
+            }
         }
         ctx.restore();
         return x;
     };
 
-    if (sideBySide) {
-        const lineY = panelY + padY;
-        let x = panelX + padX;
-        x = drawRow(rows[0], x, lineY);
-        x += groupGap - btnGap;
-        drawRow(rows[1], x, lineY);
-    } else {
-        let lineY = panelY + padY;
-        for (const row of rows) {
-            drawRow(row, panelX + padX, lineY);
-            lineY += btnH + lineGap;
+    if (rows.length) {
+        if (sideBySide) {
+            const lineY = panelY + padY;
+            let x = panelX + padX;
+            x = drawRow(rows[0], x, lineY);
+            x += groupGap - btnGap;
+            drawRow(rows[1], x, lineY);
+        } else {
+            let lineY = panelY + padY;
+            for (const row of rows) {
+                drawRow(row, panelX + padX, lineY);
+                lineY += btnH + lineGap;
+            }
         }
     }
 
-    // Pair/unpair checkbox on the right side (only when data is pairable).
-    if (state.paired) {
-        const boxSize = 13;
-        const labelText = "Pair";
-        ctx.save();
-        ctx.font = "500 10px Segoe UI";
-        const labelW = Math.ceil(ctx.measureText(labelText).width);
-        const boxX = panelX + panelW - padX - boxSize;
-        const boxY = panelY + (totalH - boxSize) * 0.5;
-        const labelX = boxX - 5 - labelW;
-        const labelMidY = boxY + boxSize * 0.5;
-        const checked = !state.unpaired;
+    if (hasCheckboxes) {
+        const midY = panelY + padY + btnH * 0.5;
+        let rightX = panelX + panelW - padX;
 
-        ctx.fillStyle = "rgba(192, 206, 222, 0.95)";
-        ctx.textBaseline = "middle";
-        ctx.fillText(labelText, labelX, labelMidY);
+        const drawCheckbox = (label, checked, type) => {
+            ctx.save();
+            ctx.font = cbFont;
+            const labelW = Math.ceil(ctx.measureText(label).width);
+            const boxX = rightX - cbSize;
+            const boxY = midY - cbSize / 2;
+            const labelX = boxX - 5 - labelW;
 
-        ctx.beginPath();
-        addRoundedRectPath(ctx, boxX, boxY, boxSize, boxSize, 3);
-        ctx.fillStyle = checked ? "rgba(49, 92, 130, 0.98)" : "rgba(45, 51, 63, 0.98)";
-        ctx.strokeStyle = checked ? "rgba(66, 153, 225, 0.95)" : "rgba(86, 103, 122, 0.7)";
-        ctx.lineWidth = 1;
-        ctx.fill();
-        ctx.stroke();
+            ctx.fillStyle = "rgba(192, 206, 222, 0.95)";
+            ctx.textBaseline = "middle";
+            ctx.fillText(label, labelX, midY);
 
-        if (checked) {
-            ctx.strokeStyle = "rgba(245, 250, 255, 1)";
-            ctx.lineWidth = 1.6;
             ctx.beginPath();
-            ctx.moveTo(boxX + 3, boxY + boxSize * 0.55);
-            ctx.lineTo(boxX + boxSize * 0.42, boxY + boxSize - 3);
-            ctx.lineTo(boxX + boxSize - 2.5, boxY + 3);
+            addRoundedRectPath(ctx, boxX, boxY, cbSize, cbSize, 3);
+            ctx.fillStyle = checked ? "rgba(49, 92, 130, 0.98)" : "rgba(45, 51, 63, 0.98)";
+            ctx.strokeStyle = checked ? "rgba(66, 153, 225, 0.95)" : "rgba(86, 103, 122, 0.7)";
+            ctx.lineWidth = 1;
+            ctx.fill();
             ctx.stroke();
-        }
-        ctx.restore();
 
-        state.buttonZones.push({
-            x: labelX,
-            y: boxY - 2,
-            w: boxX + boxSize - labelX,
-            h: boxSize + 4,
-            type: "unpairToggle",
-            index: 0,
-        });
+            if (checked) {
+                ctx.strokeStyle = "rgba(245, 250, 255, 1)";
+                ctx.lineWidth = 1.6;
+                ctx.beginPath();
+                ctx.moveTo(boxX + 3, boxY + cbSize * 0.55);
+                ctx.lineTo(boxX + cbSize * 0.42, boxY + cbSize - 3);
+                ctx.lineTo(boxX + cbSize - 2.5, boxY + 3);
+                ctx.stroke();
+            }
+            ctx.restore();
+
+            state.buttonZones.push({
+                x: labelX,
+                y: boxY - 2,
+                w: boxX + cbSize - labelX,
+                h: cbSize + 4,
+                type,
+                index: 0,
+            });
+            rightX = labelX - 14;
+        };
+
+        if (showGridToggle) {
+            drawCheckbox("Grid", state.gridMode, "gridToggle");
+        }
+        if (showPairToggle) {
+            drawCheckbox("Pair", !state.unpaired, "unpairToggle");
+        }
     }
 
     return totalH;
+}
+
+function drawImageGrid(ctx, state, node, rect) {
+    state.gridZones = [];
+    const items = state.savedItems;
+    const n = items.length;
+    if (!n) {
+        return;
+    }
+
+    const cols = Math.ceil(Math.sqrt(n));
+    const rowCount = Math.ceil(n / cols);
+    const gap = 4;
+    const cellW = (rect.w - gap * (cols - 1)) / cols;
+    const cellH = (rect.h - gap * (rowCount - 1)) / rowCount;
+    if (cellW <= 1 || cellH <= 1) {
+        return;
+    }
+
+    for (let i = 0; i < n; i += 1) {
+        const c = i % cols;
+        const r = Math.floor(i / cols);
+        const cx = rect.x + c * (cellW + gap);
+        const cy = rect.y + r * (cellH + gap);
+        const cellRect = { x: cx, y: cy, w: cellW, h: cellH };
+
+        ctx.save();
+        ctx.fillStyle = "rgba(28, 32, 40, 0.92)";
+        ctx.fillRect(cx, cy, cellW, cellH);
+        const url = imageInfoToUrl(items[i]);
+        const img = getCachedImage(state, url, node);
+        if (img) {
+            drawContainImage(ctx, img, cellRect);
+        }
+        ctx.strokeStyle = "rgba(78, 90, 108, 0.5)";
+        ctx.lineWidth = 1;
+        ctx.strokeRect(cx + 0.5, cy + 0.5, cellW - 1, cellH - 1);
+        ctx.restore();
+
+        state.gridZones.push({ x: cx, y: cy, w: cellW, h: cellH, index: i });
+    }
 }
 
 function drawCompareCanvas(ctx, node) {
@@ -373,6 +483,7 @@ function drawCompareCanvas(ctx, node) {
     if (!state.savedItems.length) {
         state.previewRect = null;
         state.buttonZones = [];
+        state.gridZones = [];
         return;
     }
 
@@ -408,44 +519,56 @@ function drawCompareCanvas(ctx, node) {
     const savedUrl = imageInfoToUrl(savedItem);
     const savedImg = getCachedImage(state, savedUrl, node);
     const drawRect = { x: frameX + 1, y: frameY + 1, w: frameW - 2, h: frameH - 2 };
-    const savedDraw = drawContainImage(ctx, savedImg, drawRect);
 
-    const hasCompare = state.compareItems.length > 0;
-    const pairedView = state.paired && !state.unpaired;
-    const compareIndex = pairedView ? clampIndex(state.selectedSaved, state.compareItems.length) : state.selectedCompare;
-    const compareItem = hasCompare ? state.compareItems[compareIndex] : null;
+    if (state.gridMode && state.savedItems.length > 1) {
+        drawImageGrid(ctx, state, node, drawRect);
+        state.previewRect = null;
+        ctx.restore();
+    } else {
+        state.gridZones = [];
+        const savedDraw = drawContainImage(ctx, savedImg, drawRect);
 
-    if (compareItem && savedDraw && state.hovering) {
-        const compareUrl = imageInfoToUrl(compareItem);
-        const compareImg = getCachedImage(state, compareUrl, node);
+        const hasCompare = state.compareItems.length > 0;
+        const pairedView = state.paired && !state.unpaired;
+        const compareIndex = pairedView ? clampIndex(state.selectedSaved, state.compareItems.length) : state.selectedCompare;
+        const compareItem = hasCompare ? state.compareItems[compareIndex] : null;
 
-        if (compareImg && compareImg.naturalWidth && compareImg.naturalHeight) {
-            const splitX = savedDraw.x + clamp(state.split, 0, 1) * savedDraw.w;
+        if (compareItem && savedDraw && state.hovering) {
+            const compareUrl = imageInfoToUrl(compareItem);
+            const compareImg = getCachedImage(state, compareUrl, node);
 
-            ctx.save();
-            ctx.beginPath();
-            ctx.rect(savedDraw.x, savedDraw.y, Math.max(0, splitX - savedDraw.x), savedDraw.h);
-            ctx.clip();
-            drawContainImage(ctx, compareImg, drawRect);
-            ctx.restore();
+            if (compareImg && compareImg.naturalWidth && compareImg.naturalHeight) {
+                const splitX = savedDraw.x + clamp(state.split, 0, 1) * savedDraw.w;
 
-            ctx.fillStyle = "rgba(245, 249, 255, 0.95)";
-            ctx.fillRect(splitX - 1, savedDraw.y, 2, savedDraw.h);
-            ctx.beginPath();
-            ctx.arc(splitX, savedDraw.y + savedDraw.h * 0.5, 5, 0, Math.PI * 2);
-            ctx.fill();
+                ctx.save();
+                ctx.beginPath();
+                ctx.rect(savedDraw.x, savedDraw.y, Math.max(0, splitX - savedDraw.x), savedDraw.h);
+                ctx.clip();
+                drawContainImage(ctx, compareImg, drawRect);
+                ctx.restore();
 
-            state.previewRect = savedDraw;
+                ctx.fillStyle = "rgba(245, 249, 255, 0.95)";
+                ctx.fillRect(splitX - 1, savedDraw.y, 2, savedDraw.h);
+                ctx.beginPath();
+                ctx.arc(splitX, savedDraw.y + savedDraw.h * 0.5, 5, 0, Math.PI * 2);
+                ctx.fill();
+
+                state.previewRect = savedDraw;
+            } else {
+                state.previewRect = savedDraw;
+            }
         } else {
             state.previewRect = savedDraw;
         }
-    } else {
-        state.previewRect = savedDraw;
+
+        ctx.restore();
     }
 
-    ctx.restore();
-
-    // Footer: image size box (uses the selected saved image's natural dimensions).
+    // Footer: image size box. Shows the displayed image's size, or the first
+    // image's size in grid mode (one size for the whole batch).
+    const footerImg = state.gridMode
+        ? getCachedImage(state, imageInfoToUrl(state.savedItems[0]), node)
+        : savedImg;
     const footerX = frameX;
     const footerY = frameY + frameH + footerGap;
     const footerW = frameW;
@@ -459,8 +582,8 @@ function drawCompareCanvas(ctx, node) {
     ctx.stroke();
 
     let sizeText = "—";
-    if (savedImg && savedImg.naturalWidth && savedImg.naturalHeight) {
-        sizeText = `${savedImg.naturalWidth} × ${savedImg.naturalHeight}`;
+    if (footerImg && footerImg.naturalWidth && footerImg.naturalHeight) {
+        sizeText = `${footerImg.naturalWidth} × ${footerImg.naturalHeight}`;
     }
     ctx.font = "600 10px Segoe UI";
     ctx.fillStyle = "rgba(192, 206, 222, 0.95)";
@@ -508,6 +631,7 @@ function persistCompareData(node, state) {
     }
     node.properties._saveComparePaired = !!state.paired;
     node.properties._saveCompareUnpaired = !!state.unpaired;
+    node.properties._saveCompareGrid = !!state.gridMode;
     node.properties._saveCompareSavedIndex = state.selectedSaved;
     node.properties._saveCompareCompareIndex = state.selectedCompare;
 }
@@ -529,6 +653,7 @@ function restoreCompareData(node, state) {
     state.compareItems = parse(node.properties?._saveCompareCompareItems);
     state.paired = normalizeBool(node.properties?._saveComparePaired);
     state.unpaired = normalizeBool(node.properties?._saveCompareUnpaired);
+    state.gridMode = normalizeBool(node.properties?._saveCompareGrid);
     state.selectedSaved = clampIndex(node.properties?._saveCompareSavedIndex || 0, state.savedItems.length);
     state.selectedCompare = clampIndex(node.properties?._saveCompareCompareIndex || 0, state.compareItems.length);
     if (state.paired && !state.unpaired) {
@@ -577,16 +702,56 @@ function handlePointer(node, localPos) {
 
 function clickSelectionButton(node, localPos) {
     const state = ensureCompareState(node);
+
+    // Grid cell selection: pick the clicked image and return to single view.
+    for (const zone of state.gridZones || []) {
+        const hit = localPos[0] >= zone.x && localPos[0] <= zone.x + zone.w && localPos[1] >= zone.y && localPos[1] <= zone.y + zone.h;
+        if (!hit) {
+            continue;
+        }
+        state.selectedSaved = clampIndex(zone.index, state.savedItems.length);
+        if (state.paired && !state.unpaired) {
+            state.selectedCompare = clampIndex(zone.index, state.compareItems.length);
+        }
+        state.gridMode = false;
+        persistCompareData(node, state);
+        node.setDirtyCanvas?.(true, true);
+        return true;
+    }
+
     for (const zone of state.buttonZones) {
         const hit = localPos[0] >= zone.x && localPos[0] <= zone.x + zone.w && localPos[1] >= zone.y && localPos[1] <= zone.y + zone.h;
         if (!hit) {
             continue;
         }
 
+        if (zone.type === "gridToggle") {
+            state.gridMode = !state.gridMode;
+            persistCompareData(node, state);
+            node.setDirtyCanvas?.(true, true);
+            return true;
+        }
+
         if (zone.type === "unpairToggle") {
             state.unpaired = !state.unpaired;
             if (!state.unpaired) {
                 state.selectedCompare = clampIndex(state.selectedSaved, state.compareItems.length);
+            }
+            persistCompareData(node, state);
+            node.setDirtyCanvas?.(true, true);
+            return true;
+        }
+
+        if (zone.type === "nav") {
+            if (zone.navTarget === "A") {
+                const len = state.compareItems.length || 1;
+                state.selectedCompare = ((state.selectedCompare + zone.navDir) % len + len) % len;
+            } else {
+                const len = state.savedItems.length || 1;
+                state.selectedSaved = ((state.selectedSaved + zone.navDir) % len + len) % len;
+                if (state.paired && !state.unpaired) {
+                    state.selectedCompare = clampIndex(state.selectedSaved, state.compareItems.length);
+                }
             }
             persistCompareData(node, state);
             node.setDirtyCanvas?.(true, true);
@@ -617,6 +782,66 @@ function clickSelectionButton(node, localPos) {
     return false;
 }
 
+function stepSelectedImage(node, dir) {
+    const state = ensureCompareState(node);
+    if (state.gridMode) {
+        return false;
+    }
+
+    const usingCompareRow = state.compareItems.length > 0 && !(state.paired && !state.unpaired);
+    if (usingCompareRow) {
+        // In unpaired/A-B view the saved (B) row drives the main image.
+        const len = state.savedItems.length;
+        if (len <= 1) {
+            return false;
+        }
+        state.selectedSaved = ((state.selectedSaved + dir) % len + len) % len;
+    } else {
+        const len = state.savedItems.length;
+        if (len <= 1) {
+            return false;
+        }
+        state.selectedSaved = ((state.selectedSaved + dir) % len + len) % len;
+        if (state.paired && !state.unpaired) {
+            state.selectedCompare = clampIndex(state.selectedSaved, state.compareItems.length);
+        }
+    }
+
+    persistCompareData(node, state);
+    node.setDirtyCanvas?.(true, true);
+    return true;
+}
+
+let _fbHoveredSaveImageNode = null;
+let _fbKeyListenerInstalled = false;
+
+function installKeyNavigation() {
+    if (_fbKeyListenerInstalled) {
+        return;
+    }
+    _fbKeyListenerInstalled = true;
+
+    window.addEventListener("keydown", (event) => {
+        const node = _fbHoveredSaveImageNode;
+        if (!node || node.flags?.collapsed) {
+            return;
+        }
+        if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
+            return;
+        }
+
+        const target = event.target;
+        if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) {
+            return;
+        }
+
+        if (stepSelectedImage(node, event.key === "ArrowRight" ? 1 : -1)) {
+            event.preventDefault();
+            event.stopPropagation();
+        }
+    }, true);
+}
+
 app.registerExtension({
     name: "FBnodes.SaveImagePlus",
     beforeRegisterNodeDef(nodeType, nodeData) {
@@ -641,6 +866,7 @@ app.registerExtension({
             ensureCompareState(this);
             this.imgs = [];
             applyJpgQualityVisibility(this);
+            installKeyNavigation();
             return result;
         };
 
@@ -708,11 +934,18 @@ app.registerExtension({
         const onMouseMove = nodeType.prototype.onMouseMove;
         nodeType.prototype.onMouseMove = function (event, localPos, canvas) {
             const result = onMouseMove?.apply(this, arguments);
+            _fbHoveredSaveImageNode = this;
             const handled = handlePointer(this, localPos);
             if (canvas?.canvas) {
                 canvas.canvas.style.cursor = handled ? "ew-resize" : "";
             }
             return result;
+        };
+
+        const onMouseEnter = nodeType.prototype.onMouseEnter;
+        nodeType.prototype.onMouseEnter = function () {
+            _fbHoveredSaveImageNode = this;
+            return onMouseEnter?.apply(this, arguments);
         };
 
         const onMouseDown = nodeType.prototype.onMouseDown;
@@ -727,6 +960,9 @@ app.registerExtension({
         nodeType.prototype.onMouseLeave = function () {
             const result = onMouseLeave?.apply(this, arguments);
             const state = ensureCompareState(this);
+            if (_fbHoveredSaveImageNode === this) {
+                _fbHoveredSaveImageNode = null;
+            }
             if (state.hovering) {
                 state.hovering = false;
                 this.setDirtyCanvas?.(true, false);
