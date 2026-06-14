@@ -815,6 +815,22 @@ function stepSelectedImage(node, dir) {
 let _fbHoveredSaveImageNode = null;
 let _fbKeyListenerInstalled = false;
 
+function getActiveSaveImageNode(nodeType) {
+    // Prefer the node under the cursor, fall back to a single selected node.
+    if (_fbHoveredSaveImageNode && !_fbHoveredSaveImageNode.flags?.collapsed) {
+        return _fbHoveredSaveImageNode;
+    }
+
+    const selected = app.canvas?.selected_nodes;
+    if (selected) {
+        const nodes = Object.values(selected).filter((n) => n?.comfyClass === "SaveImagePlus" && !n.flags?.collapsed);
+        if (nodes.length === 1) {
+            return nodes[0];
+        }
+    }
+    return null;
+}
+
 function installKeyNavigation() {
     if (_fbKeyListenerInstalled) {
         return;
@@ -822,16 +838,30 @@ function installKeyNavigation() {
     _fbKeyListenerInstalled = true;
 
     window.addEventListener("keydown", (event) => {
-        const node = _fbHoveredSaveImageNode;
-        if (!node || node.flags?.collapsed) {
-            return;
-        }
-        if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
+        if (event.key !== "ArrowLeft" && event.key !== "ArrowRight" && event.key !== "Escape") {
             return;
         }
 
         const target = event.target;
         if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) {
+            return;
+        }
+
+        const node = getActiveSaveImageNode();
+        if (!node) {
+            return;
+        }
+
+        const state = ensureCompareState(node);
+
+        if (event.key === "Escape") {
+            if (!state.gridMode && state.savedItems.length > 1) {
+                state.gridMode = true;
+                persistCompareData(node, state);
+                node.setDirtyCanvas?.(true, true);
+                event.preventDefault();
+                event.stopPropagation();
+            }
             return;
         }
 
