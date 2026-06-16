@@ -174,22 +174,32 @@ async def extract_video_frame_api(request):
         if not filename:
             return server.web.json_response({"error": "Missing filename"}, status=400)
 
-        # Build full path
-        if source == 'output':
-            base_dir = folder_paths.get_output_directory()
+        # Absolute paths come from the "browse anywhere" file browser. Serve them
+        # directly (media extensions only) without the input/output containment check.
+        if os.path.isabs(filename):
+            file_path = os.path.realpath(filename)
+            ext = os.path.splitext(file_path)[1].lower()
+            if ext not in LIST_FILES_MEDIA_EXTENSIONS:
+                return server.web.json_response({"error": "Unsupported file type"}, status=403)
+            if not os.path.isfile(file_path):
+                return server.web.json_response({"error": "File not found"}, status=404)
         else:
-            base_dir = folder_paths.get_input_directory()
+            # Build full path
+            if source == 'output':
+                base_dir = folder_paths.get_output_directory()
+            else:
+                base_dir = folder_paths.get_input_directory()
 
-        file_path = os.path.join(base_dir, filename.replace('/', os.sep))
+            file_path = os.path.join(base_dir, filename.replace('/', os.sep))
 
-        if not os.path.exists(file_path):
-            return server.web.json_response({"error": "File not found"}, status=404)
+            if not os.path.exists(file_path):
+                return server.web.json_response({"error": "File not found"}, status=404)
 
-        # Validate path stays within base directory
-        real_base = os.path.realpath(base_dir)
-        real_path = os.path.realpath(file_path)
-        if not real_path.startswith(real_base):
-            return server.web.json_response({"error": "Invalid path"}, status=403)
+            # Validate path stays within base directory
+            real_base = os.path.realpath(base_dir)
+            real_path = os.path.realpath(file_path)
+            if not real_path.startswith(real_base):
+                return server.web.json_response({"error": "Invalid path"}, status=403)
 
         img = extract_video_frame_av(file_path, position)
         if img is None:
@@ -226,18 +236,27 @@ async def video_info_api(request):
     if not filename:
         return server.web.json_response({"error": "Missing filename"}, status=400)
 
-    if source == 'output':
-        base_dir = folder_paths.get_output_directory()
+    # Absolute paths come from the "browse anywhere" file browser.
+    if os.path.isabs(filename):
+        file_path = os.path.realpath(filename)
+        ext = os.path.splitext(file_path)[1].lower()
+        if ext not in LIST_FILES_MEDIA_EXTENSIONS:
+            return server.web.json_response({"error": "Unsupported file type"}, status=403)
+        if not os.path.isfile(file_path):
+            return server.web.json_response({"error": "File not found"}, status=404)
     else:
-        base_dir = folder_paths.get_input_directory()
+        if source == 'output':
+            base_dir = folder_paths.get_output_directory()
+        else:
+            base_dir = folder_paths.get_input_directory()
 
-    file_path = os.path.join(base_dir, filename.replace('/', os.sep))
-    real_base = os.path.realpath(base_dir)
-    real_path = os.path.realpath(file_path)
-    if not real_path.startswith(real_base):
-        return server.web.json_response({"error": "Invalid path"}, status=403)
-    if not os.path.exists(file_path):
-        return server.web.json_response({"error": "File not found"}, status=404)
+        file_path = os.path.join(base_dir, filename.replace('/', os.sep))
+        real_base = os.path.realpath(base_dir)
+        real_path = os.path.realpath(file_path)
+        if not real_path.startswith(real_base):
+            return server.web.json_response({"error": "Invalid path"}, status=403)
+        if not os.path.exists(file_path):
+            return server.web.json_response({"error": "File not found"}, status=404)
 
     try:
         container = av.open(file_path)
@@ -278,19 +297,30 @@ async def extract_video_frame_clip_api(request):
     if not filename:
         return server.web.json_response({"error": "Missing filename"}, status=400)
 
-    # Build & validate full path
-    if source == 'output':
-        base_dir = folder_paths.get_output_directory()
+    # Absolute paths come from the "browse anywhere" file browser. Serve them
+    # directly (media extensions only) without the input/output containment check.
+    if os.path.isabs(filename):
+        file_path = os.path.realpath(filename)
+        ext = os.path.splitext(file_path)[1].lower()
+        if ext not in LIST_FILES_MEDIA_EXTENSIONS:
+            return server.web.json_response({"error": "Unsupported file type"}, status=403)
+        if not os.path.isfile(file_path):
+            return server.web.json_response({"error": "File not found"}, status=404)
+        real_path = file_path
     else:
-        base_dir = folder_paths.get_input_directory()
+        # Build & validate full path
+        if source == 'output':
+            base_dir = folder_paths.get_output_directory()
+        else:
+            base_dir = folder_paths.get_input_directory()
 
-    file_path = os.path.join(base_dir, filename.replace('/', os.sep))
-    if not os.path.exists(file_path):
-        return server.web.json_response({"error": "File not found"}, status=404)
-    real_base = os.path.realpath(base_dir)
-    real_path = os.path.realpath(file_path)
-    if not real_path.startswith(real_base):
-        return server.web.json_response({"error": "Invalid path"}, status=403)
+        file_path = os.path.join(base_dir, filename.replace('/', os.sep))
+        if not os.path.exists(file_path):
+            return server.web.json_response({"error": "File not found"}, status=404)
+        real_base = os.path.realpath(base_dir)
+        real_path = os.path.realpath(file_path)
+        if not real_path.startswith(real_base):
+            return server.web.json_response({"error": "Invalid path"}, status=403)
 
     # Deterministic cache name in temp/
     import hashlib

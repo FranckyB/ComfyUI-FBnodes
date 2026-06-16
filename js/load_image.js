@@ -6,6 +6,11 @@
 
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
+import {
+    mediaFileUrl,
+    getMediaRoots,
+    classifySelection,
+} from "./path_browser.js";
 import { createFileBrowserModal } from "./file_browser.js";
 
 // Placeholder image path
@@ -13,6 +18,47 @@ const PLACEHOLDER_IMAGE_PATH = new URL("./placeholder.png", import.meta.url).hre
 
 // Track videos that the browser can't decode (H265/yuv444) to skip browser attempt on future scrubs
 const _nonBrowserDecodableVideos = new Set();
+
+function isAbsolutePath(value) {
+    if (!value) return false;
+    return /^([a-zA-Z]:[\\/]|\\\\|\/)/.test(value);
+}
+
+function basenameForDisplay(value) {
+    const s = String(value || "");
+    const normalized = s.replace(/\\/g, "/");
+    const i = normalized.lastIndexOf("/");
+    return i >= 0 ? normalized.substring(i + 1) : normalized;
+}
+
+function hideWidget(widget) {
+    if (!widget) return;
+    widget.hidden = true;
+    widget.computeSize = () => [0, -4];
+    if (widget.inputEl) widget.inputEl.style.display = "none";
+}
+
+/**
+ * Build a preview URL for a filename. Absolute paths (browsed from anywhere)
+ * stream through the raw-file route; relative names use ComfyUI's /view.
+ */
+function buildPreviewUrl(filename, viewType) {
+    if (isAbsolutePath(filename)) {
+        return mediaFileUrl(filename);
+    }
+    let actualFilename = filename;
+    let subfolder = "";
+    if (filename.includes('/')) {
+        const lastSlash = filename.lastIndexOf('/');
+        subfolder = filename.substring(0, lastSlash);
+        actualFilename = filename.substring(lastSlash + 1);
+    }
+    let url = `/view?filename=${encodeURIComponent(actualFilename)}&type=${viewType || 'input'}`;
+    if (subfolder) {
+        url += `&subfolder=${encodeURIComponent(subfolder)}`;
+    }
+    return url;
+}
 
 /**
  * Check if filename is a video file
@@ -59,19 +105,7 @@ async function cacheVideoFrame(filename, frameData, framePosition) {
  * Create and show image preview modal
  */
 function showImagePreviewModal(filename, viewType) {
-    let actualFilename = filename;
-    let subfolder = "";
-
-    if (filename.includes('/')) {
-        const lastSlash = filename.lastIndexOf('/');
-        subfolder = filename.substring(0, lastSlash);
-        actualFilename = filename.substring(lastSlash + 1);
-    }
-
-    let imageUrl = `/view?filename=${encodeURIComponent(actualFilename)}&type=${viewType || 'input'}`;
-    if (subfolder) {
-        imageUrl += `&subfolder=${encodeURIComponent(subfolder)}`;
-    }
+    const imageUrl = buildPreviewUrl(filename, viewType);
 
     const overlay = document.createElement('div');
     overlay.style.cssText = `
@@ -157,19 +191,7 @@ function showImagePreviewModal(filename, viewType) {
  * Create and show video preview modal
  */
 function showVideoPreviewModal(filename, viewType) {
-    let actualFilename = filename;
-    let subfolder = "";
-
-    if (filename.includes('/')) {
-        const lastSlash = filename.lastIndexOf('/');
-        subfolder = filename.substring(0, lastSlash);
-        actualFilename = filename.substring(lastSlash + 1);
-    }
-
-    let videoUrl = `/view?filename=${encodeURIComponent(actualFilename)}&type=${viewType || 'input'}`;
-    if (subfolder) {
-        videoUrl += `&subfolder=${encodeURIComponent(subfolder)}`;
-    }
+    const videoUrl = buildPreviewUrl(filename, viewType);
 
     const overlay = document.createElement('div');
     overlay.style.cssText = `
@@ -341,17 +363,7 @@ async function loadImageFile(node, filename, requestId) {
     try {
         const viewType = node._sourceFolder || 'input';
 
-        let actualFilename = filename;
-        let subfolder = "";
-        if (filename.includes('/')) {
-            const lastSlash = filename.lastIndexOf('/');
-            subfolder = filename.substring(0, lastSlash);
-            actualFilename = filename.substring(lastSlash + 1);
-        }
-        let fileUrl = `/view?filename=${encodeURIComponent(actualFilename)}&type=${viewType}`;
-        if (subfolder) {
-            fileUrl += `&subfolder=${encodeURIComponent(subfolder)}`;
-        }
+        let fileUrl = buildPreviewUrl(filename, viewType);
 
         const img = new Image();
         img.onload = () => {
@@ -430,19 +442,7 @@ async function loadVideoFrame(node, filename, requestId = null) {
         activeRequestId = requestId ?? beginPreviewRequest(node, filename, framePosition);
         const viewType = node._sourceFolder || 'input';
 
-        let actualFilename = filename;
-        let subfolder = "";
-
-        if (filename.includes('/')) {
-            const lastSlash = filename.lastIndexOf('/');
-            subfolder = filename.substring(0, lastSlash);
-            actualFilename = filename.substring(lastSlash + 1);
-        }
-
-        let videoUrl = `/view?filename=${encodeURIComponent(actualFilename)}&type=${viewType}`;
-        if (subfolder) {
-            videoUrl += `&subfolder=${encodeURIComponent(subfolder)}`;
-        }
+        let videoUrl = buildPreviewUrl(filename, viewType);
 
         // If this video is already known to be non-browser-decodable, go straight to server
         if (_nonBrowserDecodableVideos.has(filename)) {
@@ -596,6 +596,39 @@ app.registerExtension({
 
             const framePositionWidget = this.widgets?.find(w => w.name === "frame_position");
             let imageWidget = null;
+            let imagePickerWidget = null;
+            node._imagePickerMap = { "(none)": "(none)" };
+
+            const updateImagePickerOptions = (values, preferredValue = null) => {
+                if (!imagePickerWidget) return;
+
+                const labels = ["(none)"];
+                const map = { "(none)": "(none)" };
+                const usedLabels = new Set(["(none)"]);
+
+                for (const fullValue of values || []) {
+                    const base = basenameForDisplay(fullValue) || fullValue;
+                    let label = base;
+                    let idx = 2;
+                    while (usedLabels.has(label)) {
+                        label = `${base} (${idx++})`;
+                    }
+                    usedLabels.add(label);
+                    labels.push(label);
+                    map[label] = fullValue;
+                }
+
+                node._imagePickerMap = map;
+                imagePickerWidget.options.values = labels;
+
+                const desired = stripAnnotation(preferredValue != null ? preferredValue : imageWidget?.value);
+                if (desired && desired !== "(none)") {
+                    const label = Object.keys(map).find((k) => map[k] === desired);
+                    imagePickerWidget.value = label || "(none)";
+                } else {
+                    imagePickerWidget.value = "(none)";
+                }
+            };
 
             const refreshImageOptionsForSource = async (source, options = {}) => {
                 const { resetSelection = false, preferredValue = null } = options;
@@ -608,6 +641,7 @@ app.registerExtension({
                     const result = await listResponse.json();
                     const files = Array.isArray(result?.files) ? result.files : [];
                     imageWidget.options.values = ["(none)", ...files];
+                    updateImagePickerOptions(files, preferredValue);
 
                     if (resetSelection) {
                         if (imageWidget.value !== "(none)") {
@@ -630,22 +664,98 @@ app.registerExtension({
                 }
             };
 
+            const refreshImageOptionsForBrowsePath = async (browsePath, preferredValue = null) => {
+                if (!imageWidget || !browsePath) return false;
+                try {
+                    const roots = await getMediaRoots();
+                    const resp = await api.fetchApi(
+                        `/fbnodes/path-browser/list?path=${encodeURIComponent(browsePath)}&kind=media`
+                    );
+                    if (!resp.ok) return false;
+
+                    const data = await resp.json();
+                    const files = Array.isArray(data?.files) ? data.files : [];
+                    const mapped = [];
+                    const seen = new Set();
+
+                    for (const f of files) {
+                        const absPath = typeof f === "string" ? f : f?.path;
+                        if (!absPath) continue;
+                        const cls = classifySelection(absPath, roots);
+                        const value = cls?.value || absPath;
+                        if (!seen.has(value)) {
+                            seen.add(value);
+                            mapped.push(value);
+                        }
+                    }
+
+                    const desiredRaw = preferredValue != null ? preferredValue : imageWidget.value;
+                    const desired = stripAnnotation(desiredRaw);
+                    imageWidget.options.values = ["(none)", ...mapped];
+                    updateImagePickerOptions(mapped, desired);
+                    if (desired && desired !== "(none)") imageWidget.value = desired;
+                    return true;
+                } catch (err) {
+                    console.warn('[LoadImagePlus] Could not refresh options for browse path:', err);
+                    return false;
+                }
+            };
+
             // Source folder widget
             const sourceFolderWidget = this.widgets?.find(w => w.name === "source_folder");
             if (sourceFolderWidget) {
                 node._sourceFolder = sourceFolderWidget.value || 'input';
-                const origSfCb = sourceFolderWidget.callback;
-                sourceFolderWidget.callback = async function(value) {
-                    if (origSfCb) origSfCb.apply(this, arguments);
-                    node._sourceFolder = value || 'input';
-                    await refreshImageOptionsForSource(value, { resetSelection: true });
-                    node.setDirtyCanvas(true);
-                };
+                // Hidden for backward compatibility: still serialized so old
+                // workflows resolve relative paths, but driven by the browser now.
+                hideWidget(sourceFolderWidget);
             }
+
+            // Set the image combo to an arbitrary value (relative or absolute),
+            // adding it to the option list so the combo can display it.
+            const setImageFilename = (value) => {
+                if (!imageWidget) return;
+                if (!imageWidget.options) imageWidget.options = {};
+                const values = imageWidget.options.values;
+                if (Array.isArray(values)) {
+                    if (value && !values.includes(value)) {
+                        imageWidget.options.values = [...values, value];
+                    }
+                } else if (values && typeof values === "object") {
+                    const existingValues = Object.values(values);
+                    if (value && !existingValues.includes(value)) {
+                        const base = basenameForDisplay(value) || value;
+                        let label = base;
+                        let n = 2;
+                        while (Object.prototype.hasOwnProperty.call(values, label)) {
+                            label = `${base} (${n++})`;
+                        }
+                        imageWidget.options.values = { ...values, [label]: value };
+                    }
+                } else {
+                    imageWidget.options.values = ["(none)"];
+                    if (value && value !== "(none)") {
+                        imageWidget.options.values.push(value);
+                    }
+                }
+                imageWidget.value = value;
+                if (imageWidget.callback) imageWidget.callback(value);
+
+                // Keep custom flat picker in sync with current value.
+                const map = node._imagePickerMap || { "(none)": "(none)" };
+                const currentLabel = Object.keys(map).find((k) => map[k] === value);
+                if (imagePickerWidget) {
+                    imagePickerWidget.value = currentLabel || "(none)";
+                }
+                node.setDirtyCanvas(true);
+            };
 
             // Image widget
             imageWidget = this.widgets?.find(w => w.name === "image");
             if (imageWidget) {
+                // Hide native Comfy combo (tree behavior for slash paths) and use
+                // our own flat picker widget below.
+                hideWidget(imageWidget);
+
                 const originalCallback = imageWidget.callback;
                 imageWidget.callback = function(value) {
                     // Strip annotated filepath suffix from MaskEditor
@@ -670,25 +780,61 @@ app.registerExtension({
                     node._configuredFromWorkflow = false;
                 };
 
+                imagePickerWidget = this.addWidget(
+                    "combo",
+                    "file",
+                    "(none)",
+                    (label) => {
+                        const selected = node._imagePickerMap?.[label] || "(none)";
+                        setImageFilename(selected);
+                    },
+                    { values: ["(none)"] }
+                );
+                imagePickerWidget.serialize = false;
+
                 // Browse Files button
                 const imageWidgetIndex = this.widgets.indexOf(imageWidget);
                 const browseButton = {
                     type: "button",
                     name: "\u{1F4C1} Browse Files",
                     value: null,
-                    callback: () => {
-                        const currentFile = imageWidget.value === "(none)" ? null : imageWidget.value;
-                        const sourceFolder = node._sourceFolder || 'input';
-                        createFileBrowserModal(currentFile, (selectedFile) => {
-                            imageWidget.value = selectedFile;
-                            if (imageWidget.callback) imageWidget.callback(selectedFile);
-                            node.setDirtyCanvas(true);
-                        }, sourceFolder, {
-                            defaultFilter: 'all',
-                            listKind: 'media',
-                            allowedTypes: ['image', 'video'],
-                            filterTypeOptions: ['all', 'image', 'video'],
-                        });
+                    callback: async () => {
+                        const roots = await getMediaRoots();
+                        let initial = node.properties?._browsePath || "";
+                        if (!initial) {
+                            const sf = node.widgets?.find(w => w.name === "source_folder")?.value || "input";
+                            initial = sf === "output" ? roots.output : roots.input;
+                        }
+                        const sf = node.widgets?.find(w => w.name === "source_folder")?.value || "input";
+                        createFileBrowserModal(
+                            isAbsolutePath(imageWidget.value) ? imageWidget.value : null,
+                            (selected, meta) => {
+                                if (!node.properties) node.properties = {};
+                                if (meta && meta.absPath) {
+                                    node.properties._browsePath = meta.dir;
+                                    const cls = classifySelection(meta.absPath, meta.roots);
+                                    const sfW = node.widgets?.find(w => w.name === "source_folder");
+                                    if (cls.sourceFolder && sfW) {
+                                        sfW.value = cls.sourceFolder;
+                                        node._sourceFolder = cls.sourceFolder;
+                                    }
+                                    setImageFilename(cls.value);
+                                    refreshImageOptionsForBrowsePath(meta.dir, cls.value);
+                                } else {
+                                    setImageFilename(selected);
+                                    if (node.properties?._browsePath) {
+                                        refreshImageOptionsForBrowsePath(node.properties._browsePath, selected);
+                                    }
+                                }
+                            },
+                            sf,
+                            {
+                                enableNavigation: true,
+                                initialPath: initial,
+                                navKind: "media",
+                                allowedTypes: ["image", "video"],
+                            }
+                        );
                     },
                     serialize: false
                 };
@@ -750,8 +896,13 @@ app.registerExtension({
                 const sfWidget = this.widgets?.find(w => w.name === "source_folder");
                 if (sfWidget) node._sourceFolder = sfWidget.value || 'input';
 
-                // Keep filename combo aligned with current source folder after workflow restore.
-                refreshImageOptionsForSource(node._sourceFolder, { preferredValue: imageWidget?.value });
+                // Prefer last browsed folder for dropdown options. Only fall back
+                // to source-folder list when no browse path was persisted.
+                if (node.properties?._browsePath) {
+                    refreshImageOptionsForBrowsePath(node.properties._browsePath, imageWidget?.value);
+                } else {
+                    refreshImageOptionsForSource(node._sourceFolder, { preferredValue: imageWidget?.value });
+                }
 
                 // Restore persisted display state from properties (survives tab switches)
                 if (!node.properties) node.properties = {};

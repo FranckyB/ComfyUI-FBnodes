@@ -3,8 +3,68 @@
  * Shows thumbnails of files in input directory
  */
 
+import { mediaFileUrl, getCustomPresetPath } from "./path_browser.js";
+
 // Track current subfolder for navigation
 let currentSubfolder = '';
+
+// ---- Arbitrary-path ("browse anywhere") navigation state ----
+// 'legacy' = input/output relative browsing; 'abs' = absolute-path browsing.
+let currentNavMode = 'legacy';
+let currentAbsDir = '';
+let currentAbsParent = null;
+let currentAbsRoots = { input: '', output: '' };
+let currentNavKind = 'media';
+let currentAbsFocusName = '';
+
+function isAbsBrowserPath(p) {
+    return /^([a-zA-Z]:[\\/]|\\\\|\/)/.test(p || '');
+}
+
+function browserBasename(p) {
+    if (!p) return p;
+    const norm = String(p).replace(/\\/g, '/');
+    const idx = norm.lastIndexOf('/');
+    return idx >= 0 ? norm.slice(idx + 1) : norm;
+}
+
+async function fetchAbsListing(path, kind) {
+    const params = [];
+    if (path) params.push(`path=${encodeURIComponent(path)}`);
+    if (kind) params.push(`kind=${encodeURIComponent(kind)}`);
+    const query = params.length ? `?${params.join('&')}` : '';
+    const resp = await fetch(`/fbnodes/path-browser/list${query}`);
+    if (!resp.ok) {
+        let msg = `Request failed (${resp.status})`;
+        try {
+            const err = await resp.json();
+            if (err?.error) msg = err.error;
+        } catch { /* ignore */ }
+        throw new Error(msg);
+    }
+    return await resp.json();
+}
+
+function extractRootPaths(roots) {
+    const out = { input: '', output: '' };
+    if (!Array.isArray(roots)) return out;
+
+    // Supports both legacy string roots and object roots with ids.
+    if (roots.length > 0 && typeof roots[0] === 'string') {
+        out.input = roots[0] || '';
+        out.output = roots[1] || '';
+        return out;
+    }
+
+    const inputRoot = roots.find(r => r?.id === 'input');
+    const outputRoot = roots.find(r => r?.id === 'output');
+    out.input = inputRoot?.path || '';
+    out.output = outputRoot?.path || '';
+    if (!out.input && roots[0]?.path) out.input = roots[0].path;
+    if (!out.output && roots[1]?.path) out.output = roots[1].path;
+    return out;
+}
+
 // Track current source folder (input or output)
 let currentSourceFolder = 'input';
 // Track selected list mode and backend query kind.
@@ -60,6 +120,9 @@ function normalizeFilterTypeOptions(types, fallback) {
 }
 
 function buildViewUrl(filename) {
+    if (isAbsBrowserPath(filename)) {
+        return mediaFileUrl(filename);
+    }
     let subfolder = '';
     let basename = filename;
     if (filename.includes('/')) {
@@ -141,13 +204,24 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder, 
     currentSourceFolder = sourceFolder || 'input';
     setListMode(opts.listKind || 'media');
     currentAllowedTypes = normalizeAllowedTypes(opts.allowedTypes);
+
+    // Arbitrary-path navigation mode ("browse anywhere").
+    currentNavMode = opts.enableNavigation ? 'abs' : 'legacy';
+    currentNavKind = opts.navKind || 'media';
+    if (currentNavMode === 'abs') {
+        currentAbsDir = opts.initialPath || (isAbsBrowserPath(currentFile) ? currentFile.replace(/[\\/][^\\/]*$/, '') : '');
+        currentAbsParent = null;
+        currentAbsRoots = { input: '', output: '' };
+        currentAbsFocusName = '';
+    }
+
     // If a file is currently selected and lives in a subfolder, open in that folder
-    if (currentFile && currentFile.includes('/')) {
+    if (currentNavMode === 'legacy' && currentFile && currentFile.includes('/')) {
         currentSubfolder = currentFile.substring(0, currentFile.lastIndexOf('/'));
     } else {
         currentSubfolder = '';
     }
-    
+
     // Create modal overlay
     const overlay = document.createElement('div');
     overlay.className = 'prompt-extractor-browser-overlay';
@@ -192,18 +266,12 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder, 
     
     const topRow = document.createElement('div');
     topRow.style.cssText = 'display: flex; justify-content: space-between; align-items: center;';
+    const headerTitle = currentNavMode === 'abs'
+        ? 'Select File'
+        : `Select File from ${currentSourceFolder === 'output' ? 'Output' : 'Input'} Folder`;
     topRow.innerHTML = `
-        <h3 style="margin: 0; color: #aaa;">Select File from ${currentSourceFolder === 'output' ? 'Output' : 'Input'} Folder</h3>
+        <h3 style="margin: 0; color: #aaa;">${headerTitle}</h3>
         <div style="display: flex; gap: 10px; align-items: center;">
-            <button class="regenerate-cache-btn" style="
-                background: #333;
-                border: 1px solid #555;
-                border-radius: 6px;
-                color: #ccc;
-                padding: 5px 12px;
-                cursor: pointer;
-                font-size: 12px;
-            ">\u267B\uFE0F Regenerate Cache</button>
             <button class="close-btn" style="
                 background: none;
                 border: none;
@@ -222,14 +290,98 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder, 
     breadcrumb.style.cssText = 'font-size: 12px; color: #888; cursor: pointer;';
     breadcrumb.textContent = `${currentSourceFolder}/`;
     breadcrumb.onclick = () => {
-        if (currentSubfolder) {
+        if (currentNavMode === 'legacy' && currentSubfolder) {
             currentSubfolder = '';
             loadFileThumbnails(gridContainer, currentFile, onFileSelect, overlay, breadcrumb);
         }
     };
-    
+
     header.appendChild(topRow);
+
+    // Navigation toolbar (browse-anywhere mode): Up / Refresh / path box + presets.
+    if (currentNavMode === 'abs') {
+        const navRow = document.createElement('div');
+        navRow.style.cssText = 'display:flex; gap:8px; align-items:center; flex-wrap:wrap;';
+
+        const mkBtn = (label) => {
+            const b = document.createElement('button');
+            b.textContent = label;
+            b.style.cssText = 'background:#2e3b4a;border:1px solid rgba(255,255,255,0.2);border-radius:6px;color:#dce6f2;padding:5px 12px;cursor:pointer;font-size:12px;';
+            b.onmouseenter = () => { b.style.background = '#3a4a5c'; };
+            b.onmouseleave = () => { b.style.background = '#2e3b4a'; };
+            return b;
+        };
+
+        const upBtn = mkBtn('Up');
+        const refreshBtn = mkBtn('Refresh');
+        const pathInput = document.createElement('input');
+        pathInput.type = 'text';
+        pathInput.placeholder = 'Paste folder path and press Enter';
+        pathInput.style.cssText = 'flex:1;min-width:240px;font-size:12px;color:#dce6f2;background:#222a33;border:1px solid rgba(255,255,255,0.2);border-radius:6px;padding:6px 8px;';
+
+        const regenerateCacheBtn = document.createElement('button');
+        regenerateCacheBtn.className = 'regenerate-cache-btn';
+        regenerateCacheBtn.textContent = '\u267B\uFE0F Regenerate Cache';
+        regenerateCacheBtn.style.cssText = 'background:#333;border:1px solid #555;border-radius:6px;color:#ccc;padding:5px 12px;cursor:pointer;font-size:12px;';
+
+        const inputPreset = mkBtn('Input');
+        const outputPreset = mkBtn('Output');
+        const customPreset = mkBtn('Custom');
+
+        const goUp = () => {
+            if (!currentAbsParent) return;
+            currentAbsFocusName = browserBasename(currentAbsDir);
+            currentAbsDir = currentAbsParent;
+            loadFileThumbnails(gridContainer, currentFile, onFileSelect, overlay, breadcrumb);
+        };
+
+        upBtn.onclick = () => {
+            goUp();
+        };
+        refreshBtn.onclick = () => loadFileThumbnails(gridContainer, currentFile, onFileSelect, overlay, breadcrumb);
+        pathInput.addEventListener('keydown', (e) => {
+            if (e.key !== 'Enter') return;
+            const next = pathInput.value.trim();
+            if (!next) return;
+            currentAbsDir = next;
+            loadFileThumbnails(gridContainer, currentFile, onFileSelect, overlay, breadcrumb);
+        });
+        inputPreset.onclick = () => {
+            if (currentAbsRoots.input) { currentAbsDir = currentAbsRoots.input; loadFileThumbnails(gridContainer, currentFile, onFileSelect, overlay, breadcrumb); }
+        };
+        outputPreset.onclick = () => {
+            if (currentAbsRoots.output) { currentAbsDir = currentAbsRoots.output; loadFileThumbnails(gridContainer, currentFile, onFileSelect, overlay, breadcrumb); }
+        };
+        customPreset.onclick = () => {
+            const p = getCustomPresetPath();
+            if (p) { currentAbsDir = p; loadFileThumbnails(gridContainer, currentFile, onFileSelect, overlay, breadcrumb); }
+        };
+        if (!getCustomPresetPath()) customPreset.style.display = 'none';
+
+        navRow.appendChild(upBtn);
+        navRow.appendChild(refreshBtn);
+        navRow.appendChild(inputPreset);
+        navRow.appendChild(outputPreset);
+        navRow.appendChild(customPreset);
+        navRow.appendChild(pathInput);
+        navRow.appendChild(regenerateCacheBtn);
+        header.appendChild(navRow);
+
+        // Expose the path box so the loader can keep it in sync.
+        overlay._navPathInput = pathInput;
+        overlay._regenerateCacheBtn = regenerateCacheBtn;
+        overlay._goUp = goUp;
+    } else {
+        // Keep the legacy placement when absolute navigation is disabled.
+        const legacyRegenerateBtn = document.createElement('button');
+        legacyRegenerateBtn.className = 'regenerate-cache-btn';
+        legacyRegenerateBtn.textContent = '\u267B\uFE0F Regenerate Cache';
+        legacyRegenerateBtn.style.cssText = 'background:#333;border:1px solid #555;border-radius:6px;color:#ccc;padding:5px 12px;cursor:pointer;font-size:12px;';
+        topRow.querySelector('div').prepend(legacyRegenerateBtn);
+    }
+
     header.appendChild(breadcrumb);
+
 
     // Create search/filter bar
     const filterBar = document.createElement('div');
@@ -317,9 +469,17 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder, 
     overlay.onclick = (e) => {
         if (e.target === overlay) closeBrowserModal(overlay);
     };
+    // Mouse "Back" button should behave like Up while browsing.
+    overlay.onmouseup = (e) => {
+        if (e.button === 3 && typeof overlay._goUp === 'function') {
+            e.preventDefault();
+            e.stopPropagation();
+            overlay._goUp();
+        }
+    };
 
     // Regenerate cache button handler
-    const regenerateCacheBtn = topRow.querySelector('.regenerate-cache-btn');
+    const regenerateCacheBtn = overlay._regenerateCacheBtn || topRow.querySelector('.regenerate-cache-btn');
     regenerateCacheBtn.onclick = () => {
         clearThumbnailCache();
         // Reload thumbnails to regenerate them
@@ -367,6 +527,9 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder, 
 }
 
 async function loadFileThumbnails(container, currentFile, onFileSelect, overlay, breadcrumbElement) {
+    if (currentNavMode === 'abs') {
+        return loadFileThumbnailsAbs(container, currentFile, onFileSelect, overlay, breadcrumbElement);
+    }
     try {
         // Update breadcrumb
         if (!currentSubfolder) {
@@ -444,6 +607,149 @@ async function loadFileThumbnails(container, currentFile, onFileSelect, overlay,
         console.error('[FileBrowser] Error loading files:', error);
         container.innerHTML = '<div style="text-align: center; padding: 40px; color: rgba(220, 53, 69, 0.9);">Error loading files</div>';
     }
+}
+
+async function loadFileThumbnailsAbs(container, currentFile, onFileSelect, overlay, breadcrumbElement) {
+    container.innerHTML = '<div style="text-align: center; padding: 40px; color: #888;">Loading...</div>';
+    try {
+        let data = await fetchAbsListing(currentAbsDir, currentNavKind);
+
+        // No directory yet -> backend returns the available roots; jump into the first one.
+        if (data.mode === 'roots') {
+            const roots = data.roots || [];
+            currentAbsRoots = extractRootPaths(roots);
+            const firstPath = (currentSourceFolder === 'output' && currentAbsRoots.output)
+                ? currentAbsRoots.output
+                : (currentAbsRoots.input || currentAbsRoots.output);
+            if (!firstPath) {
+                container.innerHTML = '<div style="text-align: center; padding: 40px; color: #888;">No locations available</div>';
+                return;
+            }
+            currentAbsDir = firstPath;
+            data = await fetchAbsListing(currentAbsDir, currentNavKind);
+        }
+
+        currentAbsDir = data.current_path || currentAbsDir;
+        currentAbsParent = data.parent_path || null;
+        if (Array.isArray(data.roots)) {
+            currentAbsRoots = extractRootPaths(data.roots);
+        }
+
+        if (breadcrumbElement) breadcrumbElement.textContent = currentAbsDir;
+        if (overlay && overlay._navPathInput && document.activeElement !== overlay._navPathInput) {
+            overlay._navPathInput.value = currentAbsDir;
+        }
+
+        container.innerHTML = '';
+
+        // Sub-directories
+        const dirs = data.dirs || [];
+        let focusItem = null;
+        for (const dir of dirs) {
+            const item = createAbsFolderItem(dir.name, dir.path, container, currentFile, onFileSelect, overlay, breadcrumbElement);
+            if (currentAbsFocusName && dir.name === currentAbsFocusName) {
+                focusItem = item;
+                item.style.borderColor = 'rgba(66, 153, 225, 0.9)';
+                item.style.boxShadow = '0 0 0 2px rgba(66, 153, 225, 0.35)';
+            }
+            container.appendChild(item);
+        }
+        if (focusItem) {
+            requestAnimationFrame(() => {
+                focusItem.scrollIntoView({ block: 'center', behavior: 'instant' });
+            });
+            currentAbsFocusName = '';
+        }
+
+        // Files (absolute paths; thumbnail/url helpers detect abs paths)
+        const files = data.files || [];
+        let selectedItem = null;
+        for (const file of files) {
+            const thumb = createThumbnailItem(file.path, currentFile, onFileSelect, overlay);
+            if (thumb) {
+                container.appendChild(thumb);
+                if (currentFile && file.path === currentFile) selectedItem = thumb;
+            }
+        }
+
+        if (!dirs.length && !files.length && !currentAbsParent) {
+            const empty = document.createElement('div');
+            empty.style.cssText = 'text-align: center; padding: 40px; color: #888; grid-column: 1 / -1;';
+            empty.textContent = 'This folder is empty';
+            container.appendChild(empty);
+        }
+
+        if (selectedItem) {
+            requestAnimationFrame(() => {
+                selectedItem.scrollIntoView({ block: 'center', behavior: 'instant' });
+            });
+        }
+    } catch (error) {
+        console.error('[FileBrowser] Error loading absolute path:', error);
+        container.innerHTML = `<div style="text-align: center; padding: 40px; color: rgba(220, 53, 69, 0.9);">${error.message || 'Error loading files'}</div>`;
+    }
+}
+
+function createAbsFolderItem(name, absPath, container, currentFile, onFileSelect, overlay, breadcrumbElement) {
+    const item = document.createElement('div');
+    item.className = 'folder-item';
+    item.style.cssText = `
+        background: rgba(45, 55, 72, 0.7);
+        border: 1px solid rgba(226, 232, 240, 0.2);
+        border-radius: 6px;
+        padding: 8px;
+        cursor: pointer;
+        transition: all 0.15s ease;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+    `;
+
+    const preview = document.createElement('div');
+    preview.style.cssText = `
+        width: 100%;
+        height: 150px;
+        background: rgba(0, 0, 0, 0.5);
+        border-radius: 4px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 64px;
+    `;
+    preview.textContent = '\uD83D\uDCC1';
+
+    const label = document.createElement('div');
+    label.textContent = name;
+    label.style.cssText = `
+        font-size: 12px;
+        color: #ccc;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        text-align: center;
+    `;
+    label.title = name;
+
+    item.appendChild(preview);
+    item.appendChild(label);
+
+    item.onmouseenter = () => {
+        item.style.borderColor = 'rgba(66, 153, 225, 0.9)';
+        item.style.transform = 'translateY(-2px)';
+        item.style.background = 'rgba(50, 112, 163, 0.5)';
+    };
+    item.onmouseleave = () => {
+        item.style.borderColor = 'rgba(226, 232, 240, 0.2)';
+        item.style.transform = 'translateY(0)';
+        item.style.background = 'rgba(45, 55, 72, 0.7)';
+    };
+
+    item.onclick = () => {
+        currentAbsFocusName = '';
+        currentAbsDir = absPath;
+        loadFileThumbnails(container, currentFile, onFileSelect, overlay, breadcrumbElement);
+    };
+    return item;
 }
 
 function createBackItem(container, currentFile, onFileSelect, overlay, breadcrumbElement) {
@@ -611,15 +917,19 @@ function createThumbnailItem(filename, currentFile, onFileSelect, overlay) {
 
     if (imageExts.includes(ext)) {
         const img = document.createElement('img');
-        // Handle subfolder paths: split filename into folder and basename
-        let subfolder = '';
-        let basename = filename;
-        if (filename.includes('/')) {
-            const lastSlash = filename.lastIndexOf('/');
-            subfolder = filename.substring(0, lastSlash);
-            basename = filename.substring(lastSlash + 1);
+        if (isAbsBrowserPath(filename)) {
+            img.src = mediaFileUrl(filename);
+        } else {
+            // Handle subfolder paths: split filename into folder and basename
+            let subfolder = '';
+            let basename = filename;
+            if (filename.includes('/')) {
+                const lastSlash = filename.lastIndexOf('/');
+                subfolder = filename.substring(0, lastSlash);
+                basename = filename.substring(lastSlash + 1);
+            }
+            img.src = `/view?filename=${encodeURIComponent(basename)}&type=${currentSourceFolder}&subfolder=${encodeURIComponent(subfolder)}`;
         }
-        img.src = `/view?filename=${encodeURIComponent(basename)}&type=${currentSourceFolder}&subfolder=${encodeURIComponent(subfolder)}`;
         img.style.cssText = 'max-width: 100%; max-height: 100%; object-fit: contain;';
         img.onerror = () => {
             // Use placeholder image
@@ -658,7 +968,7 @@ function createThumbnailItem(filename, currentFile, onFileSelect, overlay) {
 
     // Filename label (show only basename, not full path)
     const label = document.createElement('div');
-    const basename = filename.includes('/') ? filename.split('/').pop() : filename;
+    const basename = browserBasename(filename);
     label.textContent = basename;
     label.style.cssText = `
         font-size: 12px;
@@ -689,6 +999,14 @@ function createThumbnailItem(filename, currentFile, onFileSelect, overlay) {
         }
     };
 
+    const selectFile = () => {
+        if (currentNavMode === 'abs') {
+            onFileSelect(filename, { absPath: filename, dir: currentAbsDir, roots: { ...currentAbsRoots } });
+        } else {
+            onFileSelect(filename);
+        }
+    };
+
     // Click handler
     if (item.dataset.type === 'audio') {
         item.onclick = async (e) => {
@@ -702,7 +1020,7 @@ function createThumbnailItem(filename, currentFile, onFileSelect, overlay) {
         item.ondblclick = (e) => {
             e.preventDefault();
             e.stopPropagation();
-            onFileSelect(filename);
+            selectFile();
             closeBrowserModal(overlay);
         };
     } else {
@@ -711,7 +1029,7 @@ function createThumbnailItem(filename, currentFile, onFileSelect, overlay) {
             if (document.querySelector('.thumbnail-context-menu')) {
                 return;
             }
-            onFileSelect(filename);
+            selectFile();
             closeBrowserModal(overlay);
         };
     }

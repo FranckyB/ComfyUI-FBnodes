@@ -5,6 +5,11 @@
 
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
+import {
+    mediaFileUrl,
+    getMediaRoots,
+    classifySelection,
+} from "./path_browser.js";
 import { createFileBrowserModal } from "./file_browser.js";
 
 const AUDIO_EXTENSIONS = ["wav", "flac", "mp3", "mp4", "m4a"];
@@ -14,6 +19,18 @@ function stripAnnotation(value) {
     return value.replace(/\s*\[(input|output|temp)\]\s*$/, "");
 }
 
+function isAbsolutePath(value) {
+    if (!value) return false;
+    return /^([a-zA-Z]:[\\/]|\\\\|\/)/.test(value);
+}
+
+function basenameForDisplay(value) {
+    const s = String(value || "");
+    const normalized = s.replace(/\\/g, "/");
+    const i = normalized.lastIndexOf("/");
+    return i >= 0 ? normalized.substring(i + 1) : normalized;
+}
+
 function isAudioFile(filename) {
     if (!filename || filename === "(none)") return false;
     const ext = filename.split(".").pop().toLowerCase();
@@ -21,6 +38,10 @@ function isAudioFile(filename) {
 }
 
 function buildAudioViewUrl(filename, sourceFolder) {
+    if (isAbsolutePath(filename)) {
+        return mediaFileUrl(filename);
+    }
+
     let actualFilename = filename;
     let subfolder = "";
 
@@ -51,6 +72,13 @@ function formatTime(seconds) {
 
 function getWidget(node, name) {
     return node.widgets?.find(w => w.name === name);
+}
+
+function hideWidget(widget) {
+    if (!widget) return;
+    widget.hidden = true;
+    widget.computeSize = () => [0, -4];
+    if (widget.inputEl) widget.inputEl.style.display = "none";
 }
 
 function markGraphChanged(node) {
@@ -672,6 +700,39 @@ app.registerExtension({
 
             if (inPointWidget) inPointWidget.serialize = true;
             if (outPointWidget) outPointWidget.serialize = true;
+            let audioPickerWidget = null;
+            node._audioPickerMap = { '(none)': '(none)' };
+
+            const updateAudioPickerOptions = (values, preferredValue = null) => {
+                if (!audioPickerWidget) return;
+
+                const labels = ['(none)'];
+                const map = { '(none)': '(none)' };
+                const usedLabels = new Set(['(none)']);
+
+                for (const fullValue of values || []) {
+                    const base = basenameForDisplay(fullValue) || fullValue;
+                    let label = base;
+                    let idx = 2;
+                    while (usedLabels.has(label)) {
+                        label = `${base} (${idx++})`;
+                    }
+                    usedLabels.add(label);
+                    labels.push(label);
+                    map[label] = fullValue;
+                }
+
+                node._audioPickerMap = map;
+                audioPickerWidget.options.values = labels;
+
+                const desired = stripAnnotation(preferredValue != null ? preferredValue : audioWidget?.value);
+                if (desired && desired !== '(none)') {
+                    const label = Object.keys(map).find((k) => map[k] === desired);
+                    audioPickerWidget.value = label || '(none)';
+                } else {
+                    audioPickerWidget.value = '(none)';
+                }
+            };
 
             const placeTimelineUnderBrowse = () => {
                 const widgets = node.widgets;
@@ -698,30 +759,89 @@ app.registerExtension({
 
             if (sourceFolderWidget) {
                 node._sourceFolder = sourceFolderWidget.value || "input";
-                const originalSourceCallback = sourceFolderWidget.callback;
-                sourceFolderWidget.callback = async function (value) {
-                    if (originalSourceCallback) originalSourceCallback.apply(this, arguments);
-
-                    node._sourceFolder = value || "input";
-                    node.properties._audioSourceFolder = node._sourceFolder;
-
-                    try {
-                        const listResponse = await api.fetchApi(`/fbnodes/list-files?source=${encodeURIComponent(node._sourceFolder)}&kind=audio`);
-                        if (listResponse.ok && audioWidget) {
-                            const filesResult = await listResponse.json();
-                            audioWidget.options.values = ["(none)", ...(filesResult.files || [])];
-                            audioWidget.value = "(none)";
-                            if (audioWidget.callback) audioWidget.callback("(none)");
-                        }
-                    } catch (error) {
-                        console.warn("[LoadAudioPlus] Could not fetch audio file list:", error);
-                    }
-
-                    node.setDirtyCanvas(true, true);
-                };
+                // Hidden for backward compatibility: still serialized so old
+                // workflows resolve relative paths, but driven by the browser now.
+                hideWidget(sourceFolderWidget);
             }
 
+            // Set the audio combo to an arbitrary value (relative or absolute),
+            // adding it to the option list so the combo can display it.
+            const setAudioFilename = (value) => {
+                if (!audioWidget) return;
+                if (!audioWidget.options) audioWidget.options = {};
+                const values = audioWidget.options.values;
+                if (Array.isArray(values)) {
+                    if (value && !values.includes(value)) {
+                        audioWidget.options.values = [...values, value];
+                    }
+                } else if (values && typeof values === 'object') {
+                    const existingValues = Object.values(values);
+                    if (value && !existingValues.includes(value)) {
+                        const base = basenameForDisplay(value) || value;
+                        let label = base;
+                        let n = 2;
+                        while (Object.prototype.hasOwnProperty.call(values, label)) {
+                            label = `${base} (${n++})`;
+                        }
+                        audioWidget.options.values = { ...values, [label]: value };
+                    }
+                } else {
+                    audioWidget.options.values = ["(none)"];
+                    if (value && value !== "(none)") {
+                        audioWidget.options.values.push(value);
+                    }
+                }
+                audioWidget.value = value;
+                if (audioWidget.callback) audioWidget.callback(value);
+
+                const map = node._audioPickerMap || { '(none)': '(none)' };
+                const currentLabel = Object.keys(map).find((k) => map[k] === value);
+                if (audioPickerWidget) {
+                    audioPickerWidget.value = currentLabel || '(none)';
+                }
+                node.setDirtyCanvas(true, true);
+            };
+
+            const refreshAudioOptionsForBrowsePath = async (browsePath, preferredValue = null) => {
+                if (!audioWidget || !browsePath) return false;
+                try {
+                    const roots = await getMediaRoots();
+                    const resp = await api.fetchApi(
+                        `/fbnodes/path-browser/list?path=${encodeURIComponent(browsePath)}&kind=audiovideo`
+                    );
+                    if (!resp.ok) return false;
+
+                    const data = await resp.json();
+                    const files = Array.isArray(data?.files) ? data.files : [];
+                    const mapped = [];
+                    const seen = new Set();
+
+                    for (const f of files) {
+                        const absPath = typeof f === 'string' ? f : f?.path;
+                        if (!absPath) continue;
+                        const cls = classifySelection(absPath, roots);
+                        const value = cls?.value || absPath;
+                        if (!seen.has(value)) {
+                            seen.add(value);
+                            mapped.push(value);
+                        }
+                    }
+
+                    const desired = stripAnnotation(preferredValue != null ? preferredValue : audioWidget.value);
+                    audioWidget.options.values = ['(none)', ...mapped];
+                    updateAudioPickerOptions(mapped, desired);
+                    if (desired && desired !== '(none)') audioWidget.value = desired;
+                    return true;
+                } catch (err) {
+                    console.warn('[LoadAudioPlus] Could not refresh options for browse path:', err);
+                    return false;
+                }
+            };
+
             if (audioWidget) {
+                hideWidget(audioWidget);
+                const audioWidgetIndex = this.widgets.indexOf(audioWidget);
+
                 const originalAudioCallback = audioWidget.callback;
                 audioWidget.callback = function (value) {
                     const cleaned = stripAnnotation(value);
@@ -747,25 +867,64 @@ app.registerExtension({
                     node.setDirtyCanvas(true, true);
                 };
 
-                const audioWidgetIndex = this.widgets.indexOf(audioWidget);
+                audioPickerWidget = this.addWidget(
+                    'combo',
+                    'file',
+                    '(none)',
+                    (label) => {
+                        const selected = node._audioPickerMap?.[label] || '(none)';
+                        setAudioFilename(selected);
+                    },
+                    { values: ['(none)'] }
+                );
+                audioPickerWidget.serialize = false;
+
+                const pickerIndex = this.widgets.indexOf(audioPickerWidget);
+                if (pickerIndex >= 0) {
+                    this.widgets.splice(pickerIndex, 1);
+                    this.widgets.splice(audioWidgetIndex + 1, 0, audioPickerWidget);
+                }
+
                 const browseButton = {
                     type: "button",
                     name: "\u{1F4C1} Browse Files",
                     value: null,
-                    callback: () => {
-                        const currentFile = audioWidget.value === "(none)" ? null : stripAnnotation(audioWidget.value);
-                        const sourceFolder = node._sourceFolder || "input";
-
+                    callback: async () => {
+                        const roots = await getMediaRoots();
+                        let initial = node.properties?._browsePath || "";
+                        if (!initial) {
+                            const sf = getWidget(node, "source_folder")?.value || "input";
+                            initial = sf === "output" ? roots.output : roots.input;
+                        }
+                        const sf = getWidget(node, "source_folder")?.value || "input";
                         createFileBrowserModal(
-                            currentFile,
-                            (selectedFile) => {
-                                audioWidget.value = selectedFile;
-                                if (audioWidget.callback) audioWidget.callback(selectedFile);
+                            isAbsolutePath(audioWidget.value) ? audioWidget.value : null,
+                            (selected, meta) => {
+                                if (!node.properties) node.properties = {};
+                                if (meta && meta.absPath) {
+                                    node.properties._browsePath = meta.dir;
+                                    const cls = classifySelection(meta.absPath, meta.roots);
+                                    const sfW = getWidget(node, "source_folder");
+                                    if (cls.sourceFolder && sfW) {
+                                        sfW.value = cls.sourceFolder;
+                                        node._sourceFolder = cls.sourceFolder;
+                                        node.properties._audioSourceFolder = cls.sourceFolder;
+                                    }
+                                    setAudioFilename(cls.value);
+                                    refreshAudioOptionsForBrowsePath(meta.dir, cls.value);
+                                } else {
+                                    setAudioFilename(selected);
+                                    if (node.properties?._browsePath) {
+                                        refreshAudioOptionsForBrowsePath(node.properties._browsePath, selected);
+                                    }
+                                }
                                 node.setDirtyCanvas(true, true);
                             },
-                            sourceFolder,
+                            sf,
                             {
-                                defaultFilter: "all",
+                                enableNavigation: true,
+                                initialPath: initial,
+                                navKind: "audiovideo",
                                 listKind: "all",
                                 showListKindSelector: true,
                                 allowedTypes: ["audio", "video"],
@@ -775,7 +934,7 @@ app.registerExtension({
                     serialize: false,
                 };
 
-                this.widgets.splice(audioWidgetIndex + 1, 0, browseButton);
+                this.widgets.splice(audioWidgetIndex + 2, 0, browseButton);
                 Object.defineProperty(browseButton, "node", { value: node });
                 placeTimelineUnderBrowse();
             }
@@ -812,6 +971,10 @@ app.registerExtension({
                     const sfWidget = getWidget(node, "source_folder");
                     if (sfWidget) {
                         node._sourceFolder = sfWidget.value || "input";
+                    }
+
+                    if (node.properties?._browsePath && audioWidget) {
+                        refreshAudioOptionsForBrowsePath(node.properties._browsePath, audioWidget.value);
                     }
 
                     if (node.properties) {

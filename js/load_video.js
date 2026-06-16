@@ -7,6 +7,11 @@
 
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
+import {
+    mediaFileUrl,
+    getMediaRoots,
+    classifySelection,
+} from "./path_browser.js";
 import { createFileBrowserModal } from "./file_browser.js";
 
 const VIDEO_EXTENSIONS = ['mp4', 'webm', 'mov', 'avi', 'mkv', 'm4v', 'wmv'];
@@ -24,6 +29,25 @@ const PLACEHOLDER_VIDEO_PATH = new URL("./placeholder.mp4", import.meta.url).hre
 function stripAnnotation(value) {
     if (!value) return value;
     return value.replace(/\s*\[(input|output|temp)\]\s*$/, '');
+}
+
+function isAbsolutePath(value) {
+    if (!value) return false;
+    return /^([a-zA-Z]:[\\/]|\\\\|\/)/.test(stripAnnotation(value));
+}
+
+function basenameForDisplay(value) {
+    const s = String(value || "");
+    const normalized = s.replace(/\\/g, "/");
+    const i = normalized.lastIndexOf("/");
+    return i >= 0 ? normalized.substring(i + 1) : normalized;
+}
+
+function hideWidget(widget) {
+    if (!widget) return;
+    widget.hidden = true;
+    widget.computeSize = () => [0, -4];
+    if (widget.inputEl) widget.inputEl.style.display = "none";
 }
 
 /**
@@ -221,46 +245,148 @@ app.registerExtension({
             const node = this;
 
             node._sourceFolder = 'input';
+            let videoPickerWidget = null;
+            node._videoPickerMap = { '(none)': '(none)' };
+
+            const updateVideoPickerOptions = (values, preferredValue = null) => {
+                if (!videoPickerWidget) return;
+
+                const labels = ['(none)'];
+                const map = { '(none)': '(none)' };
+                const usedLabels = new Set(['(none)']);
+
+                for (const fullValue of values || []) {
+                    const base = basenameForDisplay(fullValue) || fullValue;
+                    let label = base;
+                    let idx = 2;
+                    while (usedLabels.has(label)) {
+                        label = `${base} (${idx++})`;
+                    }
+                    usedLabels.add(label);
+                    labels.push(label);
+                    map[label] = fullValue;
+                }
+
+                node._videoPickerMap = map;
+                videoPickerWidget.options.values = labels;
+
+                const desired = stripAnnotation(preferredValue != null ? preferredValue : videoWidget?.value);
+                if (desired && desired !== '(none)') {
+                    const label = Object.keys(map).find((k) => map[k] === desired);
+                    videoPickerWidget.value = label || '(none)';
+                } else {
+                    videoPickerWidget.value = '(none)';
+                }
+            };
 
             // Source folder widget
             const sourceFolderWidget = this.widgets?.find(w => w.name === "source_folder");
             if (sourceFolderWidget) {
                 node._sourceFolder = sourceFolderWidget.value || 'input';
-                const origSfCb = sourceFolderWidget.callback;
-                sourceFolderWidget.callback = async function(value) {
-                    if (origSfCb) origSfCb.apply(this, arguments);
-                    node._sourceFolder = value || 'input';
-                    try {
-                        const listResponse = await api.fetchApi(`/fbnodes/list-files?source=${encodeURIComponent(value)}`);
-                        if (listResponse.ok) {
-                            const result = await listResponse.json();
-                            if (videoWidget) {
-                                const videoFiles = (result.files || []).filter(f => {
-                                    const ext = f.split('.').pop().toLowerCase();
-                                    return VIDEO_EXTENSIONS.includes(ext);
-                                });
-                                videoWidget.options.values = ["(none)", ...videoFiles];
-                                videoWidget.value = "(none)";
-                                if (videoWidget.callback) videoWidget.callback("(none)");
-                            }
-                        }
-                    } catch (err) {
-                        console.warn('[LoadVideoPlus] Could not fetch file list:', err);
-                    }
-                    node.setDirtyCanvas(true);
-                };
+                // Hidden for backward compatibility: still serialized so old
+                // workflows resolve relative paths, but driven by the browser now.
+                hideWidget(sourceFolderWidget);
             }
+
+            // Set the video combo to an arbitrary value (relative or absolute),
+            // adding it to the option list so the combo can display it.
+            const setVideoFilename = (value) => {
+                if (!videoWidget) return;
+                if (!videoWidget.options) videoWidget.options = {};
+                const values = videoWidget.options.values;
+                if (Array.isArray(values)) {
+                    if (value && !values.includes(value)) {
+                        videoWidget.options.values = [...values, value];
+                    }
+                } else if (values && typeof values === 'object') {
+                    const existingValues = Object.values(values);
+                    if (value && !existingValues.includes(value)) {
+                        const base = basenameForDisplay(value) || value;
+                        let label = base;
+                        let n = 2;
+                        while (Object.prototype.hasOwnProperty.call(values, label)) {
+                            label = `${base} (${n++})`;
+                        }
+                        videoWidget.options.values = { ...values, [label]: value };
+                    }
+                } else {
+                    videoWidget.options.values = ["(none)"];
+                    if (value && value !== "(none)") {
+                        videoWidget.options.values.push(value);
+                    }
+                }
+                videoWidget.value = value;
+                if (videoWidget.callback) videoWidget.callback(value);
+
+                const map = node._videoPickerMap || { '(none)': '(none)' };
+                const currentLabel = Object.keys(map).find((k) => map[k] === value);
+                if (videoPickerWidget) {
+                    videoPickerWidget.value = currentLabel || '(none)';
+                }
+                node.setDirtyCanvas(true);
+            };
+
+            const refreshVideoOptionsForBrowsePath = async (browsePath, preferredValue = null) => {
+                if (!videoWidget || !browsePath) return false;
+                try {
+                    const roots = await getMediaRoots();
+                    const resp = await api.fetchApi(
+                        `/fbnodes/path-browser/list?path=${encodeURIComponent(browsePath)}&kind=video`
+                    );
+                    if (!resp.ok) return false;
+
+                    const data = await resp.json();
+                    const files = Array.isArray(data?.files) ? data.files : [];
+                    const mapped = [];
+                    const seen = new Set();
+
+                    for (const f of files) {
+                        const absPath = typeof f === 'string' ? f : f?.path;
+                        if (!absPath) continue;
+                        const cls = classifySelection(absPath, roots);
+                        const value = cls?.value || absPath;
+                        if (!seen.has(value)) {
+                            seen.add(value);
+                            mapped.push(value);
+                        }
+                    }
+
+                    const desired = stripAnnotation(preferredValue != null ? preferredValue : videoWidget.value);
+                    videoWidget.options.values = ['(none)', ...mapped];
+                    updateVideoPickerOptions(mapped, desired);
+                    if (desired && desired !== '(none)') videoWidget.value = desired;
+                    return true;
+                } catch (err) {
+                    console.warn('[LoadVideoPlus] Could not refresh options for browse path:', err);
+                    return false;
+                }
+            };
 
             // Video widget
             const videoWidget = this.widgets?.find(w => w.name === "video");
             if (videoWidget) {
+                hideWidget(videoWidget);
+                const videoWidgetIndex = this.widgets.indexOf(videoWidget);
+
                 // Hook into video widget callback to detect H265 and show server-extracted frame
                 const origVideoCallback = videoWidget.callback;
                 videoWidget.callback = function(value) {
+                    const clean = stripAnnotation(value);
+
+                    // Files outside input/output are absolute paths the native
+                    // player can't fetch via /view; render our own preview, then
+                    // run H265 detection so unplayable codecs get a server clip.
+                    if (isAbsolutePath(value)) {
+                        if (origVideoCallback) origVideoCallback.apply(this, arguments);
+                        videoWidget.value = clean;
+                        createVideoPreview(node, mediaFileUrl(clean));
+                        checkVideoPlayability(node, clean);
+                        return;
+                    }
+
                     // The native player reads widget.value to build the video URL.
                     // Temporarily set value with [output] so it resolves correctly,
                     // then restore the clean name for display.
-                    const clean = stripAnnotation(value);
                     if (node._sourceFolder === 'output' && clean && clean !== '(none)') {
                         videoWidget.value = clean + ' [output]';
                     }
@@ -291,30 +417,70 @@ app.registerExtension({
                     }
                 };
 
+                videoPickerWidget = this.addWidget(
+                    'combo',
+                    'file',
+                    '(none)',
+                    (label) => {
+                        const selected = node._videoPickerMap?.[label] || '(none)';
+                        setVideoFilename(selected);
+                    },
+                    { values: ['(none)'] }
+                );
+                videoPickerWidget.serialize = false;
+
+                const pickerIndex = this.widgets.indexOf(videoPickerWidget);
+                if (pickerIndex >= 0) {
+                    this.widgets.splice(pickerIndex, 1);
+                    this.widgets.splice(videoWidgetIndex + 1, 0, videoPickerWidget);
+                }
+
                 // Browse Files button
-                const videoWidgetIndex = this.widgets.indexOf(videoWidget);
                 const browseButton = {
                     type: "button",
                     name: "\u{1F4C1} Browse Files",
                     value: null,
-                    callback: () => {
-                        const rawValue = videoWidget.value;
-                        const currentFile = (!rawValue || rawValue === "(none)") ? null : stripAnnotation(rawValue);
-                        const sourceFolder = node._sourceFolder || 'input';
-                        createFileBrowserModal(currentFile, (selectedFile) => {
-                            videoWidget.value = selectedFile;
-                            if (videoWidget.callback) videoWidget.callback(selectedFile);
-                            node.setDirtyCanvas(true);
-                        }, sourceFolder, {
-                            defaultFilter: 'all',
-                            listKind: 'media',
-                            allowedTypes: ['video'],
-                            filterTypeOptions: ['all', 'video'],
-                        });
+                    callback: async () => {
+                        const roots = await getMediaRoots();
+                        let initial = node.properties?._browsePath || "";
+                        if (!initial) {
+                            const sf = node.widgets?.find(w => w.name === "source_folder")?.value || "input";
+                            initial = sf === "output" ? roots.output : roots.input;
+                        }
+                        const sf = node.widgets?.find(w => w.name === "source_folder")?.value || "input";
+                        createFileBrowserModal(
+                            isAbsolutePath(videoWidget.value) ? stripAnnotation(videoWidget.value) : null,
+                            (selected, meta) => {
+                                if (!node.properties) node.properties = {};
+                                if (meta && meta.absPath) {
+                                    node.properties._browsePath = meta.dir;
+                                    const cls = classifySelection(meta.absPath, meta.roots);
+                                    const sfW = node.widgets?.find(w => w.name === "source_folder");
+                                    if (cls.sourceFolder && sfW) {
+                                        sfW.value = cls.sourceFolder;
+                                        node._sourceFolder = cls.sourceFolder;
+                                    }
+                                    setVideoFilename(cls.value);
+                                    refreshVideoOptionsForBrowsePath(meta.dir, cls.value);
+                                } else {
+                                    setVideoFilename(selected);
+                                    if (node.properties?._browsePath) {
+                                        refreshVideoOptionsForBrowsePath(node.properties._browsePath, selected);
+                                    }
+                                }
+                            },
+                            sf,
+                            {
+                                enableNavigation: true,
+                                initialPath: initial,
+                                navKind: "video",
+                                allowedTypes: ["video"],
+                            }
+                        );
                     },
                     serialize: false
                 };
-                this.widgets.splice(videoWidgetIndex + 1, 0, browseButton);
+                this.widgets.splice(videoWidgetIndex + 2, 0, browseButton);
                 Object.defineProperty(browseButton, "node", { value: node });
             }
 
@@ -335,7 +501,9 @@ app.registerExtension({
                 const sfWidget = this.widgets?.find(w => w.name === "source_folder");
                 if (sfWidget) node._sourceFolder = sfWidget.value || 'input';
 
-                if (node._sourceFolder === 'output' && videoWidget) {
+                const hasBrowsePath = Boolean(node.properties?._browsePath);
+
+                if (!hasBrowsePath && node._sourceFolder === 'output' && videoWidget) {
                     api.fetchApi(`/fbnodes/list-files?source=output`).then(resp => {
                         if (resp.ok) return resp.json();
                     }).then(data => {
@@ -347,6 +515,7 @@ app.registerExtension({
                                 return VIDEO_EXTENSIONS.includes(ext);
                             });
                             videoWidget.options.values = ["(none)", ...videoFiles];
+                            updateVideoPickerOptions(videoFiles, savedStripped);
                             // Restore the saved value
                             if (savedStripped && videoFiles.includes(savedStripped)) {
                                 videoWidget.value = savedStripped;
@@ -360,11 +529,22 @@ app.registerExtension({
                     }).catch(() => {});
                 }
 
+                if (hasBrowsePath && videoWidget) {
+                    refreshVideoOptionsForBrowsePath(node.properties._browsePath, videoWidget.value);
+                }
+
                 // Check video playability (H265/yuv444 fallback).
                 // Server check is fast and the preview clip is cached in temp/.
                 if (videoWidget) {
                     const filename = stripAnnotation(videoWidget.value);
-                    if (filename && filename !== '(none)') {
+                    if (isAbsolutePath(filename)) {
+                        // Out-of-tree absolute path: render via our raw-file route,
+                        // then detect H265/yuv444 and swap in a server preview clip.
+                        setTimeout(() => {
+                            createVideoPreview(node, mediaFileUrl(filename));
+                            checkVideoPlayability(node, filename);
+                        }, 200);
+                    } else if (filename && filename !== '(none)') {
                         // Ensure native player can resolve output files
                         if (node._sourceFolder === 'output') {
                             videoWidget.value = filename + ' [output]';
