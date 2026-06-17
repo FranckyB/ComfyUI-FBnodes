@@ -156,6 +156,15 @@ def _trim_waveform(
     return trimmed, trimmed_duration
 
 
+def _empty_audio_payload(sample_rate: int = 44100) -> dict:
+    # Use a 1-sample silent tensor so downstream audio nodes still receive a
+    # valid AUDIO structure while semantic duration remains 0.
+    return {
+        "waveform": torch.zeros((1, 2, 1), dtype=torch.float32),
+        "sample_rate": int(sample_rate),
+    }
+
+
 class LoadAudioPlus:
     """
     Audio loader with file browser, input/output folder switching, and clip trim points.
@@ -204,7 +213,7 @@ class LoadAudioPlus:
 
     def load(self, audio="", source_folder="input", in_point=0.0, out_point=0.0, unique_id=None):
         if not audio or audio == "(none)":
-            raise ValueError("No audio file selected. Please choose an audio file.")
+            return (_empty_audio_payload(), 0.0)
 
         file_path, annotated_type = _parse_annotated_path(audio)
         if annotated_type:

@@ -3,7 +3,7 @@ import { app } from "../../scripts/app.js";
 const PREVIEW_W = 420;
 const PREVIEW_H = 360;
 const NODE_MIN_W = 240;
-const NODE_MIN_H = 420;
+const NODE_MIN_H = 440;
 const NODE_MIN_SIZE_W = NODE_MIN_W + 22;
 const NODE_MIN_SIZE_H = NODE_MIN_H;
 const HANDLE_MIN_SIZE = 20;
@@ -13,6 +13,7 @@ const CORNER_HIT_SIZE = 24;
 const SIDE_HANDLE_HIT_THICKNESS = 14;
 const CANVAS_PAD = 4;
 const SIDE_HANDLE_LENGTH_MULT = 1.5;
+const RESET_WIDGET_ROW_H = 10;
 const INFO_ROW_WIDGET_H = 24;
 const PREVIEW_CACHE = new Map();
 
@@ -121,16 +122,50 @@ function updateInfoWidget(node, state) {
     w.textContent = `${pctWS}% x ${pctHS}% | ${rwS}px x ${rhS}px`;
 }
 
-function parseRatioLabel(label, landscape) {
-    if (!label || label === "None") return null;
+function parseRatioLabel(label) {
+    if (!label || label === "None" || label === "Source") return null;
     const m = String(label).match(/\s*([0-9]*\.?[0-9]+)\s*:\s*([0-9]*\.?[0-9]+)\s*/);
     if (!m) return null;
     let a = Number(m[1]);
     let b = Number(m[2]);
     if (!Number.isFinite(a) || !Number.isFinite(b) || b === 0) return null;
-    let r = a / b;
-    if (landscape) r = 1 / r;
+    const r = a / b;
     return r > 0 ? r : null;
+}
+
+function getActiveRatio(node, state) {
+    const portrait = !!getWidget(node, "portrait")?.value;
+    const label = getWidget(node, "aspect_ratio")?.value;
+    if (label === "Source") {
+        // Source must always match the image orientation/ratio directly.
+        return state.imageW > 0 && state.imageH > 0 ? (state.imageW / state.imageH) : null;
+    }
+    const r = parseRatioLabel(label);
+    if (!r || r <= 0) return null;
+    return portrait ? 1 / r : r;
+}
+
+function syncPortraitToSource(node, state) {
+    const aspect = getWidget(node, "aspect_ratio");
+    if (!aspect || aspect.value !== "Source") return;
+
+    const portraitWidget = getWidget(node, "portrait");
+    if (!portraitWidget) return;
+
+    // Portrait image => toggle on, landscape/square => toggle off.
+    const shouldBePortrait = state.imageH > state.imageW;
+    portraitWidget.value = shouldBePortrait;
+}
+
+function toPercent(value, total) {
+    if (!Number.isFinite(value) || !Number.isFinite(total) || total <= 0) return 0;
+    return (value / total) * 100;
+}
+
+function fromPercent(pct, total) {
+    if (!Number.isFinite(total) || total <= 0) return 0;
+    const p = Math.max(0, Math.min(100, Number(pct) || 0));
+    return Math.round((p / 100) * total);
 }
 
 function clampRect(rect, w, h) {
@@ -319,15 +354,25 @@ function updateWidgetValues(node, state) {
     if (wr) wr.value = state.rect.right;
     if (wt) wt.value = state.rect.top;
     if (wb) wb.value = state.rect.bottom;
+
+    const pct = node._cropPctWidgets;
+    if (pct) {
+        if (pct.left) pct.left.value = Number(toPercent(state.rect.left, state.imageW).toFixed(2));
+        if (pct.right) pct.right.value = Number(toPercent(state.rect.right, state.imageW).toFixed(2));
+        if (pct.top) pct.top.value = Number(toPercent(state.rect.top, state.imageH).toFixed(2));
+        if (pct.bottom) pct.bottom.value = Number(toPercent(state.rect.bottom, state.imageH).toFixed(2));
+    }
+
     state._persistCrop?.();
     node.setDirtyCanvas?.(true, true);
 }
 
 function syncRectFromWidgets(node, state) {
-    state.rect.left = Number(getCropWidget(node, "left")?.value ?? 0);
-    state.rect.right = Number(getCropWidget(node, "right")?.value ?? state.imageW);
-    state.rect.top = Number(getCropWidget(node, "top")?.value ?? 0);
-    state.rect.bottom = Number(getCropWidget(node, "bottom")?.value ?? state.imageH);
+    const pct = node._cropPctWidgets;
+    state.rect.left = fromPercent(pct?.left?.value ?? 0, state.imageW);
+    state.rect.right = fromPercent(pct?.right?.value ?? 100, state.imageW);
+    state.rect.top = fromPercent(pct?.top?.value ?? 0, state.imageH);
+    state.rect.bottom = fromPercent(pct?.bottom?.value ?? 100, state.imageH);
     clampRect(state.rect, state.imageW, state.imageH);
 }
 
@@ -364,10 +409,10 @@ function ensurePersistState(node) {
 
 function persistCropState(node, state) {
     const p = ensurePersistState(node);
-    p.left = state.rect.left;
-    p.right = state.rect.right;
-    p.top = state.rect.top;
-    p.bottom = state.rect.bottom;
+    p.left_pct = Number(toPercent(state.rect.left, state.imageW).toFixed(4));
+    p.right_pct = Number(toPercent(state.rect.right, state.imageW).toFixed(4));
+    p.top_pct = Number(toPercent(state.rect.top, state.imageH).toFixed(4));
+    p.bottom_pct = Number(toPercent(state.rect.bottom, state.imageH).toFixed(4));
     p.has_saved_crop = true;
 }
 
@@ -384,12 +429,13 @@ function getNodeCacheKey(node) {
 }
 
 function hasLikelySavedCrop(node) {
-    const left = Number(getCropWidget(node, "left")?.value ?? 0);
-    const right = Number(getCropWidget(node, "right")?.value ?? 640);
-    const top = Number(getCropWidget(node, "top")?.value ?? 0);
-    const bottom = Number(getCropWidget(node, "bottom")?.value ?? 480);
+    const pct = node._cropPctWidgets;
+    const left = Number(pct?.left?.value ?? 0);
+    const right = Number(pct?.right?.value ?? 100);
+    const top = Number(pct?.top?.value ?? 0);
+    const bottom = Number(pct?.bottom?.value ?? 100);
     if (![left, right, top, bottom].every(Number.isFinite)) return false;
-    return !(left === 0 && right === 640 && top === 0 && bottom === 480);
+    return !(left === 0 && right === 100 && top === 0 && bottom === 100);
 }
 
 function buildUI(node) {
@@ -485,7 +531,7 @@ function buildUI(node) {
         hasVisibleImage: false,
         viewW: PREVIEW_W,
         viewH: PREVIEW_H,
-        lastLandscape: false,
+        lastPortrait: false,
         _persistCrop: null,
         dispW: PREVIEW_W,
         dispH: PREVIEW_H,
@@ -653,13 +699,14 @@ function buildUI(node) {
     }
 
     function applyAspectFromWidgets() {
-        const landscape = !!getWidget(node, "landscape")?.value;
-        const ratio = parseRatioLabel(getWidget(node, "aspect_ratio")?.value, landscape);
-        const landscapeToggled = landscape !== state.lastLandscape;
-        state.lastLandscape = landscape;
+        syncPortraitToSource(node, state);
+        const portrait = !!getWidget(node, "portrait")?.value;
+        const ratio = getActiveRatio(node, state);
+        const orientationToggled = portrait !== state.lastPortrait;
+        state.lastPortrait = portrait;
 
         if (ratio) {
-            if (landscapeToggled) {
+            if (orientationToggled) {
                 fitRectByAreaAndRatio(state.rect, state.imageW, state.imageH, ratio);
             } else {
                 fitRectToRatio(state.rect, state.imageW, state.imageH, ratio);
@@ -729,7 +776,7 @@ function buildUI(node) {
                 else r.bottom = r.top + minSize;
             }
 
-            const ratio = parseRatioLabel(getWidget(node, "aspect_ratio")?.value, !!getWidget(node, "landscape")?.value);
+            const ratio = getActiveRatio(node, state);
             displayToRect(state, r);
             if (ratio && drag.mode === "resize") {
                 applyRatioForHandle(state.rect, drag.handle, ratio, state.imageW, state.imageH);
@@ -772,7 +819,8 @@ function buildUI(node) {
             state.imageW = Number(info.width) || 640;
             state.imageH = Number(info.height) || 480;
             state.img.src = info.preview || "";
-            state.lastLandscape = !!getWidget(node, "landscape")?.value;
+            syncPortraitToSource(node, state);
+            state.lastPortrait = !!getWidget(node, "portrait")?.value;
 
             const signature = info.signature || null;
             state.hasVisibleImage = signature !== "none";
@@ -797,12 +845,8 @@ function buildUI(node) {
             } else if (isNewImage) {
                 state.imageKey = imageKey;
                 state.signature = signature;
-                state.rect.left = 0;
-                state.rect.right = state.imageW;
-                state.rect.top = 0;
-                state.rect.bottom = state.imageH;
-                const aspectWidget = getWidget(node, "aspect_ratio");
-                if (aspectWidget) aspectWidget.value = "None";
+                // Keep existing crop percentages across image changes.
+                syncRectFromWidgets(node, state);
                 updateWidgetValues(node, state);
             } else {
                 syncRectFromWidgets(node, state);
@@ -847,7 +891,7 @@ app.registerExtension({
             this._dragCropUI = ui;
 
             const panelEl = document.createElement("div");
-            panelEl.style.cssText = "display:flex; flex-direction:column; width:100%; height:100%; box-sizing:border-box;";
+            panelEl.style.cssText = "display:flex; flex-direction:column; width:100%; height:100%; box-sizing:border-box; margin-top:-10px;";
 
             const infoEl = document.createElement("div");
             infoEl.textContent = "--";
@@ -856,6 +900,40 @@ app.registerExtension({
 
             panelEl.appendChild(ui.state.root);
             panelEl.appendChild(infoEl);
+            this._cropPctWidgets = {
+                left: getWidget(this, "left_pct"),
+                right: getWidget(this, "right_pct"),
+                top: getWidget(this, "top_pct"),
+                bottom: getWidget(this, "bottom_pct"),
+            };
+
+            const resetWidget = this.addWidget("button", "Reset Crop", null, () => {
+                ui.state.rect.left = 0;
+                ui.state.rect.right = ui.state.imageW;
+                ui.state.rect.top = 0;
+                ui.state.rect.bottom = ui.state.imageH;
+                const aspectWidget = getWidget(this, "aspect_ratio");
+                if (aspectWidget) aspectWidget.value = "None";
+                updateWidgetValues(this, ui.state);
+                ui.redraw();
+            });
+            resetWidget.serialize = false;
+
+            const aspectWidget = getWidget(this, "aspect_ratio");
+            if (aspectWidget?.options) {
+                aspectWidget.options.values = [
+                    "None",
+                    "Source",
+                    "1:1 (Square)",
+                    "3:2 (Photo)",
+                    "4:3 (Standard)",
+                    "16:9 (Widescreen)",
+                    "21:9 (Ultrawide)",
+                ];
+                if (!aspectWidget.options.values.includes(aspectWidget.value)) {
+                    aspectWidget.value = "None";
+                }
+            }
 
             const domWidget = this.addDOMWidget("drag_crop_preview", "customwidget", panelEl, {
                 serialize: false,
@@ -868,7 +946,7 @@ app.registerExtension({
 
             const resizeRoot = () => {
                 const width = Math.max(120, (this.size?.[0] || NODE_MIN_W) - 22);
-                const reserved = 205 + INFO_ROW_WIDGET_H;
+                const reserved = (205 + RESET_WIDGET_ROW_H) + INFO_ROW_WIDGET_H;
                 const previewHeight = Math.max(120, (this.size?.[1] || NODE_MIN_H) - reserved);
                 const totalHeight = previewHeight + INFO_ROW_WIDGET_H;
                 panelEl.style.width = `${width}px`;
@@ -878,7 +956,17 @@ app.registerExtension({
                 infoEl.style.height = `${INFO_ROW_WIDGET_H}px`;
                 ui.redraw();
             };
+
+            const scheduleStableRedraw = () => {
+                requestAnimationFrame(() => {
+                    resizeRoot();
+                    requestAnimationFrame(() => {
+                        resizeRoot();
+                    });
+                });
+            };
             resizeRoot();
+            scheduleStableRedraw();
 
             const oldOnResize = this.onResize;
             this.onResize = function () {
@@ -902,7 +990,7 @@ app.registerExtension({
             const onNumericCropChanged = (handle) => {
                 syncRectFromWidgets(this, ui.state);
 
-                const ratio = parseRatioLabel(getWidget(this, "aspect_ratio")?.value, !!getWidget(this, "landscape")?.value);
+                const ratio = getActiveRatio(this, ui.state);
                 if (ratio) {
                     applyRatioForHandle(ui.state.rect, handle, ratio, ui.state.imageW, ui.state.imageH);
                     updateWidgetValues(this, ui.state);
@@ -913,18 +1001,12 @@ app.registerExtension({
                 ui.redraw();
             };
 
-            wireWidget("left", () => onNumericCropChanged("w"));
-            wireWidget("right", () => onNumericCropChanged("e"));
-            wireWidget("top", () => onNumericCropChanged("n"));
-            wireWidget("bottom", () => onNumericCropChanged("s"));
+            wireWidget("left_pct", () => onNumericCropChanged("w"));
+            wireWidget("right_pct", () => onNumericCropChanged("e"));
+            wireWidget("top_pct", () => onNumericCropChanged("n"));
+            wireWidget("bottom_pct", () => onNumericCropChanged("s"));
             wireWidget("aspect_ratio", () => ui.applyAspectFromWidgets());
-            wireWidget("landscape", () => ui.applyAspectFromWidgets());
-
-            const persistAfterWidget = () => persistCropState(this, ui.state);
-            wireWidget("left", persistAfterWidget);
-            wireWidget("right", persistAfterWidget);
-            wireWidget("top", persistAfterWidget);
-            wireWidget("bottom", persistAfterWidget);
+            wireWidget("portrait", () => ui.applyAspectFromWidgets());
 
             ui.redraw();
             return r;
@@ -963,15 +1045,16 @@ app.registerExtension({
                 }
 
                 if (p?.has_saved_crop) {
-                    const left = Number(p.left ?? p.crop_left);
-                    const right = Number(p.right ?? p.crop_right);
-                    const top = Number(p.top ?? p.crop_top);
-                    const bottom = Number(p.bottom ?? p.crop_bottom);
+                    const left = Number(p.left_pct);
+                    const right = Number(p.right_pct);
+                    const top = Number(p.top_pct);
+                    const bottom = Number(p.bottom_pct);
+
                     if ([left, right, top, bottom].every(Number.isFinite)) {
-                        const wl = getCropWidget(this, "left");
-                        const wr = getCropWidget(this, "right");
-                        const wt = getCropWidget(this, "top");
-                        const wb = getCropWidget(this, "bottom");
+                        const wl = this._cropPctWidgets?.left;
+                        const wr = this._cropPctWidgets?.right;
+                        const wt = this._cropPctWidgets?.top;
+                        const wb = this._cropPctWidgets?.bottom;
                         if (wl) wl.value = left;
                         if (wr) wr.value = right;
                         if (wt) wt.value = top;
@@ -982,6 +1065,9 @@ app.registerExtension({
                 syncRectFromWidgets(this, ui.state);
                 persistCropState(this, ui.state);
                 ui.redraw();
+                requestAnimationFrame(() => {
+                    ui.redraw();
+                });
             }
             return r;
         };

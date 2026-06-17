@@ -619,7 +619,7 @@ class LoadImagePlus:
     RETURN_TYPES = ("IMAGE", "MASK")
     RETURN_NAMES = ("image", "mask")
     FUNCTION = "load"
-    OUTPUT_NODE = True
+    OUTPUT_NODE = False
 
     @classmethod
     def VALIDATE_INPUTS(cls, **kwargs):

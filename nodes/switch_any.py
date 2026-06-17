@@ -7,6 +7,17 @@ stripped from the execution graph so they are never evaluated by ComfyUI.
 import re
 
 
+def _coerce_bool(value):
+    """Normalize booleans from UI/runtime values (bool/int/str)."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
 def parse_names(names_str, count):
     """Split a names string by comma or semicolon into a list of *count* names."""
     parts = re.split(r"[;,]", names_str)

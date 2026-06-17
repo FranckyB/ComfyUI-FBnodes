@@ -17,18 +17,17 @@ from PIL import Image
 
 ASPECT_RATIO_PRESETS = [
     "None",
-    "1:1",
-    "1.25:1",
-    "1.5:1",
-    "1.778:1",
-    "1.875:1",
-    "2:1",
-    "2.4:1",
+    "Source",
+    "1:1 (Square)",
+    "3:2 (Photo)",
+    "4:3 (Standard)",
+    "16:9 (Widescreen)",
+    "21:9 (Ultrawide)",
 ]
 
 
 def _parse_ratio(label: str) -> Optional[float]:
-    if not label or label == "None":
+    if not label or label in {"None", "Source"}:
         return None
     m = re.match(r"\s*([0-9]*\.?[0-9]+)\s*:\s*([0-9]*\.?[0-9]+)\s*", label)
     if not m:
@@ -139,12 +138,12 @@ class CropImagePlus:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "left": ("INT", {"default": 0, "min": 0, "max": 999999, "step": 1}),
-                "right": ("INT", {"default": 640, "min": 1, "max": 999999, "step": 1}),
-                "top": ("INT", {"default": 0, "min": 0, "max": 999999, "step": 1}),
-                "bottom": ("INT", {"default": 480, "min": 1, "max": 999999, "step": 1}),
+                "left_pct": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100.0, "step": 0.1}),
+                "right_pct": ("FLOAT", {"default": 100.0, "min": 0.0, "max": 100.0, "step": 0.1}),
+                "top_pct": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 100.0, "step": 0.1}),
+                "bottom_pct": ("FLOAT", {"default": 100.0, "min": 0.0, "max": 100.0, "step": 0.1}),
                 "aspect_ratio": (ASPECT_RATIO_PRESETS, {"default": "None"}),
-                "landscape": ("BOOLEAN", {"default": False}),
+                "portrait": ("BOOLEAN", {"default": False}),
             },
             "optional": {
                 "image": ("IMAGE",),
@@ -159,13 +158,23 @@ class CropImagePlus:
     CATEGORY = "FBnodes"
     DESCRIPTION = "Interactive crop with draggable box and optional aspect-ratio lock."
 
-    def crop(self, left, right, top, bottom, aspect_ratio, landscape, image=None, mask=None):
+    def crop(self, left_pct, right_pct, top_pct, bottom_pct, aspect_ratio, portrait, image=None, mask=None):
         preview, width, height, signature = _preview_from_image_or_mask(image, mask)
+
+        left_pct = float(max(0.0, min(100.0, left_pct)))
+        right_pct = float(max(0.0, min(100.0, right_pct)))
+        top_pct = float(max(0.0, min(100.0, top_pct)))
+        bottom_pct = float(max(0.0, min(100.0, bottom_pct)))
+
+        left = int(round((left_pct / 100.0) * width))
+        right = int(round((right_pct / 100.0) * width))
+        top = int(round((top_pct / 100.0) * height))
+        bottom = int(round((bottom_pct / 100.0) * height))
 
         left, right, top, bottom = _clamp_crop(left, right, top, bottom, width, height)
 
         ratio = _parse_ratio(aspect_ratio)
-        if ratio is not None and landscape:
+        if ratio is not None and portrait:
             ratio = 1.0 / ratio if ratio != 0 else ratio
         if ratio is not None:
             left, right, top, bottom = _fit_rect_aspect(left, right, top, bottom, width, height, ratio)
@@ -192,7 +201,7 @@ class CropImagePlus:
                     "top": top,
                     "bottom": bottom,
                     "aspect_ratio": aspect_ratio,
-                    "landscape": bool(landscape),
+                    "portrait": bool(portrait),
                 }]
             },
             "result": (cropped_image, cropped_mask),
