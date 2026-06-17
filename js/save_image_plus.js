@@ -196,9 +196,9 @@ function drawButton(ctx, rect, text, active) {
 
     ctx.font = "600 10px Segoe UI";
     ctx.fillStyle = active ? "rgba(245, 250, 255, 1)" : "rgba(210, 224, 238, 0.96)";
+    ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    const tw = ctx.measureText(text).width;
-    ctx.fillText(text, rect.x + (rect.w - tw) * 0.5, rect.y + rect.h * 0.5);
+    ctx.fillText(text, rect.x + rect.w * 0.5, rect.y + rect.h * 0.5 + 0.5);
     ctx.restore();
 }
 
@@ -217,25 +217,23 @@ function drawSelectionRows(ctx, node, state, topY, width) {
     const MANY = 8;
 
     const rows = [];
-    if (!state.gridMode) {
-        if (hasCompare && pairedView) {
-            if (savedCount > 1) {
-                rows.push({ label: "Pair", count: savedCount, selected: state.selectedSaved, type: "pair" });
-            }
-        } else if (hasCompare) {
-            if (compareCount > 1) {
-                rows.push({ label: "A", count: compareCount, selected: state.selectedCompare, type: "A" });
-            }
-            if (savedCount > 1) {
-                rows.push({ label: "B", count: savedCount, selected: state.selectedSaved, type: "B" });
-            }
-        } else if (savedCount > 1) {
-            rows.push({ label: "", count: savedCount, selected: state.selectedSaved, type: "B" });
+    if (hasCompare && pairedView) {
+        if (savedCount > 1) {
+            rows.push({ label: "Pair", count: savedCount, selected: state.selectedSaved, type: "pair" });
         }
+    } else if (hasCompare) {
+        if (compareCount > 1) {
+            rows.push({ label: "A", count: compareCount, selected: state.selectedCompare, type: "A" });
+        }
+        if (savedCount > 1) {
+            rows.push({ label: "B", count: savedCount, selected: state.selectedSaved, type: "B" });
+        }
+    } else if (savedCount > 1) {
+        rows.push({ label: "", count: savedCount, selected: state.selectedSaved, type: "B" });
     }
 
     const showGridToggle = savedCount > 1;
-    const showPairToggle = state.paired && savedCount > 1 && !state.gridMode;
+    const showPairToggle = state.paired && savedCount > 1;
     const hasCheckboxes = showGridToggle || showPairToggle;
 
     if (!rows.length && !hasCheckboxes) {
@@ -350,7 +348,7 @@ function drawSelectionRows(ctx, node, state, topY, width) {
                 const text = String(i + 1);
                 const w = Math.max(24, Math.ceil(ctx.measureText(text).width) + 14);
                 const rect = { x, y: lineY, w, h: btnH };
-                drawButton(ctx, rect, text, i === row.selected);
+                drawButton(ctx, rect, text, !state.gridMode && i === row.selected);
                 state.buttonZones.push({ ...rect, type: row.type, index: i });
                 x += w + btnGap;
             }
@@ -612,6 +610,9 @@ function setResultData(node, message) {
         state.selectedCompare = clampIndex(state.selectedSaved, compareItems.length);
     }
 
+    // Default to grid view when a new execution returns multiple saved images.
+    state.gridMode = savedItems.length > 1;
+
     state.imageCache.clear();
     node.imgs = [];
 
@@ -759,14 +760,32 @@ function clickSelectionButton(node, localPos) {
         }
 
         if (zone.type === "pair") {
-            state.selectedSaved = clampIndex(zone.index, state.savedItems.length);
-            state.selectedCompare = clampIndex(zone.index, state.compareItems.length);
+            const target = clampIndex(zone.index, state.savedItems.length);
+            if (!state.gridMode && target === state.selectedSaved) {
+                state.gridMode = true;
+            } else {
+                state.selectedSaved = target;
+                state.selectedCompare = clampIndex(target, state.compareItems.length);
+                state.gridMode = false;
+            }
         } else if (zone.type === "A") {
-            state.selectedCompare = clampIndex(zone.index, state.compareItems.length);
+            const target = clampIndex(zone.index, state.compareItems.length);
+            if (!state.gridMode && target === state.selectedCompare) {
+                state.gridMode = true;
+            } else {
+                state.selectedCompare = target;
+                state.gridMode = false;
+            }
         } else if (zone.type === "B") {
-            state.selectedSaved = clampIndex(zone.index, state.savedItems.length);
-            if (state.paired && !state.unpaired) {
-                state.selectedCompare = clampIndex(zone.index, state.compareItems.length);
+            const target = clampIndex(zone.index, state.savedItems.length);
+            if (!state.gridMode && target === state.selectedSaved) {
+                state.gridMode = true;
+            } else {
+                state.selectedSaved = target;
+                if (state.paired && !state.unpaired) {
+                    state.selectedCompare = clampIndex(target, state.compareItems.length);
+                }
+                state.gridMode = false;
             }
         }
 

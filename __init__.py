@@ -2,7 +2,7 @@
 ComfyUI-FBnodes - Utility nodes for ComfyUI
 """
 
-__version__ = "1.3.3"
+__version__ = "1.3.5"
 __author__ = "François Beaudry"
 __license__ = "GPL-3.0"
 
@@ -14,6 +14,8 @@ from .nodes import (
     GetVideoComponentsPlus,
     CropImagePlus,
     LoraListPlus,
+    LoadCheckpointPlus,
+    LoadDiffusionModelPlus,
     LoadImagePlus,
     LoadLatentFile,
     LoadVideoPlus,
@@ -40,6 +42,8 @@ NODE_CLASS_MAPPINGS = {
     "GetVideoComponentsPlus": GetVideoComponentsPlus,
     "CropImagePlus": CropImagePlus,
     "LoraListPlus": LoraListPlus,
+    "LoadCheckpointPlus": LoadCheckpointPlus,
+    "LoadDiffusionModelPlus": LoadDiffusionModelPlus,
     "LoadImagePlus": LoadImagePlus,
     "LoadLatentFile": LoadLatentFile,
     "LoadVideoPlus": LoadVideoPlus,
@@ -61,6 +65,8 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "GetVideoComponentsPlus": "Get Video Components+",
     "CropImagePlus": "Crop Image+",
     "LoraListPlus": "LoRA List+",
+    "LoadCheckpointPlus": "Load Checkpoint+",
+    "LoadDiffusionModelPlus": "Load Diffusion Model+",
     "LoadImagePlus": "Load Image+",
     "LoadLatentFile": "Load Latent File",
     "LoadVideoPlus": "Load Video+",

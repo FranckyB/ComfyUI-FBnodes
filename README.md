@@ -33,6 +33,28 @@ Video loader with the same file browser and UX as Load Image+, but for videos. O
 - **Drag-and-Drop Support**: Drop video files directly onto the node
 - **VIDEO Output**: Outputs a VIDEO, ready to pipe into Get Video Components+
 
+### Load Checkpoint+
+Checkpoint loader with a searchable, grouped dropdown designed for large model libraries.
+
+- **Text filter**: Supports comma-separated terms (example: `sdxl, anime`)
+- **AND matching**: All typed terms must match in model name or path
+- **Grouped list UI**: Displays a flat list with section headers (example: `----Anime----`)
+- **Clean labels**: Hides common extensions in the dropdown display (`.safetensors`, `.ckpt`, `.pt`, `.bin`, `.pth`)
+- **Safe header selection**: Selecting a section header auto-selects the first model in that section
+- **Real path output**: Node still passes the real Comfy model path internally
+- **Outputs**: `MODEL`, `CLIP`, `VAE`
+
+### Load Diffusion Model+
+Diffusion/UNET loader with the same searchable grouped dropdown UX as Load Checkpoint+.
+
+- **Text filter**: Supports comma-separated terms (example: `flux, fp8, wan, low`)
+- **AND matching**: All typed terms must match in model name or path
+- **Grouped list UI**: Displays a flat list with section headers (example: `----Wan22----`)
+- **Clean labels**: Hides common extensions in the dropdown display (`.safetensors`, `.ckpt`, `.pt`, `.bin`, `.pth`)
+- **Safe header selection**: Selecting a section header auto-selects the first model in that section
+- **Real path output**: Node still passes the real Comfy model path internally
+- **Outputs**: `MODEL`
+
 ### Crop Image+
 Interactive crop node with draggable crop box, optional aspect-ratio lock, and live preview.
 
