@@ -807,11 +807,12 @@ app.registerExtension({
                         }
                         const sf = node.widgets?.find(w => w.name === "source_folder")?.value || "input";
                         createFileBrowserModal(
-                            isAbsolutePath(imageWidget.value) ? imageWidget.value : null,
+                            stripAnnotation(imageWidget.value),
                             (selected, meta) => {
                                 if (!node.properties) node.properties = {};
                                 if (meta && meta.absPath) {
                                     node.properties._browsePath = meta.dir;
+                                    node.properties._browseSelectedAbsPath = meta.absPath;
                                     const cls = classifySelection(meta.absPath, meta.roots);
                                     const sfW = node.widgets?.find(w => w.name === "source_folder");
                                     if (cls.sourceFolder && sfW) {
@@ -821,6 +822,7 @@ app.registerExtension({
                                     setImageFilename(cls.value);
                                     refreshImageOptionsForBrowsePath(meta.dir, cls.value);
                                 } else {
+                                    node.properties._browseSelectedAbsPath = "";
                                     setImageFilename(selected);
                                     if (node.properties?._browsePath) {
                                         refreshImageOptionsForBrowsePath(node.properties._browsePath, selected);
@@ -831,6 +833,12 @@ app.registerExtension({
                             {
                                 enableNavigation: true,
                                 initialPath: initial,
+                                selectedAbsPath: node.properties?._browseSelectedAbsPath || "",
+                                viewMode: node.properties?._fileBrowserViewMode || "medium",
+                                onViewModeChange: (mode) => {
+                                    if (!node.properties) node.properties = {};
+                                    node.properties._fileBrowserViewMode = mode;
+                                },
                                 navKind: "media",
                                 allowedTypes: ["image", "video"],
                             }

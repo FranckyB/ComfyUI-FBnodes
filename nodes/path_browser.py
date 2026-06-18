@@ -25,6 +25,7 @@ IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
 VIDEO_EXTS = {".mp4", ".webm", ".mov", ".avi", ".mkv", ".m4v", ".wmv"}
 AUDIO_EXTS = {".wav", ".flac", ".mp3", ".m4a", ".ogg", ".aac", ".opus"}
 ALL_MEDIA_EXTS = IMAGE_EXTS | VIDEO_EXTS | AUDIO_EXTS
+_MEDIA_META_CACHE = {}
 
 
 def _safe_abspath(path: str) -> str:
@@ -75,6 +76,60 @@ def _exts_for_kind(kind: str) -> set:
     return IMAGE_EXTS | VIDEO_EXTS
 
 
+def _probe_media_meta(file_path: str, ext: str) -> dict:
+    """Probe media metadata (duration, width, height) for audio/video files."""
+    if ext not in VIDEO_EXTS and ext not in AUDIO_EXTS:
+        return {"duration": None, "width": None, "height": None}
+
+    try:
+        st = os.stat(file_path)
+        cache_key = (file_path, int(st.st_mtime), int(st.st_size))
+    except OSError:
+        return {"duration": None, "width": None, "height": None}
+
+    cached = _MEDIA_META_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    meta = {"duration": None, "width": None, "height": None}
+
+    try:
+        import av
+
+        container = av.open(file_path)
+        try:
+            if container.duration:
+                meta["duration"] = float(container.duration) / 1_000_000.0
+
+            if ext in VIDEO_EXTS:
+                stream = next((s for s in container.streams if s.type == "video"), None)
+                if stream is not None:
+                    if stream.width:
+                        meta["width"] = int(stream.width)
+                    if stream.height:
+                        meta["height"] = int(stream.height)
+                    if stream.duration is not None and stream.time_base is not None:
+                        meta["duration"] = float(stream.duration * stream.time_base)
+                    elif stream.frames and stream.average_rate:
+                        fps = float(stream.average_rate)
+                        if fps > 0:
+                            meta["duration"] = float(stream.frames) / fps
+            else:
+                stream = next((s for s in container.streams if s.type == "audio"), None)
+                if stream is not None and stream.duration is not None and stream.time_base is not None:
+                    meta["duration"] = float(stream.duration * stream.time_base)
+        finally:
+            container.close()
+    except Exception:
+        pass
+
+    if meta["duration"] is not None and meta["duration"] < 0:
+        meta["duration"] = None
+
+    _MEDIA_META_CACHE[cache_key] = meta
+    return meta
+
+
 @server.PromptServer.instance.routes.get("/fbnodes/path-browser/list")
 async def path_browser_list(request):
     """Read-only browser for directories and media files under any path."""
@@ -115,7 +170,34 @@ async def path_browser_list(request):
                 elif entry.is_file(follow_symlinks=False):
                     ext = os.path.splitext(name)[1].lower()
                     if ext in allowed_exts:
-                        files.append({"name": name, "path": _safe_abspath(entry.path)})
+                        size = None
+                        modified = None
+                        duration = None
+                        width = None
+                        height = None
+                        try:
+                            st = entry.stat(follow_symlinks=False)
+                            size = int(st.st_size)
+                            modified = float(st.st_mtime)
+                        except OSError:
+                            pass
+
+                        media_meta = _probe_media_meta(entry.path, ext)
+                        duration = media_meta.get("duration")
+                        width = media_meta.get("width")
+                        height = media_meta.get("height")
+
+                        files.append(
+                            {
+                                "name": name,
+                                "path": _safe_abspath(entry.path),
+                                "size": size,
+                                "modified": modified,
+                                "duration": duration,
+                                "width": width,
+                                "height": height,
+                            }
+                        )
             except OSError:
                 continue
 

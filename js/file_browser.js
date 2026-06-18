@@ -28,6 +28,14 @@ function browserBasename(p) {
     return idx >= 0 ? norm.slice(idx + 1) : norm;
 }
 
+function normalizePathKey(p) {
+    return String(p || "").replace(/\\/g, "/").replace(/\/+/g, "/").toLowerCase();
+}
+
+function pathsEqual(a, b) {
+    return normalizePathKey(a) === normalizePathKey(b);
+}
+
 async function fetchAbsListing(path, kind) {
     const params = [];
     if (path) params.push(`path=${encodeURIComponent(path)}`);
@@ -71,6 +79,9 @@ let currentSourceFolder = 'input';
 let currentListMode = 'media';
 let currentListKind = 'media';
 let currentAllowedTypes = null;
+let currentViewMode = 'medium';
+let currentDetailSortKey = 'name';
+let currentDetailSortDir = 'asc';
 // Track active audio preview in modal
 let activeAudioPreview = null;
 let activeAudioPreviewFilename = null;
@@ -119,6 +130,286 @@ function normalizeFilterTypeOptions(types, fallback) {
     return normalized.length > 0 ? normalized : fallback;
 }
 
+function normalizeViewMode(mode) {
+    const m = String(mode || '').toLowerCase();
+    if (m === 'large' || m === 'detail' || m === 'medium') {
+        return m;
+    }
+    return 'medium';
+}
+
+function normalizeFileEntry(entry) {
+    if (typeof entry === 'string') {
+        return { path: entry, name: browserBasename(entry), size: null, modified: null, duration: null, width: null, height: null };
+    }
+    if (entry && typeof entry === 'object') {
+        const path = entry.path || entry.filename || entry.name || '';
+        const size = entry.size != null ? entry.size : (entry.bytes != null ? entry.bytes : null);
+        const modified = entry.modified != null
+            ? entry.modified
+            : (entry.mtime != null
+                ? entry.mtime
+                : (entry.date != null ? entry.date : (entry.timestamp != null ? entry.timestamp : null)));
+        return {
+            path,
+            name: entry.name || browserBasename(path),
+            size,
+            modified,
+            duration: entry.duration != null ? entry.duration : null,
+            width: entry.width != null ? entry.width : null,
+            height: entry.height != null ? entry.height : null,
+        };
+    }
+    return { path: '', name: '', size: null, modified: null, duration: null, width: null, height: null };
+}
+
+function formatFileSize(size) {
+    const n = Number(size);
+    if (!Number.isFinite(n) || n < 0) return '-';
+    if (n < 1024) return `${n} B`;
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+    if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+    return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+function formatFileDate(raw) {
+    if (raw == null || raw === '') return '-';
+    let ts = raw;
+    if (typeof ts === 'number' && ts > 0 && ts < 1e12) {
+        ts *= 1000;
+    }
+    const d = new Date(ts);
+    if (Number.isNaN(d.getTime())) return '-';
+    return `${d.toLocaleDateString()} ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+}
+
+function formatDuration(raw) {
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n < 0) return '-';
+    const total = Math.round(n);
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const s = total % 60;
+    if (h > 0) {
+        return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+    }
+    return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
+
+function getCardPreviewHeight() {
+    return currentViewMode === 'large' ? 250 : 150;
+}
+
+function detailSortIndicator(key) {
+    if (currentDetailSortKey !== key) return '';
+    return currentDetailSortDir === 'asc' ? ' ▲' : ' ▼';
+}
+
+function parseSortDate(raw) {
+    if (raw == null || raw === '') return null;
+    let ts = raw;
+    if (typeof ts === 'number' && ts > 0 && ts < 1e12) ts *= 1000;
+    const n = new Date(ts).getTime();
+    return Number.isFinite(n) ? n : null;
+}
+
+function compareText(a, b) {
+    return String(a || '').localeCompare(String(b || ''), undefined, { numeric: true, sensitivity: 'base' });
+}
+
+function compareMaybeNumber(a, b) {
+    const an = Number(a);
+    const bn = Number(b);
+    const aOk = Number.isFinite(an);
+    const bOk = Number.isFinite(bn);
+    if (!aOk && !bOk) return 0;
+    if (!aOk) return 1;
+    if (!bOk) return -1;
+    return an - bn;
+}
+
+function getTypeLabel(fileType) {
+    if (fileType === 'image') return 'Image';
+    if (fileType === 'video') return 'Video';
+    if (fileType === 'audio') return 'Audio';
+    if (fileType === 'json') return 'JSON';
+    return 'File';
+}
+
+function compareFilesForDetailSort(a, b) {
+    let result = 0;
+    const aType = getFileType(a.path || '');
+    const bType = getFileType(b.path || '');
+
+    if (currentDetailSortKey === 'type') {
+        result = compareText(getTypeLabel(aType), getTypeLabel(bType));
+        if (result === 0) result = compareText(browserBasename(a.path), browserBasename(b.path));
+    } else if (currentDetailSortKey === 'size') {
+        result = compareMaybeNumber(a.size, b.size);
+        if (result === 0) result = compareText(browserBasename(a.path), browserBasename(b.path));
+    } else if (currentDetailSortKey === 'modified') {
+        result = compareMaybeNumber(parseSortDate(a.modified), parseSortDate(b.modified));
+        if (result === 0) result = compareText(browserBasename(a.path), browserBasename(b.path));
+    } else if (currentDetailSortKey === 'details') {
+        const aTypeSort = getFileType(a.path || '');
+        const bTypeSort = getFileType(b.path || '');
+        if (aTypeSort === 'video' && bTypeSort === 'video') {
+            result = compareMaybeNumber(a.duration, b.duration);
+        } else if (aTypeSort === 'audio' && bTypeSort === 'audio') {
+            result = compareMaybeNumber(a.duration, b.duration);
+        } else {
+            result = compareText(browserBasename(a.path), browserBasename(b.path));
+        }
+    } else {
+        result = compareText(browserBasename(a.path), browserBasename(b.path));
+    }
+
+    return currentDetailSortDir === 'asc' ? result : -result;
+}
+
+function toggleDetailSort(key) {
+    if (currentDetailSortKey === key) {
+        currentDetailSortDir = currentDetailSortDir === 'asc' ? 'desc' : 'asc';
+    } else {
+        currentDetailSortKey = key;
+        currentDetailSortDir = 'asc';
+    }
+}
+
+function createDetailHeader(container, currentFile, onFileSelect, overlay, breadcrumbElement) {
+    if (currentViewMode !== 'detail') return;
+
+    const header = document.createElement('div');
+    header.className = 'detail-header-row';
+    header.style.cssText = `
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 6px 10px;
+        border-bottom: 1px solid rgba(226, 232, 240, 0.18);
+        color: #aeb8c8;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        position: sticky;
+        top: 0;
+        background: rgba(26, 31, 40, 0.96);
+        z-index: 2;
+    `;
+
+    const makeHeaderCell = (label, width, key, alignRight = false) => {
+        const cell = document.createElement('button');
+        cell.type = 'button';
+        cell.textContent = `${label}${detailSortIndicator(key)}`;
+        cell.style.cssText = `
+            background: transparent;
+            border: 0;
+            color: #aeb8c8;
+            cursor: pointer;
+            padding: 2px 0;
+            font-size: 11px;
+            text-align: ${alignRight ? 'right' : 'left'};
+            ${width ? `width: ${width};` : 'flex: 1; min-width: 0;'}
+        `;
+        cell.onclick = () => {
+            toggleDetailSort(key);
+            loadFileThumbnails(container, currentFile, onFileSelect, overlay, breadcrumbElement);
+        };
+        return cell;
+    };
+
+    const iconSpacer = document.createElement('div');
+    iconSpacer.style.cssText = 'width: 20px; min-width: 20px;';
+    header.appendChild(iconSpacer);
+    header.appendChild(makeHeaderCell('Name', '', 'name'));
+    header.appendChild(makeHeaderCell('Type', '110px', 'type'));
+    header.appendChild(makeHeaderCell('Details', '190px', 'details'));
+    header.appendChild(makeHeaderCell('Size', '110px', 'size', true));
+    header.appendChild(makeHeaderCell('Modified', '170px', 'modified'));
+    container.appendChild(header);
+}
+
+function createDetailFolderRow(name, typeLabel, iconText) {
+    const item = document.createElement('div');
+    item.className = 'folder-item';
+    item.style.cssText = `
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 8px 10px;
+        border-bottom: 1px solid rgba(226, 232, 240, 0.12);
+        background: transparent;
+        cursor: pointer;
+        transition: background 0.15s ease;
+    `;
+
+    const icon = document.createElement('div');
+    icon.style.cssText = `
+        width: 20px;
+        height: 20px;
+        min-width: 20px;
+        border-radius: 3px;
+        background: rgba(0, 0, 0, 0.45);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 13px;
+    `;
+    icon.textContent = iconText;
+
+    const nameCol = document.createElement('div');
+    nameCol.style.cssText = 'flex: 1; min-width: 0; font-size: 12px; color: #d3dbe7; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;';
+    nameCol.textContent = name;
+    nameCol.title = name;
+
+    const typeCol = document.createElement('div');
+    typeCol.style.cssText = 'width: 110px; font-size: 11px; color: rgba(178, 191, 208, 0.92);';
+    typeCol.textContent = typeLabel;
+
+    const detailCol = document.createElement('div');
+    detailCol.style.cssText = 'width: 190px; font-size: 11px; color: rgba(178, 191, 208, 0.92);';
+    detailCol.textContent = '-';
+
+    const sizeCol = document.createElement('div');
+    sizeCol.style.cssText = 'width: 110px; font-size: 11px; color: rgba(178, 191, 208, 0.92); text-align: right;';
+    sizeCol.textContent = '-';
+
+    const dateCol = document.createElement('div');
+    dateCol.style.cssText = 'width: 170px; font-size: 11px; color: rgba(178, 191, 208, 0.92); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;';
+    dateCol.textContent = '-';
+
+    item.appendChild(icon);
+    item.appendChild(nameCol);
+    item.appendChild(typeCol);
+    item.appendChild(detailCol);
+    item.appendChild(sizeCol);
+    item.appendChild(dateCol);
+
+    item.onmouseenter = () => {
+        item.style.background = 'rgba(50, 112, 163, 0.28)';
+    };
+    item.onmouseleave = () => {
+        item.style.background = 'transparent';
+    };
+
+    return item;
+}
+
+function applyViewLayout(container) {
+    if (!container) return;
+    if (currentViewMode === 'detail') {
+        container.style.display = 'block';
+        container.style.gridTemplateColumns = '';
+        container.style.gap = '0';
+        return;
+    }
+
+    const minW = currentViewMode === 'large' ? 300 : 180;
+    container.style.display = 'grid';
+    container.style.gridTemplateColumns = `repeat(auto-fill, minmax(${minW}px, 1fr))`;
+    container.style.gap = '15px';
+}
+
 function buildViewUrl(filename) {
     if (isAbsBrowserPath(filename)) {
         return mediaFileUrl(filename);
@@ -159,6 +450,10 @@ function stopAudioPreview() {
 
 function closeBrowserModal(overlay) {
     stopAudioPreview();
+    if (overlay && overlay._keydownHandler) {
+        document.removeEventListener('keydown', overlay._keydownHandler, true);
+        overlay._keydownHandler = null;
+    }
     if (overlay && overlay.parentNode) {
         overlay.parentNode.removeChild(overlay);
     }
@@ -199,20 +494,37 @@ async function toggleAudioPreview(filename, item) {
 
 export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder, options) {
     const opts = options || {};
+    const joinBrowserPath = (base, leaf) => {
+        if (!base || !leaf) return leaf || base || "";
+        const cleanBase = String(base).replace(/[\\/]+$/, "");
+        const cleanLeaf = String(leaf).replace(/^[\\/]+/, "");
+        return `${cleanBase}/${cleanLeaf}`;
+    };
     const showListKindSelector = opts.showListKindSelector === true;
+    const onViewModeChange = typeof opts.onViewModeChange === 'function' ? opts.onViewModeChange : null;
     // Store source folder
     currentSourceFolder = sourceFolder || 'input';
     setListMode(opts.listKind || 'media');
     currentAllowedTypes = normalizeAllowedTypes(opts.allowedTypes);
+    currentViewMode = normalizeViewMode(opts.viewMode || 'medium');
 
     // Arbitrary-path navigation mode ("browse anywhere").
     currentNavMode = opts.enableNavigation ? 'abs' : 'legacy';
     currentNavKind = opts.navKind || 'media';
     if (currentNavMode === 'abs') {
+        if (opts.selectedAbsPath && isAbsBrowserPath(opts.selectedAbsPath)) {
+            currentFile = opts.selectedAbsPath;
+        }
         currentAbsDir = opts.initialPath || (isAbsBrowserPath(currentFile) ? currentFile.replace(/[\\/][^\\/]*$/, '') : '');
         currentAbsParent = null;
         currentAbsRoots = { input: '', output: '' };
         currentAbsFocusName = '';
+
+        // If loader passes a relative selected file, resolve it against initialPath so
+        // absolute-mode listing can highlight/scroll to that file on open.
+        if (currentFile && !isAbsBrowserPath(currentFile) && currentAbsDir) {
+            currentFile = joinBrowserPath(currentAbsDir, currentFile);
+        }
     }
 
     // If a file is currently selected and lives in a subfolder, open in that folder
@@ -425,6 +737,17 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder, 
         ">
             ${typeFilterOptions}
         </select>
+        <select class="view-mode" style="
+            padding: 8px 12px;
+            background: rgba(45, 55, 72, 0.7);
+            border: 1px solid rgba(226, 232, 240, 0.2);
+            border-radius: 6px;
+            color: #ccc;
+        ">
+            <option value="large">Large</option>
+            <option value="medium">Medium</option>
+            <option value="detail">Detail</option>
+        </select>
     `;
 
     // Create thumbnail grid container
@@ -439,6 +762,7 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder, 
         gap: 15px;
         align-content: start;
     `;
+    applyViewLayout(gridContainer);
 
     // Create loading indicator
     const loading = document.createElement('div');
@@ -469,6 +793,14 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder, 
     overlay.onclick = (e) => {
         if (e.target === overlay) closeBrowserModal(overlay);
     };
+    overlay._keydownHandler = (e) => {
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            e.stopPropagation();
+            closeBrowserModal(overlay);
+        }
+    };
+    document.addEventListener('keydown', overlay._keydownHandler, true);
     // Mouse "Back" button should behave like Up while browsing.
     overlay.onmouseup = (e) => {
         if (e.button === 3 && typeof overlay._goUp === 'function') {
@@ -492,6 +824,7 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder, 
     // Setup search/filter
     const searchInput = filterBar.querySelector('.search-input');
     const filterType = filterBar.querySelector('.filter-type');
+    const viewMode = filterBar.querySelector('.view-mode');
 
     // Apply default filter if specified
     if (opts.defaultFilter && filterValues.includes(opts.defaultFilter)) {
@@ -507,6 +840,7 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder, 
     if (showListKindSelector) {
         setListMode(filterType.value || 'all');
     }
+    viewMode.value = currentViewMode;
     
     searchInput.oninput = () => filterThumbnails(gridContainer, searchInput.value, filterType.value);
     filterType.onchange = () => {
@@ -518,6 +852,17 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder, 
             return;
         }
         filterThumbnails(gridContainer, searchInput.value, filterType.value);
+    };
+
+    viewMode.onchange = () => {
+        currentViewMode = normalizeViewMode(viewMode.value);
+        if (onViewModeChange) {
+            onViewModeChange(currentViewMode);
+        }
+        applyViewLayout(gridContainer);
+        loadFileThumbnails(gridContainer, currentFile, onFileSelect, overlay, breadcrumb).then(() => {
+            filterThumbnails(gridContainer, searchInput.value, filterType.value);
+        });
     };
 
     // Load files then apply initial filter
@@ -539,7 +884,7 @@ async function loadFileThumbnails(container, currentFile, onFileSelect, overlay,
         }
         
         // Fetch file list from server
-        const response = await fetch(`/fbnodes/list-files?source=${encodeURIComponent(currentSourceFolder)}&kind=${encodeURIComponent(currentListKind)}`);
+        const response = await fetch(`/fbnodes/list-files?source=${encodeURIComponent(currentSourceFolder)}&kind=${encodeURIComponent(currentListKind)}&include_meta=1`);
         const data = await response.json();
         
         container.innerHTML = '';
@@ -550,7 +895,9 @@ async function loadFileThumbnails(container, currentFile, onFileSelect, overlay,
         }
 
         // Get all files with their full paths
-        const allFiles = data.files.filter(f => f !== '(none)');
+        const allFiles = data.files
+            .filter(f => (typeof f === 'string' ? f !== '(none)' : (f?.path || f?.filename || f?.name) !== '(none)'))
+            .map(normalizeFileEntry);
         
         // Filter files/folders for current directory
         const currentFiles = [];
@@ -558,14 +905,15 @@ async function loadFileThumbnails(container, currentFile, onFileSelect, overlay,
         
         const prefix = currentSubfolder ? currentSubfolder + '/' : '';
         
-        allFiles.forEach(filepath => {
+        allFiles.forEach(fileEntry => {
+            const filepath = fileEntry.path;
             if (filepath.startsWith(prefix)) {
                 const remainder = filepath.substring(prefix.length);
                 const slashIndex = remainder.indexOf('/');
                 
                 if (slashIndex === -1) {
                     // It's a file in current directory
-                    currentFiles.push(filepath);
+                    currentFiles.push(fileEntry);
                 } else {
                     // It's in a subdirectory - extract folder name
                     const folderName = remainder.substring(0, slashIndex);
@@ -573,6 +921,11 @@ async function loadFileThumbnails(container, currentFile, onFileSelect, overlay,
                 }
             }
         });
+
+        const sortedFolders = Array.from(subfolders).sort((a, b) => compareText(a, b));
+        const sortedFiles = currentFiles.slice().sort(compareFilesForDetailSort);
+
+        createDetailHeader(container, currentFile, onFileSelect, overlay, breadcrumbElement);
         
         // Add "back" button if in subfolder
         if (currentSubfolder) {
@@ -581,20 +934,21 @@ async function loadFileThumbnails(container, currentFile, onFileSelect, overlay,
         }
         
         // Add folder items
-        Array.from(subfolders).sort().forEach(folderName => {
+        sortedFolders.forEach(folderName => {
             const folderItem = createFolderItem(folderName, container, currentFile, onFileSelect, overlay, breadcrumbElement);
             container.appendChild(folderItem);
         });
 
         // Create thumbnail for each file
-        currentFiles.forEach(filename => {
-            const item = createThumbnailItem(filename, currentFile, onFileSelect, overlay);
+        sortedFiles.forEach(fileEntry => {
+            const item = createThumbnailItem(fileEntry, currentFile, onFileSelect, overlay);
             container.appendChild(item);
         });
 
         // Scroll to the currently selected file
         if (currentFile) {
-            const selectedItem = container.querySelector(`.thumbnail-item[data-filename="${CSS.escape(currentFile)}"]`);
+            const selectedItem = container.querySelector(`.thumbnail-item[data-filename="${CSS.escape(currentFile)}"]`) ||
+                Array.from(container.querySelectorAll('.thumbnail-item')).find(it => pathsEqual(it.dataset.filename, currentFile));
             if (selectedItem) {
                 // Use requestAnimationFrame to ensure layout is complete before scrolling
                 requestAnimationFrame(() => {
@@ -642,8 +996,10 @@ async function loadFileThumbnailsAbs(container, currentFile, onFileSelect, overl
 
         container.innerHTML = '';
 
+        createDetailHeader(container, currentFile, onFileSelect, overlay, breadcrumbElement);
+
         // Sub-directories
-        const dirs = data.dirs || [];
+        const dirs = (data.dirs || []).slice().sort((a, b) => compareText(a?.name, b?.name));
         let focusItem = null;
         for (const dir of dirs) {
             const item = createAbsFolderItem(dir.name, dir.path, container, currentFile, onFileSelect, overlay, breadcrumbElement);
@@ -662,13 +1018,13 @@ async function loadFileThumbnailsAbs(container, currentFile, onFileSelect, overl
         }
 
         // Files (absolute paths; thumbnail/url helpers detect abs paths)
-        const files = data.files || [];
+        const files = (data.files || []).map(normalizeFileEntry).sort(compareFilesForDetailSort);
         let selectedItem = null;
         for (const file of files) {
-            const thumb = createThumbnailItem(file.path, currentFile, onFileSelect, overlay);
+            const thumb = createThumbnailItem(file, currentFile, onFileSelect, overlay);
             if (thumb) {
                 container.appendChild(thumb);
-                if (currentFile && file.path === currentFile) selectedItem = thumb;
+                if (currentFile && pathsEqual(file.path, currentFile)) selectedItem = thumb;
             }
         }
 
@@ -691,6 +1047,16 @@ async function loadFileThumbnailsAbs(container, currentFile, onFileSelect, overl
 }
 
 function createAbsFolderItem(name, absPath, container, currentFile, onFileSelect, overlay, breadcrumbElement) {
+    if (currentViewMode === 'detail') {
+        const row = createDetailFolderRow(name, 'Folder', '📁');
+        row.onclick = () => {
+            currentAbsFocusName = '';
+            currentAbsDir = absPath;
+            loadFileThumbnails(container, currentFile, onFileSelect, overlay, breadcrumbElement);
+        };
+        return row;
+    }
+
     const item = document.createElement('div');
     item.className = 'folder-item';
     item.style.cssText = `
@@ -708,7 +1074,7 @@ function createAbsFolderItem(name, absPath, container, currentFile, onFileSelect
     const preview = document.createElement('div');
     preview.style.cssText = `
         width: 100%;
-        height: 150px;
+        height: ${getCardPreviewHeight()}px;
         background: rgba(0, 0, 0, 0.5);
         border-radius: 4px;
         display: flex;
@@ -753,6 +1119,17 @@ function createAbsFolderItem(name, absPath, container, currentFile, onFileSelect
 }
 
 function createBackItem(container, currentFile, onFileSelect, overlay, breadcrumbElement) {
+    if (currentViewMode === 'detail') {
+        const row = createDetailFolderRow('..', 'Parent Folder', '←');
+        row.onclick = () => {
+            const parts = currentSubfolder.split('/');
+            parts.pop();
+            currentSubfolder = parts.join('/');
+            loadFileThumbnails(container, currentFile, onFileSelect, overlay, breadcrumbElement);
+        };
+        return row;
+    }
+
     const item = document.createElement('div');
     item.className = 'folder-item';
     item.style.cssText = `
@@ -770,7 +1147,7 @@ function createBackItem(container, currentFile, onFileSelect, overlay, breadcrum
     const preview = document.createElement('div');
     preview.style.cssText = `
         width: 100%;
-        height: 150px;
+        height: ${getCardPreviewHeight()}px;
         background: rgba(0, 0, 0, 0.5);
         border-radius: 4px;
         display: flex;
@@ -814,6 +1191,15 @@ function createBackItem(container, currentFile, onFileSelect, overlay, breadcrum
 }
 
 function createFolderItem(folderName, container, currentFile, onFileSelect, overlay, breadcrumbElement) {
+    if (currentViewMode === 'detail') {
+        const row = createDetailFolderRow(folderName, 'Folder', '📁');
+        row.onclick = () => {
+            currentSubfolder = currentSubfolder ? `${currentSubfolder}/${folderName}` : folderName;
+            loadFileThumbnails(container, currentFile, onFileSelect, overlay, breadcrumbElement);
+        };
+        return row;
+    }
+
     const item = document.createElement('div');
     item.className = 'folder-item';
     item.style.cssText = `
@@ -831,7 +1217,7 @@ function createFolderItem(folderName, container, currentFile, onFileSelect, over
     const preview = document.createElement('div');
     preview.style.cssText = `
         width: 100%;
-        height: 150px;
+        height: ${getCardPreviewHeight()}px;
         background: rgba(0, 0, 0, 0.5);
         border-radius: 4px;
         display: flex;
@@ -876,15 +1262,30 @@ function createFolderItem(folderName, container, currentFile, onFileSelect, over
     return item;
 }
 
-function createThumbnailItem(filename, currentFile, onFileSelect, overlay) {
+function createThumbnailItem(fileEntryInput, currentFile, onFileSelect, overlay) {
+    const fileEntry = normalizeFileEntry(fileEntryInput);
+    const filename = fileEntry.path;
     const item = document.createElement('div');
     item.className = 'thumbnail-item';
     item.dataset.filename = filename;
     item.dataset.type = getFileType(filename);
+    const fileType = item.dataset.type;
     
-    const isSelected = filename === currentFile;
+    const isSelected = pathsEqual(filename, currentFile);
     
-    item.style.cssText = `
+    if (currentViewMode === 'detail') {
+        item.style.cssText = `
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 10px;
+            border-bottom: 1px solid rgba(226, 232, 240, 0.12);
+            background: ${isSelected ? 'rgba(50, 112, 163, 0.28)' : 'transparent'};
+            cursor: pointer;
+            transition: background 0.15s ease;
+        `;
+    } else {
+        item.style.cssText = `
         background: rgba(45, 55, 72, 0.7);
         border: 1px solid ${isSelected ? 'rgba(66, 153, 225, 0.9)' : 'rgba(226, 232, 240, 0.2)'};
         border-radius: 6px;
@@ -895,20 +1296,35 @@ function createThumbnailItem(filename, currentFile, onFileSelect, overlay) {
         flex-direction: column;
         gap: 8px;
     `;
+    }
 
     // Thumbnail preview
     const preview = document.createElement('div');
-    preview.style.cssText = `
-        width: 100%;
-        height: 150px;
-        background: rgba(0, 0, 0, 0.5);
-        border-radius: 4px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        overflow: hidden;
-        position: relative;
-    `;
+    preview.style.cssText = currentViewMode === 'detail'
+        ? `
+            width: 20px;
+            height: 20px;
+            min-width: 20px;
+            min-height: 20px;
+            background: rgba(0, 0, 0, 0.45);
+            border-radius: 3px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            position: relative;
+        `
+        : `
+            width: 100%;
+            height: ${getCardPreviewHeight()}px;
+            background: rgba(0, 0, 0, 0.5);
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            position: relative;
+        `;
 
     const ext = filename.split('.').pop().toLowerCase();
     const imageExts = ['png', 'jpg', 'jpeg', 'webp'];
@@ -966,36 +1382,115 @@ function createThumbnailItem(filename, currentFile, onFileSelect, overlay) {
         preview.appendChild(img);
     }
 
-    // Filename label (show only basename, not full path)
-    const label = document.createElement('div');
-    const basename = browserBasename(filename);
-    label.textContent = basename;
-    label.style.cssText = `
-        font-size: 12px;
-        color: ${isSelected ? '#fff' : '#ccc'};
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        text-align: center;
-    `;
-    label.title = filename; // Full path in tooltip
-
     item.appendChild(preview);
-    item.appendChild(label);
+
+    if (currentViewMode === 'detail') {
+        const nameCol = document.createElement('div');
+        nameCol.style.cssText = `
+            flex: 1;
+            min-width: 0;
+            font-size: 12px;
+            color: ${isSelected ? '#fff' : '#d3dbe7'};
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        `;
+        nameCol.textContent = browserBasename(filename);
+        nameCol.title = filename;
+
+        const typeCol = document.createElement('div');
+        typeCol.style.cssText = `
+            width: 110px;
+            font-size: 11px;
+            color: rgba(178, 191, 208, 0.92);
+        `;
+        typeCol.textContent = getTypeLabel(fileType);
+
+        const detailsCol = document.createElement('div');
+        detailsCol.style.cssText = `
+            width: 190px;
+            font-size: 11px;
+            color: rgba(178, 191, 208, 0.92);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        `;
+        if (fileType === 'video') {
+            const dims = (fileEntry.width && fileEntry.height) ? `${fileEntry.width}x${fileEntry.height}` : '-';
+            detailsCol.textContent = `${formatDuration(fileEntry.duration)}  ${dims}`;
+        } else if (fileType === 'audio') {
+            detailsCol.textContent = `${formatDuration(fileEntry.duration)}`;
+        } else {
+            detailsCol.textContent = '-';
+        }
+
+        const sizeCol = document.createElement('div');
+        sizeCol.style.cssText = `
+            flex-shrink: 0;
+            width: 110px;
+            font-size: 11px;
+            color: rgba(178, 191, 208, 0.92);
+            text-align: right;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        `;
+        sizeCol.textContent = formatFileSize(fileEntry.size);
+
+        const modifiedCol = document.createElement('div');
+        modifiedCol.style.cssText = `
+            width: 170px;
+            font-size: 11px;
+            color: rgba(178, 191, 208, 0.92);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        `;
+        modifiedCol.textContent = formatFileDate(fileEntry.modified);
+
+        item.appendChild(nameCol);
+        item.appendChild(typeCol);
+        item.appendChild(detailsCol);
+        item.appendChild(sizeCol);
+        item.appendChild(modifiedCol);
+    } else {
+        // Filename label (show only basename, not full path)
+        const label = document.createElement('div');
+        const basename = browserBasename(filename);
+        label.textContent = basename;
+        label.style.cssText = `
+            font-size: 12px;
+            color: ${isSelected ? '#fff' : '#ccc'};
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            text-align: center;
+        `;
+        label.title = filename;
+        item.appendChild(label);
+    }
 
     // Hover effect
     item.onmouseenter = () => {
         if (!isSelected) {
-            item.style.borderColor = 'rgba(66, 153, 225, 0.9)';
-            item.style.transform = 'translateY(-2px)';
-            item.style.background = 'rgba(50, 112, 163, 0.5)';
+            if (currentViewMode === 'detail') {
+                item.style.background = 'rgba(50, 112, 163, 0.28)';
+            } else {
+                item.style.borderColor = 'rgba(66, 153, 225, 0.9)';
+                item.style.transform = 'translateY(-2px)';
+                item.style.background = 'rgba(50, 112, 163, 0.5)';
+            }
         }
     };
     item.onmouseleave = () => {
         if (!isSelected) {
-            item.style.borderColor = 'rgba(226, 232, 240, 0.2)';
-            item.style.transform = 'translateY(0)';
-            item.style.background = 'rgba(45, 55, 72, 0.7)';
+            if (currentViewMode === 'detail') {
+                item.style.background = 'transparent';
+            } else {
+                item.style.borderColor = 'rgba(226, 232, 240, 0.2)';
+                item.style.transform = 'translateY(0)';
+                item.style.background = 'rgba(45, 55, 72, 0.7)';
+            }
         }
     };
 
@@ -1338,7 +1833,8 @@ function extractVideoThumbnailServer(filename, previewElement) {
         const cached = localStorage.getItem(cacheKey);
         if (cached) {
             const img = document.createElement('img');
-            img.style.cssText = 'max-width: 100%; max-height: 100%; object-fit: contain;';
+            // Stretch to preview box size so large mode shows larger cached thumbs.
+            img.style.cssText = 'width: 100%; height: 100%; object-fit: contain;';
             img.src = cached;
             previewElement.innerHTML = '';
             previewElement.appendChild(img);
@@ -1369,7 +1865,8 @@ function extractVideoThumbnailServer(filename, previewElement) {
         ctx.drawImage(img, 0, 0, w, h);
         const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
         const result = document.createElement('img');
-        result.style.cssText = 'max-width: 100%; max-height: 100%; object-fit: contain;';
+        // Stretch to preview box size so medium/large use the same cached asset at different display sizes.
+        result.style.cssText = 'width: 100%; height: 100%; object-fit: contain;';
         result.src = dataUrl;
         previewElement.innerHTML = '';
         previewElement.appendChild(result);

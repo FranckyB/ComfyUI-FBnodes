@@ -25,6 +25,67 @@ _video_frames_cache = {}
 # Shared file-browser extension sets
 LIST_FILES_MEDIA_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp', '.mp4', '.webm', '.mov', '.avi']
 LIST_FILES_AUDIO_EXTENSIONS = ['.wav', '.flac', '.mp3', '.m4a']
+LIST_FILES_VIDEO_EXTENSIONS = ['.mp4', '.webm', '.mov', '.avi']
+
+# Cache of probed media metadata keyed by (path, mtime, size)
+_media_meta_cache = {}
+
+
+def _probe_media_meta(file_path: str, ext: str) -> dict:
+    """Probe media metadata (duration, width, height) for audio/video files."""
+    if ext not in LIST_FILES_VIDEO_EXTENSIONS and ext not in LIST_FILES_AUDIO_EXTENSIONS:
+        return {"duration": None, "width": None, "height": None}
+
+    try:
+        st = os.stat(file_path)
+        cache_key = (file_path, int(st.st_mtime), int(st.st_size))
+    except OSError:
+        return {"duration": None, "width": None, "height": None}
+
+    cached = _media_meta_cache.get(cache_key)
+    if cached is not None:
+        return cached
+
+    meta = {"duration": None, "width": None, "height": None}
+
+    try:
+        import av
+
+        container = av.open(file_path)
+        try:
+            # Container duration is often the fastest available value.
+            if container.duration:
+                meta["duration"] = float(container.duration) / 1_000_000.0
+
+            if ext in LIST_FILES_VIDEO_EXTENSIONS:
+                stream = next((s for s in container.streams if s.type == "video"), None)
+                if stream is not None:
+                    if stream.width:
+                        meta["width"] = int(stream.width)
+                    if stream.height:
+                        meta["height"] = int(stream.height)
+
+                    if stream.duration is not None and stream.time_base is not None:
+                        meta["duration"] = float(stream.duration * stream.time_base)
+                    elif stream.frames and stream.average_rate:
+                        fps = float(stream.average_rate)
+                        if fps > 0:
+                            meta["duration"] = float(stream.frames) / fps
+            else:
+                stream = next((s for s in container.streams if s.type == "audio"), None)
+                if stream is not None and stream.duration is not None and stream.time_base is not None:
+                    meta["duration"] = float(stream.duration * stream.time_base)
+        finally:
+            container.close()
+    except Exception:
+        # Best-effort metadata probing; silently fall back when unavailable.
+        pass
+
+    if meta["duration"] is not None and meta["duration"] < 0:
+        meta["duration"] = None
+
+    _media_meta_cache[cache_key] = meta
+    return meta
 
 
 # ---------------------------------------------------------------------------
@@ -410,6 +471,7 @@ async def list_files(request):
     try:
         source = request.rel_url.query.get('source', 'input')
         kind = request.rel_url.query.get('kind', 'media')
+        include_meta = request.rel_url.query.get('include_meta', '0').lower() in ('1', 'true', 'yes')
         if source == 'output':
             base_dir = folder_paths.get_output_directory()
         else:
@@ -432,9 +494,42 @@ async def list_files(request):
                         full_path = os.path.join(root, filename)
                         rel_path = os.path.relpath(full_path, base_dir)
                         rel_path = rel_path.replace('\\', '/')
-                        files.append(rel_path)
+                        if include_meta:
+                            size = None
+                            modified = None
+                            duration = None
+                            width = None
+                            height = None
+                            try:
+                                st = os.stat(full_path)
+                                size = int(st.st_size)
+                                modified = float(st.st_mtime)
+                            except OSError:
+                                pass
 
-        files.sort()
+                            media_meta = _probe_media_meta(full_path, ext)
+                            duration = media_meta.get("duration")
+                            width = media_meta.get("width")
+                            height = media_meta.get("height")
+
+                            files.append(
+                                {
+                                    "path": rel_path,
+                                    "name": filename,
+                                    "size": size,
+                                    "modified": modified,
+                                    "duration": duration,
+                                    "width": width,
+                                    "height": height,
+                                }
+                            )
+                        else:
+                            files.append(rel_path)
+
+        if include_meta:
+            files.sort(key=lambda x: str(x.get('path', '')).lower())
+        else:
+            files.sort()
         return server.web.json_response({"files": files})
     except Exception as e:
         print(f"[FBnodes] Error listing files: {e}")

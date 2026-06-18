@@ -449,7 +449,7 @@ app.registerExtension({
                         }
                         const sf = node.widgets?.find(w => w.name === "source_folder")?.value || "input";
                         createFileBrowserModal(
-                            isAbsolutePath(videoWidget.value) ? stripAnnotation(videoWidget.value) : null,
+                            stripAnnotation(videoWidget.value),
                             (selected, meta) => {
                                 if (!node.properties) node.properties = {};
                                 if (meta && meta.absPath) {
@@ -473,6 +473,11 @@ app.registerExtension({
                             {
                                 enableNavigation: true,
                                 initialPath: initial,
+                                viewMode: node.properties?._fileBrowserViewMode || "medium",
+                                onViewModeChange: (mode) => {
+                                    if (!node.properties) node.properties = {};
+                                    node.properties._fileBrowserViewMode = mode;
+                                },
                                 navKind: "video",
                                 allowedTypes: ["video"],
                             }

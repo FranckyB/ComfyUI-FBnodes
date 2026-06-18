@@ -898,7 +898,7 @@ app.registerExtension({
                         }
                         const sf = getWidget(node, "source_folder")?.value || "input";
                         createFileBrowserModal(
-                            isAbsolutePath(audioWidget.value) ? audioWidget.value : null,
+                            stripAnnotation(audioWidget.value),
                             (selected, meta) => {
                                 if (!node.properties) node.properties = {};
                                 if (meta && meta.absPath) {
@@ -924,6 +924,11 @@ app.registerExtension({
                             {
                                 enableNavigation: true,
                                 initialPath: initial,
+                                viewMode: node.properties?._fileBrowserViewMode || "medium",
+                                onViewModeChange: (mode) => {
+                                    if (!node.properties) node.properties = {};
+                                    node.properties._fileBrowserViewMode = mode;
+                                },
                                 navKind: "audiovideo",
                                 listKind: "all",
                                 showListKindSelector: true,
