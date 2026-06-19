@@ -245,6 +245,13 @@ def _infer_category(widget_name, node_type, value=None, value_field=None):
     if direct:
         return direct
 
+    # CLIP/Text-encoder loader variants use indexed widget names
+    # (e.g. DualCLIPLoader: clip_name1/clip_name2).
+    if widget_key.startswith("clip_name"):
+        return "text_encoders"
+    if widget_key.startswith("text_encoder_name") or widget_key.startswith("text_encoder"):
+        return "text_encoders"
+
     # Handle ambiguous fields by node type hints.
     if widget_key == "model_name":
         if is_latent_upscale_node:
