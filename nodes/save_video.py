@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 import av
 import json
 import math
@@ -21,6 +22,9 @@ from fractions import Fraction
 from functools import lru_cache
 import subprocess
 from comfy.cli_args import args
+from aiohttp import web
+
+import server
 
 
 def _get_cpu_encoder(codec: str) -> str:
@@ -41,6 +45,46 @@ def _get_nvidia_encoder(codec: str) -> str:
 
 def _log(message: str):
     print(f"[SaveVideoPlus] {message}")
+
+
+def _open_with_system_player(path: str):
+    if sys.platform.startswith("win"):
+        os.startfile(path)  # type: ignore[attr-defined]
+        return
+    if sys.platform == "darwin":
+        subprocess.Popen(["open", path])
+        return
+    subprocess.Popen(["xdg-open", path])
+
+
+@server.PromptServer.instance.routes.post("/fbnodes/open-in-player")
+async def open_in_player(request):
+    try:
+        data = await request.json()
+    except Exception:
+        return web.json_response({"ok": False, "error": "Invalid JSON body"}, status=400)
+
+    path = data.get("path") if isinstance(data, dict) else None
+    if not path or not isinstance(path, str):
+        return web.json_response({"ok": False, "error": "Missing path"}, status=400)
+
+    normalized = os.path.realpath(path)
+    normalized_cmp = os.path.normcase(normalized)
+    if not os.path.isfile(normalized):
+        return web.json_response({"ok": False, "error": "File not found"}, status=404)
+
+    allowed_roots = [
+        os.path.normcase(os.path.realpath(folder_paths.get_output_directory())),
+        os.path.normcase(os.path.realpath(folder_paths.get_temp_directory())),
+    ]
+    if not any(normalized_cmp.startswith(root + os.sep) or normalized_cmp == root for root in allowed_roots):
+        return web.json_response({"ok": False, "error": "Path not allowed"}, status=403)
+
+    try:
+        _open_with_system_player(normalized)
+        return web.json_response({"ok": True})
+    except Exception as e:
+        return web.json_response({"ok": False, "error": str(e)}, status=500)
 
 
 @lru_cache(maxsize=2)
@@ -178,6 +222,10 @@ class SaveVideoPlus:
                     "default": True,
                     "tooltip": "Save latent alongside the video.\nOff = don't save the connected latent."
                 }),
+                "browser_preview_compat": ("BOOLEAN", {
+                    "default": True,
+                    "tooltip": "When ON, non-browser-compatible clips get an auto-generated H.264 preview for UI playback.\nWhen OFF, UI uses the original file and may not preview in browser."
+                }),
             },
             "optional": {
                 "latent": ("LATENT", {"tooltip": "Optional latent to save alongside the video (same filename with .latent extension)."}),
@@ -196,7 +244,7 @@ class SaveVideoPlus:
     CATEGORY = "FBnodes"
     DESCRIPTION = "Saves video with H.264 or H.265 codec and quality control. Includes audio and workflow metadata."
 
-    def save_video(self, video, filename_prefix, codec, chroma, crf, save, save_latent, latent=None, metadata=None, prompt=None, extra_pnginfo=None):
+    def save_video(self, video, filename_prefix, codec, chroma, crf, save, save_latent, browser_preview_compat=True, latent=None, metadata=None, prompt=None, extra_pnginfo=None):
         # Expand %date:format% patterns (e.g., %date:yy-MM-dd_hh-mm%)
         # This mimics ComfyUI's frontend JS date expansion
         def expand_date_format(text):
@@ -427,7 +475,26 @@ class SaveVideoPlus:
         # h265 + yuv422/444 won't play in browser, so generate a browser-compatible preview in temp
         if not save or codec == "h264" or (codec == "h265" and chroma == "yuv420"):
             # Browser can play this directly (or it's already a preview)
-            return {"ui": {"images": [{"filename": file, "subfolder": subfolder, "type": output_type}], "animated": (True,)}, "result": (file_path,)}
+            return {
+                "ui": {
+                    "images": [{"filename": file, "subfolder": subfolder, "type": output_type}],
+                    "animated": (True,),
+                    "saved_video_path": (file_path,),
+                    "needs_external_player": (False,),
+                },
+                "result": (file_path,),
+            }
+        elif not browser_preview_compat:
+            # Respect user choice and do not generate a browser-compatible transcode.
+            return {
+                "ui": {
+                    "images": [{"filename": file, "subfolder": subfolder, "type": output_type}],
+                    "animated": (True,),
+                    "saved_video_path": (file_path,),
+                    "needs_external_player": (True,),
+                },
+                "result": (file_path,),
+            }
         else:
             # Create a browser-compatible h264 preview in temp folder
             temp_dir = folder_paths.get_temp_directory()
@@ -497,7 +564,15 @@ class SaveVideoPlus:
                 else:
                     raise
 
-            return {"ui": {"images": [{"filename": preview_file, "subfolder": "", "type": "temp"}], "animated": (True,)}, "result": (file_path,)}
+            return {
+                "ui": {
+                    "images": [{"filename": preview_file, "subfolder": "", "type": "temp"}],
+                    "animated": (True,),
+                    "saved_video_path": (file_path,),
+                    "needs_external_player": (False,),
+                },
+                "result": (file_path,),
+            }
 
 
 class LoadLatentFile:

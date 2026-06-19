@@ -589,12 +589,23 @@ app.registerExtension({
             const result = onNodeCreated?.apply(this, arguments);
             const node = this;
 
+            const coerceFramePosition = (value) => {
+                const n = Number(value);
+                if (!Number.isFinite(n)) return 0.0;
+                if (n < 0) return 0.0;
+                if (n > 1) return 1.0;
+                return n;
+            };
+
             // Initialize properties for persistence across tab switches
             if (!node.properties) node.properties = {};
             node._configuredFromWorkflow = false;
             node._sourceFolder = 'input';
 
             const framePositionWidget = this.widgets?.find(w => w.name === "frame_position");
+            if (framePositionWidget) {
+                framePositionWidget.value = coerceFramePosition(framePositionWidget.value);
+            }
             let imageWidget = null;
             let imagePickerWidget = null;
             node._imagePickerMap = { "(none)": "(none)" };
@@ -792,8 +803,15 @@ app.registerExtension({
                 );
                 imagePickerWidget.serialize = false;
 
-                // Browse Files button
                 const imageWidgetIndex = this.widgets.indexOf(imageWidget);
+
+                const pickerIndex = this.widgets.indexOf(imagePickerWidget);
+                if (pickerIndex >= 0) {
+                    this.widgets.splice(pickerIndex, 1);
+                    this.widgets.splice(imageWidgetIndex + 1, 0, imagePickerWidget);
+                }
+
+                // Browse Files button
                 const browseButton = {
                     type: "button",
                     name: "\u{1F4C1} Browse Files",
@@ -806,8 +824,25 @@ app.registerExtension({
                             initial = sf === "output" ? roots.output : roots.input;
                         }
                         const sf = node.widgets?.find(w => w.name === "source_folder")?.value || "input";
+                        const currentSelection = stripAnnotation(imageWidget.value);
+                        let selectedAbsPath = "";
+                        if (currentSelection && currentSelection !== "(none)") {
+                            if (isAbsolutePath(currentSelection)) {
+                                selectedAbsPath = currentSelection;
+                            } else {
+                                const root = sf === "output" ? roots.output : roots.input;
+                                if (root) {
+                                    const rootNorm = String(root).replace(/[\\/]+$/, "");
+                                    const relNorm = String(currentSelection).replace(/^[\\/]+/, "");
+                                    selectedAbsPath = `${rootNorm}/${relNorm}`;
+                                }
+                            }
+                        }
+                        if (!selectedAbsPath && node.properties?._browseSelectedAbsPath) {
+                            selectedAbsPath = node.properties._browseSelectedAbsPath;
+                        }
                         createFileBrowserModal(
-                            stripAnnotation(imageWidget.value),
+                            currentSelection,
                             (selected, meta) => {
                                 if (!node.properties) node.properties = {};
                                 if (meta && meta.absPath) {
@@ -833,7 +868,7 @@ app.registerExtension({
                             {
                                 enableNavigation: true,
                                 initialPath: initial,
-                                selectedAbsPath: node.properties?._browseSelectedAbsPath || "",
+                                selectedAbsPath,
                                 viewMode: node.properties?._fileBrowserViewMode || "medium",
                                 onViewModeChange: (mode) => {
                                     if (!node.properties) node.properties = {};
@@ -846,7 +881,7 @@ app.registerExtension({
                     },
                     serialize: false
                 };
-                this.widgets.splice(imageWidgetIndex + 1, 0, browseButton);
+                this.widgets.splice(imageWidgetIndex + 2, 0, browseButton);
                 Object.defineProperty(browseButton, "node", { value: node });
 
                 node._isVideoFile = false;
@@ -879,6 +914,7 @@ app.registerExtension({
                 let frameUpdateTimer = null;
 
                 framePositionWidget.callback = function(value) {
+                    framePositionWidget.value = coerceFramePosition(value);
                     if (origFrameCb) origFrameCb.apply(this, arguments);
                     if (frameUpdateTimer) clearTimeout(frameUpdateTimer);
                     frameUpdateTimer = setTimeout(() => {
@@ -921,8 +957,12 @@ app.registerExtension({
                 if (info && info.widgets_values && framePositionWidget) {
                     const idx = this.widgets.findIndex(w => w.name === "frame_position");
                     if (idx >= 0 && info.widgets_values[idx] !== undefined) {
-                        framePositionWidget.value = info.widgets_values[idx];
+                        framePositionWidget.value = coerceFramePosition(info.widgets_values[idx]);
                     }
+                }
+
+                if (framePositionWidget) {
+                    framePositionWidget.value = coerceFramePosition(framePositionWidget.value);
                 }
 
                 // Check if display state matches current widget value

@@ -459,6 +459,239 @@ function closeBrowserModal(overlay) {
     }
 }
 
+function setThumbnailSelected(item, selected) {
+    if (!item) return;
+    item.dataset.selected = selected ? '1' : '0';
+    const isDetail = item.dataset.viewMode === 'detail';
+    if (isDetail) {
+        item.style.background = selected ? 'rgba(50, 112, 163, 0.28)' : 'transparent';
+    } else {
+        item.style.borderColor = selected ? 'rgba(66, 153, 225, 0.9)' : 'rgba(226, 232, 240, 0.2)';
+        item.style.background = selected ? 'rgba(50, 112, 163, 0.28)' : 'rgba(45, 55, 72, 0.7)';
+        item.style.transform = 'translateY(0)';
+    }
+}
+
+function selectThumbnailItem(container, item, shouldScroll = false) {
+    if (!container || !item) return;
+    const current = container.querySelectorAll('.thumbnail-item[data-selected="1"]');
+    current.forEach((it) => setThumbnailSelected(it, false));
+    setThumbnailSelected(item, true);
+    if (shouldScroll) {
+        item.scrollIntoView({ block: 'nearest', behavior: 'instant' });
+    }
+}
+
+function getVisibleThumbnailItems(container) {
+    if (!container) return [];
+    return Array.from(container.querySelectorAll('.thumbnail-item')).filter((item) => {
+        return item.style.display !== 'none';
+    });
+}
+
+function buildThumbnailRows(items) {
+    const rows = [];
+    const tolerance = 10;
+    for (const item of items) {
+        const top = item.offsetTop;
+        let row = rows.find((r) => Math.abs(r.top - top) <= tolerance);
+        if (!row) {
+            row = { top, items: [] };
+            rows.push(row);
+        }
+        row.items.push(item);
+    }
+    rows.sort((a, b) => a.top - b.top);
+    return rows.map((r) => r.items);
+}
+
+function findNearestByX(items, targetX) {
+    if (!items.length) return null;
+    let best = items[0];
+    let bestDist = Math.abs((best.offsetLeft + best.offsetWidth / 2) - targetX);
+    for (let i = 1; i < items.length; i++) {
+        const it = items[i];
+        const cx = it.offsetLeft + it.offsetWidth / 2;
+        const dist = Math.abs(cx - targetX);
+        if (dist < bestDist) {
+            best = it;
+            bestDist = dist;
+        }
+    }
+    return best;
+}
+
+function moveThumbnailSelection(container, key) {
+    const items = getVisibleThumbnailItems(container);
+    if (!items.length) return false;
+
+    let selected = container.querySelector('.thumbnail-item[data-selected="1"]');
+    if (!selected || !items.includes(selected)) {
+        selectThumbnailItem(container, items[0], true);
+        return true;
+    }
+
+    const currentView = selected.dataset.viewMode || currentViewMode;
+    const index = items.indexOf(selected);
+
+    if (currentView === 'detail') {
+        if (key === 'ArrowUp' && index > 0) {
+            selectThumbnailItem(container, items[index - 1], true);
+            return true;
+        }
+        if (key === 'ArrowDown' && index < items.length - 1) {
+            selectThumbnailItem(container, items[index + 1], true);
+            return true;
+        }
+        return false;
+    }
+
+    const rows = buildThumbnailRows(items);
+    let rowIndex = -1;
+    let colIndex = -1;
+    for (let r = 0; r < rows.length; r++) {
+        const c = rows[r].indexOf(selected);
+        if (c >= 0) {
+            rowIndex = r;
+            colIndex = c;
+            break;
+        }
+    }
+    if (rowIndex < 0 || colIndex < 0) return false;
+
+    if (key === 'ArrowLeft') {
+        if (index <= 0) return false;
+        selectThumbnailItem(container, items[index - 1], true);
+        return true;
+    }
+
+    if (key === 'ArrowRight') {
+        if (index >= items.length - 1) return false;
+        selectThumbnailItem(container, items[index + 1], true);
+        return true;
+    }
+
+    const targetRowIndex = key === 'ArrowUp' ? rowIndex - 1 : (key === 'ArrowDown' ? rowIndex + 1 : rowIndex);
+    if (targetRowIndex < 0 || targetRowIndex >= rows.length) return false;
+
+    const targetX = selected.offsetLeft + selected.offsetWidth / 2;
+    const targetItem = findNearestByX(rows[targetRowIndex], targetX);
+    if (!targetItem) return false;
+    selectThumbnailItem(container, targetItem, true);
+    return true;
+}
+
+function openSelectedThumbnail(container) {
+    const items = getVisibleThumbnailItems(container);
+    if (!items.length) return false;
+
+    let selected = container.querySelector('.thumbnail-item[data-selected="1"]');
+    if (!selected || !items.includes(selected)) {
+        selected = items[0];
+        selectThumbnailItem(container, selected, true);
+    }
+
+    if (selected && typeof selected._openFile === 'function') {
+        selected._openFile();
+        return true;
+    }
+    return false;
+}
+
+function splitFolderPath(path) {
+    const normalized = String(path || '').replace(/\\/g, '/').replace(/\/+$/, '');
+    const idx = normalized.lastIndexOf('/');
+    if (idx <= 0) {
+        return { parent: '', name: normalized };
+    }
+    return { parent: normalized.slice(0, idx), name: normalized.slice(idx + 1) };
+}
+
+async function navigateSiblingFolder(direction, container, currentFile, onFileSelect, overlay, breadcrumbElement) {
+    const dir = direction >= 0 ? 1 : -1;
+
+    if (currentNavMode === 'abs') {
+        const currentPath = String(currentAbsDir || '').replace(/\/+$/, '');
+        if (!currentPath) return false;
+
+        let parentPath = currentAbsParent;
+        if (!parentPath) {
+            try {
+                const here = await fetchAbsListing(currentPath, currentNavKind);
+                parentPath = here?.parent_path || null;
+            } catch {
+                return false;
+            }
+        }
+        if (!parentPath) return false;
+
+        let parentListing;
+        try {
+            parentListing = await fetchAbsListing(parentPath, currentNavKind);
+        } catch {
+            return false;
+        }
+
+        const siblings = (parentListing?.dirs || []).slice().sort((a, b) => compareText(a?.name, b?.name));
+        if (!siblings.length) return false;
+
+        let index = siblings.findIndex((d) => pathsEqual(d?.path, currentPath));
+        if (index < 0) {
+            const currentName = browserBasename(currentPath);
+            index = siblings.findIndex((d) => d?.name === currentName);
+        }
+        if (index < 0) return false;
+
+        const next = siblings[(index + dir + siblings.length) % siblings.length];
+        if (!next?.path || pathsEqual(next.path, currentPath)) return false;
+
+        currentAbsFocusName = '';
+        currentAbsDir = next.path;
+        await loadFileThumbnails(container, currentFile, onFileSelect, overlay, breadcrumbElement);
+        return true;
+    }
+
+    if (!currentSubfolder) return false;
+
+    try {
+        const response = await fetch(`/fbnodes/list-files?source=${encodeURIComponent(currentSourceFolder)}&kind=${encodeURIComponent(currentListKind)}&include_meta=1`);
+        const data = await response.json();
+        const allFiles = (data.files || [])
+            .filter(f => (typeof f === 'string' ? f !== '(none)' : (f?.path || f?.filename || f?.name) !== '(none)'))
+            .map(normalizeFileEntry)
+            .map((f) => f.path);
+
+        const parts = splitFolderPath(currentSubfolder);
+        const parentPrefix = parts.parent ? `${parts.parent}/` : '';
+        const siblingSet = new Set();
+
+        allFiles.forEach((filepath) => {
+            if (!filepath.startsWith(parentPrefix)) return;
+            const remainder = filepath.substring(parentPrefix.length);
+            const slashIndex = remainder.indexOf('/');
+            if (slashIndex > 0) {
+                siblingSet.add(remainder.substring(0, slashIndex));
+            }
+        });
+
+        const siblings = Array.from(siblingSet).sort(compareText);
+        if (!siblings.length) return false;
+
+        const idx = siblings.indexOf(parts.name);
+        if (idx < 0) return false;
+
+        const nextName = siblings[(idx + dir + siblings.length) % siblings.length];
+        const nextPath = parts.parent ? `${parts.parent}/${nextName}` : nextName;
+        if (nextPath === currentSubfolder) return false;
+
+        currentSubfolder = nextPath;
+        await loadFileThumbnails(container, currentFile, onFileSelect, overlay, breadcrumbElement);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
 async function toggleAudioPreview(filename, item) {
     const sourceUrl = `${buildViewUrl(filename)}&${Date.now()}`;
 
@@ -692,7 +925,7 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder, 
         topRow.querySelector('div').prepend(legacyRegenerateBtn);
     }
 
-    header.appendChild(breadcrumb);
+    // Breadcrumb row intentionally hidden: path input on the toolbar already shows current location.
 
 
     // Create search/filter bar
@@ -720,6 +953,32 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder, 
         .join('');
 
     filterBar.innerHTML = `
+        <button class="sibling-prev" title="Previous sibling folder (Ctrl+Up)" style="
+            width: 34px;
+            min-width: 34px;
+            height: 34px;
+            padding: 0;
+            background: rgba(45, 55, 72, 0.7);
+            border: 1px solid rgba(226, 232, 240, 0.2);
+            border-radius: 6px;
+            color: #ccc;
+            cursor: pointer;
+            font-size: 16px;
+            line-height: 1;
+        ">^</button>
+        <button class="sibling-next" title="Next sibling folder (Ctrl+Down)" style="
+            width: 34px;
+            min-width: 34px;
+            height: 34px;
+            padding: 0;
+            background: rgba(45, 55, 72, 0.7);
+            border: 1px solid rgba(226, 232, 240, 0.2);
+            border-radius: 6px;
+            color: #ccc;
+            cursor: pointer;
+            font-size: 16px;
+            line-height: 1;
+        ">v</button>
         <input type="text" placeholder="Search files..." class="search-input" style="
             flex: 1;
             padding: 8px 12px;
@@ -794,6 +1053,34 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder, 
         if (e.target === overlay) closeBrowserModal(overlay);
     };
     overlay._keydownHandler = (e) => {
+        if (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+            e.preventDefault();
+            e.stopPropagation();
+            if (typeof overlay._navigateSibling === 'function') {
+                const dir = e.key === 'ArrowUp' ? -1 : 1;
+                overlay._navigateSibling(dir);
+            }
+            return;
+        }
+
+        const target = e.target;
+        const targetTag = target && target.tagName ? target.tagName.toUpperCase() : '';
+        const isEditing = target && (targetTag === 'INPUT' || targetTag === 'TEXTAREA' || targetTag === 'SELECT' || target.isContentEditable);
+
+        if (!isEditing && (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+            e.preventDefault();
+            e.stopPropagation();
+            moveThumbnailSelection(gridContainer, e.key);
+            return;
+        }
+
+        if (!isEditing && e.key === 'Enter') {
+            e.preventDefault();
+            e.stopPropagation();
+            openSelectedThumbnail(gridContainer);
+            return;
+        }
+
         if (e.key === 'Escape') {
             e.preventDefault();
             e.stopPropagation();
@@ -825,6 +1112,20 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder, 
     const searchInput = filterBar.querySelector('.search-input');
     const filterType = filterBar.querySelector('.filter-type');
     const viewMode = filterBar.querySelector('.view-mode');
+    const siblingPrevBtn = filterBar.querySelector('.sibling-prev');
+    const siblingNextBtn = filterBar.querySelector('.sibling-next');
+
+    overlay._navigateSibling = async (dir) => {
+        await navigateSiblingFolder(dir, gridContainer, currentFile, onFileSelect, overlay, breadcrumb);
+        filterThumbnails(gridContainer, searchInput.value, filterType.value);
+    };
+
+    siblingPrevBtn.onclick = () => {
+        overlay._navigateSibling(-1);
+    };
+    siblingNextBtn.onclick = () => {
+        overlay._navigateSibling(1);
+    };
 
     // Apply default filter if specified
     if (opts.defaultFilter && filterValues.includes(opts.defaultFilter)) {
@@ -1269,6 +1570,7 @@ function createThumbnailItem(fileEntryInput, currentFile, onFileSelect, overlay)
     item.className = 'thumbnail-item';
     item.dataset.filename = filename;
     item.dataset.type = getFileType(filename);
+    item.dataset.viewMode = currentViewMode;
     const fileType = item.dataset.type;
     
     const isSelected = pathsEqual(filename, currentFile);
@@ -1280,14 +1582,14 @@ function createThumbnailItem(fileEntryInput, currentFile, onFileSelect, overlay)
             gap: 10px;
             padding: 8px 10px;
             border-bottom: 1px solid rgba(226, 232, 240, 0.12);
-            background: ${isSelected ? 'rgba(50, 112, 163, 0.28)' : 'transparent'};
+            background: transparent;
             cursor: pointer;
             transition: background 0.15s ease;
         `;
     } else {
         item.style.cssText = `
         background: rgba(45, 55, 72, 0.7);
-        border: 1px solid ${isSelected ? 'rgba(66, 153, 225, 0.9)' : 'rgba(226, 232, 240, 0.2)'};
+        border: 1px solid rgba(226, 232, 240, 0.2);
         border-radius: 6px;
         padding: 8px;
         cursor: pointer;
@@ -1502,6 +1804,13 @@ function createThumbnailItem(fileEntryInput, currentFile, onFileSelect, overlay)
         }
     };
 
+    item._openFile = () => {
+        selectFile();
+        closeBrowserModal(overlay);
+    };
+
+    setThumbnailSelected(item, isSelected);
+
     // Click handler
     if (item.dataset.type === 'audio') {
         item.onclick = async (e) => {
@@ -1509,14 +1818,14 @@ function createThumbnailItem(fileEntryInput, currentFile, onFileSelect, overlay)
             if (document.querySelector('.thumbnail-context-menu')) {
                 return;
             }
+            selectThumbnailItem(item.parentElement, item);
             await toggleAudioPreview(filename, item);
         };
 
         item.ondblclick = (e) => {
             e.preventDefault();
             e.stopPropagation();
-            selectFile();
-            closeBrowserModal(overlay);
+            item._openFile();
         };
     } else {
         item.onclick = (e) => {
@@ -1524,8 +1833,13 @@ function createThumbnailItem(fileEntryInput, currentFile, onFileSelect, overlay)
             if (document.querySelector('.thumbnail-context-menu')) {
                 return;
             }
-            selectFile();
-            closeBrowserModal(overlay);
+            item._openFile();
+        };
+
+        item.ondblclick = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            item._openFile();
         };
     }
 

@@ -7,7 +7,28 @@ function applyJpgQualityVisibility(node) {
         return;
     }
 
-    qualityWidget.hidden = String(formatWidget.value || "").toLowerCase() !== "jpg";
+    const shouldHide = String(formatWidget.value || "").toLowerCase() !== "jpg";
+
+    if (!qualityWidget._fbnodesOriginalComputeSize && typeof qualityWidget.computeSize === "function") {
+        qualityWidget._fbnodesOriginalComputeSize = qualityWidget.computeSize;
+    }
+
+    qualityWidget.hidden = shouldHide;
+
+    if (shouldHide) {
+        qualityWidget.computeSize = () => [0, -4];
+        if (qualityWidget.inputEl) {
+            qualityWidget.inputEl.style.display = "none";
+        }
+    } else {
+        if (qualityWidget._fbnodesOriginalComputeSize) {
+            qualityWidget.computeSize = qualityWidget._fbnodesOriginalComputeSize;
+        }
+        if (qualityWidget.inputEl) {
+            qualityWidget.inputEl.style.display = "";
+        }
+    }
+
     node.setDirtyCanvas?.(true, true);
 }
 

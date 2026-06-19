@@ -897,8 +897,22 @@ app.registerExtension({
                             initial = sf === "output" ? roots.output : roots.input;
                         }
                         const sf = getWidget(node, "source_folder")?.value || "input";
+                        const currentSelection = stripAnnotation(audioWidget.value);
+                        let selectedAbsPath = "";
+                        if (currentSelection && currentSelection !== "(none)") {
+                            if (isAbsolutePath(currentSelection)) {
+                                selectedAbsPath = currentSelection;
+                            } else {
+                                const root = sf === "output" ? roots.output : roots.input;
+                                if (root) {
+                                    const rootNorm = String(root).replace(/[\\/]+$/, "");
+                                    const relNorm = String(currentSelection).replace(/^[\\/]+/, "");
+                                    selectedAbsPath = `${rootNorm}/${relNorm}`;
+                                }
+                            }
+                        }
                         createFileBrowserModal(
-                            stripAnnotation(audioWidget.value),
+                            currentSelection,
                             (selected, meta) => {
                                 if (!node.properties) node.properties = {};
                                 if (meta && meta.absPath) {
@@ -924,6 +938,7 @@ app.registerExtension({
                             {
                                 enableNavigation: true,
                                 initialPath: initial,
+                                selectedAbsPath,
                                 viewMode: node.properties?._fileBrowserViewMode || "medium",
                                 onViewModeChange: (mode) => {
                                     if (!node.properties) node.properties = {};
