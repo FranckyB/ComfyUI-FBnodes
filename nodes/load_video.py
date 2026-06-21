@@ -75,6 +75,7 @@ class LoadVideoPlus:
         file_path, annotated_type = self._parse_video_path(video)
         if annotated_type:
             source_folder = annotated_type
+
         resolved_path = None
 
         if not os.path.isabs(file_path):
@@ -103,6 +104,7 @@ class LoadVideoPlus:
     def IS_CHANGED(cls, video="", source_folder="input", **kwargs):
         if not video or video == "(none)":
             return ""
+
         import re
         match = re.match(r'^(.+?)\s*\[(input|output|temp)\]\s*$', video)
         if match:
@@ -110,12 +112,17 @@ class LoadVideoPlus:
             source_folder = match.group(2)
         else:
             file_path = video.strip()
+
         if not os.path.isabs(file_path):
             if source_folder == "output":
                 base_dir = folder_paths.get_output_directory()
             else:
                 base_dir = folder_paths.get_input_directory()
             potential_path = os.path.join(base_dir, file_path)
+            if os.path.exists(potential_path):
+                return os.path.getmtime(potential_path)
+            temp_dir = folder_paths.get_temp_directory()
+            potential_path = os.path.join(temp_dir, file_path)
             if os.path.exists(potential_path):
                 return os.path.getmtime(potential_path)
         elif os.path.exists(file_path):

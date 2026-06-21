@@ -15,4 +15,5 @@ from .save_image import SaveImagePlus
 from .crop_image import CropImagePlus
 from .lora_list import LoraListPlus
 from .prompt_batcher import PromptBatcher
+from .ltx_review import LTXReview, LTXReviewPreview
 from . import path_browser

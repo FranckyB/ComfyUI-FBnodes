@@ -33,6 +33,23 @@ Video loader with the same file browser and UX as Load Image+, but for videos. O
 - **Drag-and-Drop Support**: Drop video files directly onto the node
 - **VIDEO Output**: Outputs a VIDEO, ready to pipe into Get Video Components+
 
+### LTX Review
+Review gate node for 2-pass LTX-style workflows. It pauses execution, opens a review popup with playback, and continues only when you proceed (or timeout policy allows it).
+
+- **Inputs**: `video`, `video_latent`, `audio_latent`, `timeout`, `on_timeout`
+- **Popup controls**: Proceed, Cancel, Requeue
+- **Audio + video playback**: Uses a browser-compatible preview clip; if needed, auto-generates H.264/yuv420 preview in temp for reliable playback
+- **Timeout behavior**: Auto-proceeds or auto-cancels based on `on_timeout`
+- **Outputs**: `video`, `video_latent`, `audio_latent`, `review_path`
+- **review_path**: Path to the clip used for review (generated temp preview path when transcoded, otherwise source path)
+
+### LTX Review Preview
+Minimal companion preview node for displaying a video from a path, useful with `LTX Review`'s `review_path` output.
+
+- **Input**: `review_path` (supports absolute paths and optional `[input]/[output]/[temp]` annotations)
+- **Behavior**: Resolves the path and displays the video preview when executed
+- **No pass-through outputs**: This node is display-only
+
 ### Load Checkpoint+
 Checkpoint loader with a searchable, grouped dropdown designed for large model libraries.
 
