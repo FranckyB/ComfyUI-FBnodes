@@ -163,6 +163,74 @@ function getContentStartY(node) {
     return y + 4;
 }
 
+function estimateSelectionRowsHeight(state) {
+    const savedCount = state.savedItems.length;
+    const compareCount = state.compareItems.length;
+    if (!savedCount) {
+        return 0;
+    }
+
+    const hasCompare = compareCount > 0;
+    const pairedView = state.paired && !state.unpaired;
+
+    let rowCount = 0;
+    if (hasCompare && pairedView) {
+        if (savedCount > 1) {
+            rowCount = 1;
+        }
+    } else if (hasCompare) {
+        if (compareCount > 1) {
+            rowCount += 1;
+        }
+        if (savedCount > 1) {
+            rowCount += 1;
+        }
+    } else if (savedCount > 1) {
+        rowCount = 1;
+    }
+
+    const hasCheckboxes = savedCount > 1;
+    if (rowCount === 0 && !hasCheckboxes) {
+        return 0;
+    }
+
+    const btnH = 18;
+    const padY = 6;
+    const lineGap = 6;
+    const lines = Math.max(1, rowCount);
+    return lines * btnH + (lines - 1) * lineGap + padY * 2;
+}
+
+function ensureMinDisplaySize(node) {
+    const state = ensureCompareState(node);
+    if (!state.savedItems.length) {
+        return false;
+    }
+
+    const contentTop = getContentStartY(node);
+    const controlsH = estimateSelectionRowsHeight(state);
+    const frameMinH = 140;
+    const footerH = 24;
+    const footerGap = 6;
+    const bottomPad = 8;
+
+    const minW = 260;
+    const minH = Math.ceil(contentTop + controlsH + frameMinH + footerGap + footerH + bottomPad);
+
+    const curW = Number(node.size?.[0] || 0);
+    const curH = Number(node.size?.[1] || 0);
+    const nextW = Math.max(curW, minW);
+    const nextH = Math.max(curH, minH);
+
+    if (nextW !== curW || nextH !== curH) {
+        node.size = [nextW, nextH];
+        node.setDirtyCanvas?.(true, true);
+        return true;
+    }
+
+    return false;
+}
+
 function getCachedImage(state, url, node) {
     if (!url) {
         return null;
@@ -506,6 +574,8 @@ function drawCompareCanvas(ctx, node) {
         return;
     }
 
+    ensureMinDisplaySize(node);
+
     state.selectedSaved = clampIndex(state.selectedSaved, state.savedItems.length);
     state.selectedCompare = clampIndex(state.selectedCompare, state.compareItems.length);
 
@@ -638,6 +708,7 @@ function setResultData(node, message) {
     node.imgs = [];
 
     persistCompareData(node, state);
+    ensureMinDisplaySize(node);
 }
 
 function persistCompareData(node, state) {
@@ -952,6 +1023,7 @@ app.registerExtension({
 
             this.imgs = [];
             applyJpgQualityVisibility(this);
+            ensureMinDisplaySize(this);
             return result;
         };
 

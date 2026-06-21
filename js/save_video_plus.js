@@ -39,6 +39,124 @@ function updateDisplayState(node) {
     node._saveVideoShowCompatWarning = !!needsExternal;
 }
 
+function getWidgetHeight(node, widget) {
+    if (widget?.hidden) return 0;
+    if (typeof widget?.computeSize === "function") {
+        try {
+            const size = widget.computeSize(Number(node.size?.[0] || 320));
+            if (Array.isArray(size) && Number.isFinite(size[1])) {
+                return Number(size[1]);
+            }
+        } catch {
+            return Number(LiteGraph?.NODE_WIDGET_HEIGHT || 24);
+        }
+    }
+    return Number(LiteGraph?.NODE_WIDGET_HEIGHT || 24);
+}
+
+function getContentStartY(node) {
+    const titleH = Number(LiteGraph?.NODE_TITLE_HEIGHT || 30);
+    let y = titleH + 6;
+    for (const widget of node.widgets || []) {
+        // Stop at preview widget; we only want the controls stack height.
+        if (widget?.name === "video-preview") {
+            break;
+        }
+        y += getWidgetHeight(node, widget) + 4;
+    }
+    return y + 4;
+}
+
+function ensureMinWarningDisplaySize(node) {
+    if (!node?._saveVideoShowCompatWarning) return false;
+
+    const contentTop = getContentStartY(node);
+    const minWarningAreaH = 140;
+    const footerReserved = 84; // leave room for native video control strip
+    const minBottomPad = 14;
+    const minW = 460;
+    const minH = Math.ceil(contentTop + minWarningAreaH + footerReserved + minBottomPad);
+
+    const curW = Number(node.size?.[0] || 0);
+    const curH = Number(node.size?.[1] || 0);
+    const nextW = Math.max(curW, minW);
+    const nextH = Math.max(curH, minH);
+
+    if (nextW !== curW || nextH !== curH) {
+        node.size = [nextW, nextH];
+        node.setDirtyCanvas?.(true, true);
+        return true;
+    }
+
+    return false;
+}
+
+function getPreviewContainer(node) {
+    return node.videoContainer
+        || node.widgets?.find((w) => w.name === "video-preview")?.element
+        || null;
+}
+
+function applyWarningOverlay(node) {
+    const host = getPreviewContainer(node);
+    if (!host) return false;
+
+    if (!host.style.position) {
+        host.style.position = "relative";
+    }
+
+    let overlay = host.querySelector(".fbnodes-save-video-warning");
+    if (!overlay) {
+        overlay = document.createElement("div");
+        overlay.className = "fbnodes-save-video-warning";
+        overlay.style.position = "absolute";
+        overlay.style.left = "8px";
+        overlay.style.right = "8px";
+        // Keep warning away from the native control strip and slightly higher.
+        overlay.style.top = "12px";
+        overlay.style.bottom = "84px";
+        overlay.style.pointerEvents = "none";
+        overlay.style.display = "none";
+        overlay.style.flexDirection = "column";
+        overlay.style.alignItems = "center";
+        overlay.style.justifyContent = "center";
+        overlay.style.textAlign = "center";
+        overlay.style.lineHeight = "1.25";
+        host.appendChild(overlay);
+    }
+
+    if (node._saveVideoShowCompatWarning) {
+        overlay.innerHTML = "";
+
+        const line1 = document.createElement("div");
+        line1.textContent = "Video not compatible with browser";
+        line1.style.font = "600 16px sans-serif";
+        line1.style.color = "rgba(255, 235, 235, 0.98)";
+
+        const line2 = document.createElement("div");
+        line2.textContent = "Use \u25B6 at the top to open in System Player";
+        line2.style.marginTop = "8px";
+        line2.style.font = "600 14px sans-serif";
+        line2.style.color = "rgba(255, 235, 235, 0.92)";
+
+        overlay.appendChild(line1);
+        overlay.appendChild(line2);
+        overlay.style.display = "flex";
+    } else {
+        overlay.innerHTML = "";
+        overlay.style.display = "none";
+    }
+
+    return true;
+}
+
+function syncWarningOverlay(node, attempts = 0) {
+    const applied = applyWarningOverlay(node);
+    if (!applied && attempts < 10) {
+        setTimeout(() => syncWarningOverlay(node, attempts + 1), 80);
+    }
+}
+
 function drawTitlePlayIcon(node, ctx) {
     if (!hasSavedPath(node) || (node.flags && node.flags.collapsed)) {
         node._saveVideoPlayIconBounds = null;
@@ -69,35 +187,6 @@ function drawTitlePlayIcon(node, ctx) {
         width: triSize * 2 + 6,
         height: triSize * 2 + 6,
     };
-}
-
-function drawCompatWarning(node, ctx) {
-    if (!node._saveVideoShowCompatWarning || (node.flags && node.flags.collapsed)) return;
-
-    const line1 = "Video not compatible with browser";
-    const line2 = "Use \u25B6 at the top to open in System Player";
-
-    const titleH = LiteGraph.NODE_TITLE_HEIGHT || 30;
-    const footerReserved = 74; // native video control strip space
-    const topY = titleH + 24;
-    const bottomY = Math.max(topY + 40, node.size[1] - footerReserved - 24);
-    const centerY = (topY + bottomY) * 0.5;
-
-    ctx.save();
-    try {
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-
-        ctx.font = "600 16px sans-serif";
-        ctx.fillStyle = "rgba(255, 235, 235, 0.98)";
-        ctx.fillText(line1, node.size[0] * 0.5, centerY - 12);
-
-        ctx.font = "600 14px sans-serif";
-        ctx.fillStyle = "rgba(255, 235, 235, 0.92)";
-        ctx.fillText(line2, node.size[0] * 0.5, centerY + 12);
-    } finally {
-        ctx.restore();
-    }
 }
 
 function handlePlayIconHover(node, localPos, canvas) {
@@ -143,12 +232,14 @@ app.registerExtension({
             node._saveVideoPlayIconBounds = null;
 
             updateDisplayState(node);
+            ensureMinWarningDisplaySize(node);
+            syncWarningOverlay(node);
 
             const onDrawForeground = node.onDrawForeground;
             node.onDrawForeground = function (ctx) {
                 const drawResult = onDrawForeground ? onDrawForeground.apply(this, arguments) : undefined;
                 drawTitlePlayIcon(node, ctx);
-                drawCompatWarning(node, ctx);
+                syncWarningOverlay(node);
                 return drawResult;
             };
 
@@ -187,6 +278,8 @@ app.registerExtension({
         nodeType.prototype.onConfigure = function () {
             const result = onConfigure?.apply(this, arguments);
             updateDisplayState(this);
+            ensureMinWarningDisplaySize(this);
+            syncWarningOverlay(this);
             this.setDirtyCanvas?.(true, true);
             return result;
         };
@@ -208,6 +301,8 @@ app.registerExtension({
             }
 
             updateDisplayState(this);
+            ensureMinWarningDisplaySize(this);
+            syncWarningOverlay(this);
             this.setDirtyCanvas?.(true, true);
             return result;
         };

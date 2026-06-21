@@ -22,6 +22,8 @@ const _nonBrowserDecodableVideos = new Set();
 // Placeholder paths
 const PLACEHOLDER_IMAGE_PATH = new URL("./placeholder.png", import.meta.url).href;
 const PLACEHOLDER_VIDEO_PATH = new URL("./placeholder.mp4", import.meta.url).href;
+const UNPLAYABLE_WARNING_LINE1 = "Video not compatible with browser";
+const UNPLAYABLE_WARNING_LINE2 = "Use \u25B6 at the top to open in System Player";
 
 /**
  * Strip [input]/[output]/[temp] annotation from a path
@@ -48,6 +50,181 @@ function hideWidget(widget) {
     widget.hidden = true;
     widget.computeSize = () => [0, -4];
     if (widget.inputEl) widget.inputEl.style.display = "none";
+}
+
+function getWidgetHeight(node, widget) {
+    if (widget?.hidden) return 0;
+    if (typeof widget?.computeSize === "function") {
+        try {
+            const size = widget.computeSize(Number(node.size?.[0] || 320));
+            if (Array.isArray(size) && Number.isFinite(size[1])) {
+                return Number(size[1]);
+            }
+        } catch {
+            return Number(LiteGraph?.NODE_WIDGET_HEIGHT || 24);
+        }
+    }
+    return Number(LiteGraph?.NODE_WIDGET_HEIGHT || 24);
+}
+
+function getContentStartY(node) {
+    const titleH = Number(LiteGraph?.NODE_TITLE_HEIGHT || 30);
+    let y = titleH + 6;
+    for (const widget of node.widgets || []) {
+        y += getWidgetHeight(node, widget) + 4;
+    }
+    return y + 4;
+}
+
+function ensureMinWarningDisplaySize(node) {
+    if (!node?._needsPlayabilityWarning) return false;
+
+    const contentTop = getContentStartY(node);
+    const minWarningAreaH = 100;
+    const footerReserved = 74;
+    const minBottomPad = 10;
+    const minW = 460;
+    const minH = Math.ceil(contentTop + minWarningAreaH + footerReserved + minBottomPad);
+
+    const curW = Number(node.size?.[0] || 0);
+    const curH = Number(node.size?.[1] || 0);
+    const nextW = Math.max(curW, minW);
+    const nextH = Math.max(curH, minH);
+
+    if (nextW !== curW || nextH !== curH) {
+        node.size = [nextW, nextH];
+        node.setDirtyCanvas?.(true, true);
+        return true;
+    }
+
+    return false;
+}
+
+function getNodeVideoElement(node) {
+    return node.videoContainer?.querySelector('video')
+        || node.widgets?.find(w => w.name === 'video-preview')?.element?.querySelector('video')
+        || null;
+}
+
+function getPreviewContainer(node) {
+    return node.videoContainer
+        || node.widgets?.find(w => w.name === 'video-preview')?.element
+        || null;
+}
+
+function applyWarningOverlay(node) {
+    const host = getPreviewContainer(node);
+    if (!host) return false;
+
+    if (!host.style.position) {
+        host.style.position = 'relative';
+    }
+
+    let overlay = host.querySelector('.fbnodes-playability-warning');
+    if (!overlay) {
+        overlay = document.createElement('div');
+        overlay.className = 'fbnodes-playability-warning';
+        overlay.style.position = 'absolute';
+        overlay.style.left = '8px';
+        overlay.style.right = '8px';
+        overlay.style.top = '10px';
+        overlay.style.bottom = '10px';
+        overlay.style.pointerEvents = 'none';
+        overlay.style.display = 'none';
+        overlay.style.flexDirection = 'column';
+        overlay.style.alignItems = 'center';
+        overlay.style.justifyContent = 'center';
+        overlay.style.textAlign = 'center';
+        overlay.style.font = '600 13px sans-serif';
+        overlay.style.color = '#f6d27a';
+        overlay.style.textShadow = '0 1px 2px rgba(0,0,0,0.8)';
+        overlay.style.lineHeight = '1.25';
+        host.appendChild(overlay);
+    }
+
+    if (node._needsPlayabilityWarning) {
+        overlay.innerHTML = "";
+
+        const line1 = document.createElement('div');
+        line1.textContent = UNPLAYABLE_WARNING_LINE1;
+        line1.style.font = '600 16px sans-serif';
+        line1.style.color = 'rgba(255, 235, 235, 0.98)';
+
+        const line2 = document.createElement('div');
+        line2.textContent = UNPLAYABLE_WARNING_LINE2;
+        line2.style.marginTop = '8px';
+        line2.style.font = '600 14px sans-serif';
+        line2.style.color = 'rgba(255, 235, 235, 0.92)';
+
+        overlay.appendChild(line1);
+        overlay.appendChild(line2);
+        overlay.style.display = 'flex';
+    } else {
+        overlay.innerHTML = "";
+        overlay.style.display = 'none';
+    }
+
+    return true;
+}
+
+function syncWarningOverlay(node, attempts = 0) {
+    const applied = applyWarningOverlay(node);
+    if (!applied && attempts < 10) {
+        setTimeout(() => syncWarningOverlay(node, attempts + 1), 80);
+    }
+}
+
+function createImagePreview(node, imageUrl) {
+    let container = getPreviewContainer(node);
+    if (!container || !container.classList?.contains('comfy-img-preview')) {
+        container = document.createElement('div');
+        container.classList.add('comfy-img-preview');
+        node.videoContainer = container;
+
+        if (!node.widgets?.some(w => w.name === 'video-preview')) {
+            const w = node.addDOMWidget('video-preview', 'video', container, {
+                canvasOnly: true,
+                hideOnZoom: false
+            });
+            w.serialize = false;
+            w.computeLayoutSize = () => ({
+                minHeight: 256,
+                minWidth: 256
+            });
+        }
+    }
+
+    // Remove existing dynamic media nodes and show a stable image preview.
+    container.innerHTML = '';
+    const img = document.createElement('img');
+    img.src = imageUrl;
+    img.style.cssText = 'width:100%;height:100%;object-fit:contain;display:block;';
+    img.alt = 'Video frame preview';
+    container.appendChild(img);
+
+    syncWarningOverlay(node);
+    node.setDirtyCanvas?.(true, true);
+}
+
+function setStaticFramePreview(node, frameUrl) {
+    const vid = getNodeVideoElement(node);
+    if (vid) {
+        try {
+            vid.pause();
+            vid.poster = frameUrl;
+            const source = vid.querySelector('source');
+            if (source) source.removeAttribute('src');
+            vid.removeAttribute('src');
+            vid.load();
+            syncWarningOverlay(node);
+            return true;
+        } catch {
+            // fall through to image preview
+        }
+    }
+
+    createImagePreview(node, frameUrl);
+    return true;
 }
 
 /**
@@ -105,6 +282,8 @@ async function checkVideoPlayability(node, filename) {
 
     // If already known non-decodable, go straight to server fallback
     if (_nonBrowserDecodableVideos.has(filename)) {
+        node._needsPlayabilityWarning = true;
+        node.setDirtyCanvas(true, true);
         loadServerPreviewClip(node, filename, sourceFolder);
         return;
     }
@@ -119,7 +298,12 @@ async function checkVideoPlayability(node, filename) {
         if (info.needs_preview) {
             console.log(`[LoadVideoPlus] Server reports ${info.codec}/${info.pix_fmt}, requesting preview clip: ${filename}`);
             _nonBrowserDecodableVideos.add(filename);
+            node._needsPlayabilityWarning = true;
+            node.setDirtyCanvas(true, true);
             loadServerPreviewClip(node, filename, sourceFolder);
+        } else {
+            node._needsPlayabilityWarning = false;
+            node.setDirtyCanvas(true, true);
         }
     } catch (err) {
         console.warn(`[LoadVideoPlus] Could not check video info:`, err);
@@ -133,52 +317,20 @@ async function checkVideoPlayability(node, filename) {
  */
 async function loadServerPreviewClip(node, filename, sourceFolder) {
     try {
-        const resp = await api.fetchApi(
-            `/fbnodes/video-frame-clip?filename=${encodeURIComponent(filename)}&source=${sourceFolder}`
-        );
-        if (!resp.ok) {
-            console.error(`[LoadVideoPlus] Server clip generation failed: ${resp.status}`);
-            return;
-        }
-        const data = await resp.json();
-        // data = { filename, type, subfolder }
+        // Always provide a static JPEG poster fallback from the original source clip.
+        const frameFallbackUrl = `/fbnodes/video-frame?filename=${encodeURIComponent(filename)}&source=${encodeURIComponent(sourceFolder)}&position=0`;
 
-        // Build a /view URL for the generated clip in temp/
-        let clipViewUrl = `/view?filename=${encodeURIComponent(data.filename)}&type=${data.type}`;
-        if (data.subfolder) clipViewUrl += `&subfolder=${encodeURIComponent(data.subfolder)}`;
-
-        // Swap the native video element's src to our H264 clip.
-        // The native player may not have created videoContainer yet (e.g. first
-        // selection via Browse), so poll briefly until it appears.
-        const swapVideoSrc = () => {
-            const vid = node.videoContainer?.querySelector('video')
-                || node.widgets?.find(w => w.name === 'video-preview')?.element?.querySelector('video');
-            if (!vid) return false;
-            const source = vid.querySelector('source');
-            if (source) {
-                source.src = clipViewUrl;
-                source.removeAttribute('type');
-            } else {
-                vid.src = clipViewUrl;
-            }
-            vid.load();
-            return true;
-        };
-
-        if (swapVideoSrc()) return;
+        if (setStaticFramePreview(node, frameFallbackUrl)) return;
 
         // Poll for up to 1 second waiting for the native player to initialise
         let attempts = 0;
         const poll = setInterval(() => {
             attempts++;
-            if (swapVideoSrc()) {
+            if (setStaticFramePreview(node, frameFallbackUrl)) {
                 clearInterval(poll);
             } else if (attempts >= 10) {
                 clearInterval(poll);
-                // Native player never created a video element (H265 failed to
-                // load there too).  Create the container + video ourselves,
-                // mirroring ComfyUI's own useNodeVideo pattern.
-                createVideoPreview(node, clipViewUrl);
+                createImagePreview(node, frameFallbackUrl);
             }
         }, 100);
     } catch (err) {
@@ -191,7 +343,7 @@ async function loadServerPreviewClip(node, filename, sourceFolder) {
  * native useNodeVideo adds one.  Used when the native player never
  * initialised (e.g. first selection is an H265 clip the browser can't decode).
  */
-function createVideoPreview(node, clipViewUrl) {
+function createVideoPreview(node, clipViewUrl, posterUrl = null) {
     // Don't duplicate if one was created in the meantime
     if (node.videoContainer?.querySelector('video')) {
         const vid = node.videoContainer.querySelector('video');
@@ -209,6 +361,10 @@ function createVideoPreview(node, clipViewUrl) {
     vid.loop = true;
     vid.muted = true;
     vid.style.cssText = 'width:100%;height:100%;object-fit:contain;';
+    if (posterUrl) {
+        vid.poster = posterUrl;
+        vid.preload = 'metadata';
+    }
     vid.src = clipViewUrl;
     container.appendChild(vid);
 
@@ -230,6 +386,51 @@ function createVideoPreview(node, clipViewUrl) {
     node.setDirtyCanvas(true, true);
 }
 
+async function getCurrentVideoPath(node) {
+    const videoWidget = node.widgets?.find((w) => w.name === "video");
+    const current = stripAnnotation(videoWidget?.value);
+    if (!current || current === "(none)") return null;
+
+    if (isAbsolutePath(current)) {
+        return current;
+    }
+
+    const roots = await getMediaRoots();
+    const sourceFolder = node._sourceFolder || "input";
+    const root = sourceFolder === "output" ? roots.output : roots.input;
+    if (!root) return null;
+
+    const rootNorm = String(root).replace(/[\\/]+$/, "");
+    const relNorm = String(current).replace(/^[\\/]+/, "");
+    return `${rootNorm}/${relNorm}`;
+}
+
+async function openCurrentVideoInSystemPlayer(node) {
+    const path = await getCurrentVideoPath(node);
+    if (!path) return;
+
+    try {
+        const resp = await api.fetchApi("/fbnodes/open-in-player", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ path }),
+        });
+
+        if (!resp.ok) {
+            let message = `Request failed (${resp.status})`;
+            try {
+                const body = await resp.json();
+                if (body?.error) message = body.error;
+            } catch {
+                // ignore
+            }
+            console.warn("[LoadVideoPlus] Could not open in system player:", message);
+        }
+    } catch (error) {
+        console.warn("[LoadVideoPlus] Could not open in system player:", error);
+    }
+}
+
 /**
  * LoadVideoPlus extension registration
  */
@@ -243,6 +444,154 @@ app.registerExtension({
         nodeType.prototype.onNodeCreated = function () {
             const result = onNodeCreated?.apply(this, arguments);
             const node = this;
+
+            node._openPlayIconBounds = null;
+            node._hoverOpenPlayIcon = false;
+            node._needsPlayabilityWarning = false;
+            node._playabilityCheckToken = 0;
+
+            const setPlayabilityWarning = (enabled) => {
+                node._needsPlayabilityWarning = Boolean(enabled);
+                ensureMinWarningDisplaySize(node);
+                syncWarningOverlay(node);
+                node.setDirtyCanvas(true, true);
+            };
+
+            const runPlayabilityCheck = async (cleanFilename, onCompatible = null) => {
+                const token = ++node._playabilityCheckToken;
+                const filename = stripAnnotation(cleanFilename);
+
+                if (!filename || filename === '(none)') {
+                    if (token === node._playabilityCheckToken) {
+                        setPlayabilityWarning(false);
+                    }
+                    return;
+                }
+
+                // Optimistic clear while checking the new selection.
+                setPlayabilityWarning(false);
+
+                if (_nonBrowserDecodableVideos.has(filename)) {
+                    if (token !== node._playabilityCheckToken) return;
+                    setPlayabilityWarning(true);
+                    loadServerPreviewClip(node, filename, node._sourceFolder || 'input');
+                    return;
+                }
+
+                const sourceFolder = node._sourceFolder || 'input';
+                try {
+                    const resp = await api.fetchApi(
+                        `/fbnodes/video-info?filename=${encodeURIComponent(filename)}&source=${sourceFolder}`
+                    );
+                    if (!resp.ok) {
+                        // If probe fails, do not block native preview for compatible clips.
+                        if (token === node._playabilityCheckToken && typeof onCompatible === 'function') {
+                            onCompatible();
+                        }
+                        return;
+                    }
+
+                    const info = await resp.json();
+                    if (token !== node._playabilityCheckToken) return;
+
+                    if (info.needs_preview) {
+                        _nonBrowserDecodableVideos.add(filename);
+                        setPlayabilityWarning(true);
+                        loadServerPreviewClip(node, filename, sourceFolder);
+                    } else {
+                        setPlayabilityWarning(false);
+                        if (typeof onCompatible === 'function') {
+                            onCompatible();
+                        }
+                    }
+                } catch (err) {
+                    console.warn(`[LoadVideoPlus] Could not check video info:`, err);
+                    if (token === node._playabilityCheckToken && typeof onCompatible === 'function') {
+                        onCompatible();
+                    }
+                }
+            };
+
+            const onDrawForeground = node.onDrawForeground;
+            node.onDrawForeground = function(ctx) {
+                const drawResult = onDrawForeground ? onDrawForeground.apply(this, arguments) : undefined;
+
+                if (!(node.flags && node.flags.collapsed)) {
+                    syncWarningOverlay(node);
+
+                    const videoWidgetForIcon = node.widgets?.find((w) => w.name === "video");
+                    const currentValue = stripAnnotation(videoWidgetForIcon?.value);
+                    if (currentValue && currentValue !== "(none)") {
+                        const titleHeight = LiteGraph.NODE_TITLE_HEIGHT || 30;
+                        const playX = node.size[0] - 8 - 14;
+                        const playY = (titleHeight / 2) - 30;
+                        const triSize = 8;
+
+                        ctx.beginPath();
+                        ctx.moveTo(playX - triSize, playY - triSize);
+                        ctx.lineTo(playX - triSize, playY + triSize);
+                        ctx.lineTo(playX + triSize, playY);
+                        ctx.closePath();
+                        ctx.fillStyle = node._hoverOpenPlayIcon ? '#ffffff' : 'rgba(255, 255, 255, 0.7)';
+                        ctx.fill();
+
+                        node._openPlayIconBounds = {
+                            x: playX - triSize - 3,
+                            y: playY - triSize - 3,
+                            width: triSize * 2 + 6,
+                            height: triSize * 2 + 6,
+                        };
+                    } else {
+                        node._openPlayIconBounds = null;
+                    }
+                } else {
+                    node._openPlayIconBounds = null;
+                }
+
+                return drawResult;
+            };
+
+            const onMouseMove = node.onMouseMove;
+            node.onMouseMove = function(e, localPos, canvas) {
+                const moveResult = onMouseMove ? onMouseMove.apply(this, arguments) : undefined;
+                if (!node._openPlayIconBounds) return moveResult;
+
+                const b = node._openPlayIconBounds;
+                const inside = localPos[0] >= b.x && localPos[0] <= b.x + b.width && localPos[1] >= b.y && localPos[1] <= b.y + b.height;
+
+                if (inside) {
+                    canvas.canvas.style.cursor = 'pointer';
+                    canvas.canvas.title = 'Play in system player';
+                    if (!node._hoverOpenPlayIcon) {
+                        node._hoverOpenPlayIcon = true;
+                        node.setDirtyCanvas(true, true);
+                    }
+                } else {
+                    if (node._hoverOpenPlayIcon) {
+                        node._hoverOpenPlayIcon = false;
+                        node.setDirtyCanvas(true, true);
+                    }
+                    if (canvas?.canvas?.title === 'Play in system player') {
+                        canvas.canvas.title = '';
+                        canvas.canvas.style.cursor = '';
+                    }
+                }
+
+                return moveResult;
+            };
+
+            const onMouseDown = node.onMouseDown;
+            node.onMouseDown = function(e, localPos, canvas) {
+                if (node._openPlayIconBounds) {
+                    const b = node._openPlayIconBounds;
+                    const inside = localPos[0] >= b.x && localPos[0] <= b.x + b.width && localPos[1] >= b.y && localPos[1] <= b.y + b.height;
+                    if (inside) {
+                        openCurrentVideoInSystemPlayer(node);
+                        return true;
+                    }
+                }
+                return onMouseDown ? onMouseDown.apply(this, arguments) : undefined;
+            };
 
             node._sourceFolder = 'input';
             let videoPickerWidget = null;
@@ -373,29 +722,34 @@ app.registerExtension({
                 videoWidget.callback = function(value) {
                     const clean = stripAnnotation(value);
 
-                    // Files outside input/output are absolute paths the native
-                    // player can't fetch via /view; render our own preview, then
-                    // run H265 detection so unplayable codecs get a server clip.
-                    if (isAbsolutePath(value)) {
-                        if (origVideoCallback) origVideoCallback.apply(this, arguments);
-                        videoWidget.value = clean;
-                        createVideoPreview(node, mediaFileUrl(clean));
-                        checkVideoPlayability(node, clean);
-                        return;
+                    if (!clean || clean === '(none)') {
+                        node._playabilityCheckToken++;
+                        setPlayabilityWarning(false);
                     }
-
-                    // The native player reads widget.value to build the video URL.
-                    // Temporarily set value with [output] so it resolves correctly,
-                    // then restore the clean name for display.
-                    if (node._sourceFolder === 'output' && clean && clean !== '(none)') {
-                        videoWidget.value = clean + ' [output]';
-                    }
-                    if (origVideoCallback) origVideoCallback.apply(this, arguments);
-                    // Restore clean display name
-                    if (clean) videoWidget.value = clean;
 
                     if (clean && clean !== '(none)') {
-                        checkVideoPlayability(node, clean);
+                        const applyNativePreview = () => {
+                            // Files outside input/output are absolute paths the native
+                            // player can't fetch via /view; render through raw-file URL.
+                            if (isAbsolutePath(value)) {
+                                if (origVideoCallback) origVideoCallback.apply(this, arguments);
+                                videoWidget.value = clean;
+                                createVideoPreview(node, mediaFileUrl(clean));
+                                return;
+                            }
+
+                            // The native player reads widget.value to build the video URL.
+                            // Temporarily set value with [output] so it resolves correctly,
+                            // then restore the clean name for display.
+                            if (node._sourceFolder === 'output') {
+                                videoWidget.value = clean + ' [output]';
+                            }
+                            if (origVideoCallback) origVideoCallback.apply(this, arguments);
+                            if (clean) videoWidget.value = clean;
+                        };
+
+                        // Compatibility is resolved first. Incompatible clips never go through native playback.
+                        runPlayabilityCheck(clean, applyNativePreview);
                     } else {
                         // Show placeholder video when nothing is selected
                         setTimeout(() => {
@@ -562,7 +916,7 @@ app.registerExtension({
                         // then detect H265/yuv444 and swap in a server preview clip.
                         setTimeout(() => {
                             createVideoPreview(node, mediaFileUrl(filename));
-                            checkVideoPlayability(node, filename);
+                            runPlayabilityCheck(filename);
                         }, 200);
                     } else if (filename && filename !== '(none)') {
                         // Ensure native player can resolve output files
@@ -570,8 +924,10 @@ app.registerExtension({
                             videoWidget.value = filename + ' [output]';
                             setTimeout(() => { videoWidget.value = filename; }, 200);
                         }
-                        setTimeout(() => checkVideoPlayability(node, filename), 500);
+                        setTimeout(() => runPlayabilityCheck(filename), 500);
                     } else {
+                        node._playabilityCheckToken++;
+                        setPlayabilityWarning(false);
                         // Show placeholder when no video is selected
                         setTimeout(() => {
                             const vid = node.videoContainer?.querySelector('video')

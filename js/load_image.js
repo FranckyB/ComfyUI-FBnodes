@@ -554,6 +554,47 @@ function showPlaceholder(node, requestId = null) {
     };
 }
 
+let _fbLoadImageKeyListenerInstalled = false;
+
+function getActiveLoadImageNode() {
+    const selected = app.canvas?.selected_nodes;
+    if (!selected) return null;
+
+    const nodes = Object.values(selected).filter((n) => {
+        const cls = n?.comfyClass || n?.type;
+        return cls === "LoadImagePlus" || cls === "BetterImageLoader";
+    });
+
+    return nodes.length === 1 ? nodes[0] : null;
+}
+
+function isTypingTarget(target) {
+    if (!target) return false;
+    const tag = String(target.tagName || "").toUpperCase();
+    return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || !!target.isContentEditable;
+}
+
+function installArrowKeyNavigation() {
+    if (_fbLoadImageKeyListenerInstalled) return;
+    _fbLoadImageKeyListenerInstalled = true;
+
+    window.addEventListener("keydown", (event) => {
+        if (event.defaultPrevented) return;
+        if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+        if (event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return;
+        if (isTypingTarget(event.target)) return;
+
+        const node = getActiveLoadImageNode();
+        if (!node || typeof node._stepImageByDelta !== "function") return;
+
+        const dir = event.key === "ArrowRight" ? 1 : -1;
+        if (node._stepImageByDelta(dir)) {
+            event.preventDefault();
+            event.stopPropagation();
+        }
+    }, true);
+}
+
 /**
  * LoadImagePlus extension registration
  */
@@ -588,6 +629,8 @@ app.registerExtension({
         nodeType.prototype.onNodeCreated = function () {
             const result = onNodeCreated?.apply(this, arguments);
             const node = this;
+
+            installArrowKeyNavigation();
 
             const coerceFramePosition = (value) => {
                 const n = Number(value);
@@ -758,6 +801,57 @@ app.registerExtension({
                     imagePickerWidget.value = currentLabel || "(none)";
                 }
                 node.setDirtyCanvas(true);
+            };
+
+            const listImageValues = () => {
+                const out = [];
+                const seen = new Set();
+
+                const add = (v) => {
+                    if (typeof v !== "string") return;
+                    const value = stripAnnotation(v);
+                    if (!value || value === "(none)" || seen.has(value)) return;
+                    seen.add(value);
+                    out.push(value);
+                };
+
+                const map = node._imagePickerMap;
+                if (map && typeof map === "object") {
+                    for (const value of Object.values(map)) {
+                        add(value);
+                    }
+                    if (out.length > 0) return out;
+                }
+
+                const values = imageWidget?.options?.values;
+                if (Array.isArray(values)) {
+                    for (const value of values) add(value);
+                } else if (values && typeof values === "object") {
+                    for (const value of Object.values(values)) add(value);
+                }
+
+                return out;
+            };
+
+            node._stepImageByDelta = (delta) => {
+                if (!imageWidget) return false;
+
+                const values = listImageValues();
+                if (values.length <= 1) return false;
+
+                const dir = delta >= 0 ? 1 : -1;
+                const current = stripAnnotation(imageWidget.value);
+                const currentIndex = values.indexOf(current);
+
+                let nextIndex;
+                if (currentIndex < 0) {
+                    nextIndex = dir > 0 ? 0 : values.length - 1;
+                } else {
+                    nextIndex = (currentIndex + dir + values.length) % values.length;
+                }
+
+                setImageFilename(values[nextIndex]);
+                return true;
             };
 
             // Image widget

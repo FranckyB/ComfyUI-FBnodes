@@ -47,6 +47,70 @@ def _log(message: str):
     print(f"[SaveVideoPlus] {message}")
 
 
+def _latent_to_file_tensors(latent):
+    """
+    Convert a LATENT-style dict to a safetensors-compatible tensor dict.
+
+    Preserves all top-level tensor keys (for richer formats like LTX), while
+    also writing legacy keys expected by older loaders when possible.
+    """
+    if not isinstance(latent, dict):
+        raise TypeError("Latent input must be a dict")
+
+    tensor_payload = {}
+    for key, value in latent.items():
+        if isinstance(key, str) and torch.is_tensor(value):
+            tensor_payload[key] = value
+
+    # Backward compatibility with legacy latent files/loaders.
+    if "samples" in tensor_payload and "latent_tensor" not in tensor_payload:
+        tensor_payload["latent_tensor"] = tensor_payload["samples"]
+
+    if "latent_format_version_0" not in tensor_payload:
+        tensor_payload["latent_format_version_0"] = torch.tensor([])
+
+    # At minimum we need either the canonical samples tensor or legacy key.
+    if "samples" not in tensor_payload and "latent_tensor" not in tensor_payload:
+        raise ValueError("Latent dict does not contain a tensor under 'samples' (or legacy 'latent_tensor')")
+
+    return tensor_payload
+
+
+def _latent_from_file_tensors(latent_data):
+    """
+    Decode safetensors latent payload into a LATENT-style dict.
+
+    - Supports legacy files with latent_tensor.
+    - Preserves additional tensor fields (e.g. LTX audio/video tensors).
+    """
+    if not isinstance(latent_data, dict):
+        raise TypeError("Latent file payload must be a dict")
+
+    multiplier = 1.0
+    if "latent_format_version_0" not in latent_data:
+        multiplier = 1.0 / 0.18215
+
+    out = {}
+
+    if torch.is_tensor(latent_data.get("samples")):
+        out["samples"] = latent_data["samples"].float() * multiplier
+    elif torch.is_tensor(latent_data.get("latent_tensor")):
+        out["samples"] = latent_data["latent_tensor"].float() * multiplier
+    else:
+        raise KeyError("Latent file missing both 'samples' and 'latent_tensor'")
+
+    reserved_keys = {"latent_tensor", "latent_format_version_0"}
+    for key, value in latent_data.items():
+        if key in reserved_keys:
+            continue
+        if key == "samples":
+            continue
+        if torch.is_tensor(value):
+            out[key] = value
+
+    return out
+
+
 def _open_with_system_player(path: str):
     if sys.platform.startswith("win"):
         os.startfile(path)  # type: ignore[attr-defined]
@@ -74,6 +138,7 @@ async def open_in_player(request):
         return web.json_response({"ok": False, "error": "File not found"}, status=404)
 
     allowed_roots = [
+        os.path.normcase(os.path.realpath(folder_paths.get_input_directory())),
         os.path.normcase(os.path.realpath(folder_paths.get_output_directory())),
         os.path.normcase(os.path.realpath(folder_paths.get_temp_directory())),
     ]
@@ -343,7 +408,7 @@ class SaveVideoPlus:
                     for x in extra_pnginfo:
                         latent_metadata[x] = json.dumps(extra_pnginfo[x])
                 # Save the latent
-                latent_output = {"latent_tensor": latent["samples"], "latent_format_version_0": torch.tensor([])}
+                latent_output = _latent_to_file_tensors(latent)
                 if os.path.exists(latent_file):
                     os.remove(latent_file)
                 comfy.utils.save_torch_file(latent_output, latent_file, metadata=latent_metadata)
@@ -604,13 +669,55 @@ class LoadLatentFile:
         # Load the latent file
         latent = safetensors.torch.load_file(file_path, device="cpu")
 
-        # Handle version differences
-        multiplier = 1.0
-        if "latent_format_version_0" not in latent:
-            multiplier = 1.0 / 0.18215
-
-        samples = {"samples": latent["latent_tensor"].float() * multiplier}
+        samples = _latent_from_file_tensors(latent)
         return (samples,)
+
+
+class LoadLTXLatentFile:
+    """
+    Load a latent from a file, preserving additional tensor fields used by LTX
+    workflows (e.g. separate audio/video latent tensors).
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "file_path": ("STRING", {
+                    "default": "",
+                    "tooltip": "Path to the .latent file to load. Supports LTX-style latent payloads."
+                })
+            }
+        }
+
+    RETURN_TYPES = ("LATENT",)
+    FUNCTION = "load"
+    CATEGORY = "FBnodes"
+    DESCRIPTION = "Load an LTX latent from a file, preserving extra latent tensors (audio/video)."
+
+    def load(self, file_path):
+        if not file_path or not os.path.exists(file_path):
+            raise FileNotFoundError(f"Latent file not found: {file_path}")
+
+        latent_data = safetensors.torch.load_file(file_path, device="cpu")
+        return (_latent_from_file_tensors(latent_data),)
+
+    @classmethod
+    def IS_CHANGED(cls, file_path):
+        if not file_path or not os.path.exists(file_path):
+            return ""
+        m = hashlib.sha256()
+        with open(file_path, 'rb') as f:
+            m.update(f.read())
+        return m.digest().hex()
+
+    @classmethod
+    def VALIDATE_INPUTS(cls, file_path):
+        if not file_path:
+            return True
+        if not os.path.exists(file_path):
+            return f"Latent file not found: {file_path}"
+        return True
 
     @classmethod
     def IS_CHANGED(cls, file_path):
@@ -717,10 +824,7 @@ class GetVideoComponentsPlus:
             if os.path.exists(latent_path):
                 try:
                     latent_data = safetensors.torch.load_file(latent_path, device="cpu")
-                    multiplier = 1.0
-                    if "latent_format_version_0" not in latent_data:
-                        multiplier = 1.0 / 0.18215
-                    latent = {"samples": latent_data["latent_tensor"].float() * multiplier}
+                    latent = _latent_from_file_tensors(latent_data)
                 except Exception as e:
                     print(f"[GetVideoComponentsPlus] Could not load latent file: {e}")
         return latent
@@ -859,6 +963,26 @@ class GetVideoComponentsPlus:
 
                     chunks.append(arr.astype(np.float32, copy=False))
 
+            # Flush any buffered samples from resampler state.
+            try:
+                resampled_tail = resampler.resample(None)
+            except Exception:
+                resampled_tail = None
+
+            if resampled_tail is not None:
+                tail_list = resampled_tail if isinstance(resampled_tail, list) else [resampled_tail]
+                for audio_frame in tail_list:
+                    arr = audio_frame.to_ndarray()
+                    if arr is None or arr.size == 0:
+                        continue
+
+                    if arr.ndim == 1:
+                        arr = arr[None, :]
+                    elif arr.ndim == 2 and arr.shape[0] > arr.shape[1] and arr.shape[1] <= 8:
+                        arr = arr.T
+
+                    chunks.append(arr.astype(np.float32, copy=False))
+
         if not chunks:
             return None
 
@@ -944,8 +1068,27 @@ class GetVideoComponentsPlus:
         if not decode_images and not decode_audio:
             return (images, audio, fps, video_path, latent, width, height, frame_count, duration)
 
-        decoded_with_pyav = False
-        if video_path and os.path.exists(video_path):
+        # Prefer Comfy's VIDEO API first for reliability/compatibility.
+        decoded_with_comfy = False
+        try:
+            components = video.get_components()
+            fps = float(components.frame_rate)
+
+            if decode_images:
+                images = components.images
+                frame_count = int(images.shape[0])
+
+            if decode_audio:
+                audio = components.audio
+
+            if duration <= 0.0 and fps > 0.0 and frame_count > 0:
+                duration = float(frame_count) / float(fps)
+
+            decoded_with_comfy = True
+        except Exception as e:
+            print(f"[GetVideoComponentsPlus] Comfy VIDEO API failed, trying PyAV fallback: {e}")
+
+        if not decoded_with_comfy and video_path and os.path.exists(video_path):
             try:
                 if decode_images:
                     images, decoded_count = self._decode_images_chunked(
@@ -961,26 +1104,9 @@ class GetVideoComponentsPlus:
                 if decode_audio:
                     audio = self._decode_audio(video_path, trim_in=trim_in, trim_out=trim_out)
 
-                decoded_with_pyav = True
+                if (decode_audio and audio is None) or (decode_images and int(frame_count or 0) <= 0):
+                    raise RuntimeError("PyAV fallback returned incomplete components")
             except Exception as e:
-                print(f"[GetVideoComponentsPlus] PyAV decode failed, falling back to Comfy VIDEO API: {e}")
-
-        if not decoded_with_pyav:
-            # Fallback path for unusual VIDEO providers where stream source is unavailable.
-            try:
-                components = video.get_components()
-                fps = float(components.frame_rate)
-
-                if decode_images:
-                    images = components.images
-                    frame_count = int(images.shape[0])
-
-                if decode_audio:
-                    audio = components.audio
-
-                if duration <= 0.0 and fps > 0.0 and frame_count > 0:
-                    duration = float(frame_count) / float(fps)
-            except Exception as e:
-                raise RuntimeError(f"Could not extract video components: {e}") from e
+                raise RuntimeError(f"Could not extract video components (Comfy + PyAV fallback failed): {e}") from e
 
         return (images, audio, fps, video_path, latent, width, height, frame_count, duration)
