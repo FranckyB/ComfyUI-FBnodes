@@ -62,16 +62,24 @@ def _latent_to_file_tensors(latent):
         if isinstance(key, str) and torch.is_tensor(value):
             tensor_payload[key] = value
 
+    if not tensor_payload:
+        raise ValueError("Latent dict does not contain any top-level tensor fields")
+
     # Backward compatibility with legacy latent files/loaders.
     if "samples" in tensor_payload and "latent_tensor" not in tensor_payload:
         tensor_payload["latent_tensor"] = tensor_payload["samples"]
 
+    # Some workflows provide valid LATENT dicts under nonstandard tensor keys.
+    # Pick a stable primary tensor so saving does not fail unnecessarily.
+    if "samples" not in tensor_payload and "latent_tensor" not in tensor_payload:
+        preferred_keys = ("latents", "latent", "video_latent", "video", "z")
+        primary_key = next((k for k in preferred_keys if k in tensor_payload), next(iter(tensor_payload)))
+        tensor_payload["samples"] = tensor_payload[primary_key]
+        tensor_payload["latent_tensor"] = tensor_payload[primary_key]
+        _log(f"LATENT input missing 'samples'; using '{primary_key}' as primary latent tensor")
+
     if "latent_format_version_0" not in tensor_payload:
         tensor_payload["latent_format_version_0"] = torch.tensor([])
-
-    # At minimum we need either the canonical samples tensor or legacy key.
-    if "samples" not in tensor_payload and "latent_tensor" not in tensor_payload:
-        raise ValueError("Latent dict does not contain a tensor under 'samples' (or legacy 'latent_tensor')")
 
     return tensor_payload
 
@@ -287,7 +295,7 @@ class SaveVideoPlus:
                     "default": True,
                     "tooltip": "Save latent alongside the video.\nOff = don't save the connected latent."
                 }),
-                "browser_preview_compat": ("BOOLEAN", {
+                "browser_compat": ("BOOLEAN", {
                     "default": True,
                     "tooltip": "When ON, non-browser-compatible clips get an auto-generated H.264 preview for UI playback.\nWhen OFF, UI uses the original file and may not preview in browser."
                 }),
@@ -309,7 +317,7 @@ class SaveVideoPlus:
     CATEGORY = "FBnodes"
     DESCRIPTION = "Saves video with H.264 or H.265 codec and quality control. Includes audio and workflow metadata."
 
-    def save_video(self, video, filename_prefix, codec, chroma, crf, save, save_latent, browser_preview_compat=True, latent=None, metadata=None, prompt=None, extra_pnginfo=None):
+    def save_video(self, video, filename_prefix, codec, chroma, crf, save, save_latent, browser_compat=True, latent=None, metadata=None, prompt=None, extra_pnginfo=None):
         # Expand %date:format% patterns (e.g., %date:yy-MM-dd_hh-mm%)
         # This mimics ComfyUI's frontend JS date expansion
         def expand_date_format(text):
@@ -549,7 +557,7 @@ class SaveVideoPlus:
                 },
                 "result": (file_path,),
             }
-        elif not browser_preview_compat:
+        elif not browser_compat:
             # Respect user choice and do not generate a browser-compatible transcode.
             return {
                 "ui": {
