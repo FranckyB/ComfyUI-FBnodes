@@ -782,6 +782,7 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder, 
         justify-content: center;
         z-index: 10000;
     `;
+    overlay._initialAbsLoadPending = currentNavMode === 'abs';
 
     // Create modal container (match PromptManagerAdvanced styling)
     const modal = document.createElement('div');
@@ -1341,7 +1342,28 @@ async function loadFileThumbnailsAbs(container, currentFile, onFileSelect, overl
                 selectedItem.scrollIntoView({ block: 'center', behavior: 'instant' });
             });
         }
+
+        if (overlay && overlay._initialAbsLoadPending) {
+            overlay._initialAbsLoadPending = false;
+        }
     } catch (error) {
+        // On first open, invalid remembered paths should fall back to Comfy's input root.
+        if (overlay && overlay._initialAbsLoadPending) {
+            overlay._initialAbsLoadPending = false;
+            try {
+                const rootsData = await fetchAbsListing('', currentNavKind);
+                const fallbackRoots = extractRootPaths(rootsData?.roots || []);
+                const fallbackPath = fallbackRoots.input || fallbackRoots.output;
+                if (fallbackPath && !pathsEqual(currentAbsDir, fallbackPath)) {
+                    currentAbsRoots = fallbackRoots;
+                    currentAbsDir = fallbackPath;
+                    return loadFileThumbnailsAbs(container, currentFile, onFileSelect, overlay, breadcrumbElement);
+                }
+            } catch {
+                // Ignore fallback probe failures and show original error below.
+            }
+        }
+
         console.error('[FileBrowser] Error loading absolute path:', error);
         container.innerHTML = `<div style="text-align: center; padding: 40px; color: rgba(220, 53, 69, 0.9);">${error.message || 'Error loading files'}</div>`;
     }
