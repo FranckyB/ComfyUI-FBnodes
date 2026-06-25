@@ -345,6 +345,10 @@ class LTXReview:
                     "default": "proceed",
                     "tooltip": "Action used if no decision is received before timeout."
                 }),
+                "bypass": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "When ON, skip review popup and pass through video/latents immediately."
+                }),
             },
             "hidden": {
                 "unique_id": "UNIQUE_ID",
@@ -355,10 +359,15 @@ class LTXReview:
     RETURN_NAMES = ("video", "video_latent", "audio_latent", "review_path")
     FUNCTION = "review"
     CATEGORY = "FBnodes"
-    DESCRIPTION = "Pause for user review of an LTX video pass and then proceed or cancel while preserving video/audio latents."
+    DESCRIPTION = "Pause for user review of an LTX video pass and then proceed or cancel while preserving video/audio latents. Supports bypass mode for immediate pass-through."
 
-    def review(self, video, video_latent, audio_latent, timeout=120, on_timeout="proceed", unique_id=None):
+    def review(self, video, video_latent, audio_latent, timeout=120, on_timeout="proceed", bypass=False, unique_id=None):
         info = _resolve_video_info(video)
+
+        if bypass:
+            passthrough_path = str(info.get("path") or "").strip()
+            return {"result": (video, video_latent, audio_latent, passthrough_path)}
+
         review_clip_path = str(info.get("path") or "")
         try:
             review_video_url, review_clip_path = _resolve_review_video_url(video, info)
@@ -523,10 +532,26 @@ class LTXReviewPreview:
 
         path_value = str(review_path or "").strip()
         if not path_value:
-            raise ValueError("review_path input is empty")
+            return {
+                "ui": {
+                    "images": [],
+                    "animated": (True,),
+                },
+                "result": (),
+            }
 
-        resolved_path = _resolve_existing_path(path_value)
-        view_entry = _path_to_view_entry(resolved_path)
+        try:
+            resolved_path = _resolve_existing_path(path_value)
+            view_entry = _path_to_view_entry(resolved_path)
+        except Exception as e:
+            print(f"[LTXReviewPreview] Could not resolve review_path '{path_value}': {e}")
+            return {
+                "ui": {
+                    "images": [],
+                    "animated": (True,),
+                },
+                "result": (),
+            }
 
         return {
             "ui": {
