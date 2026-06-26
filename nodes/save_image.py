@@ -66,6 +66,13 @@ class SaveImagePlus:
                         "tooltip": "JPEG quality. Ignored for PNG.",
                     },
                 ),
+                "save": (
+                    "BOOLEAN",
+                    {
+                        "default": True,
+                        "tooltip": "When ON, save to output folder. When OFF, save preview images to temp using filename_prefix basename.",
+                    },
+                ),
             },
             "optional": {
                 "Compare": ("IMAGE",),
@@ -83,7 +90,7 @@ class SaveImagePlus:
     CATEGORY = "FBnodes"
     DESCRIPTION = "Save images as PNG or JPG with date-token filename support."
 
-    def save_images(self, images, filename_prefix, format, jpg_quality, Compare=None, prompt=None, extra_pnginfo=None):
+    def save_images(self, images, filename_prefix, format, jpg_quality, save=True, Compare=None, prompt=None, extra_pnginfo=None):
         if images is None or len(images) == 0:
             return ("",)
 
@@ -94,13 +101,40 @@ class SaveImagePlus:
         height = first.shape[0]
         width = first.shape[1]
 
-        full_output_folder, filename, counter, subfolder, _ = folder_paths.get_save_image_path(
-            filename_prefix,
-            folder_paths.get_output_directory(),
-            width,
-            height,
-        )
-        ui_subfolder = (subfolder or "").replace("\\", "/")
+        if save:
+            full_output_folder, filename, counter, subfolder, _ = folder_paths.get_save_image_path(
+                filename_prefix,
+                folder_paths.get_output_directory(),
+                width,
+                height,
+            )
+            ui_subfolder = (subfolder or "").replace("\\", "/")
+            output_type = "output"
+            use_plain_basename = False
+        else:
+            full_output_folder = folder_paths.get_temp_directory()
+            filename = os.path.basename(filename_prefix).strip() or "img"
+            subfolder = ""
+            ui_subfolder = ""
+            output_type = "temp"
+
+            plain_name = f"{filename}.{ext}"
+            plain_path = os.path.join(full_output_folder, plain_name)
+            base_exists = os.path.exists(plain_path)
+
+            pattern = re.compile(rf"^{re.escape(filename)}_?(\d+)\.{re.escape(ext)}$")
+            existing_counters = []
+            for existing_file in os.listdir(full_output_folder):
+                match = pattern.match(existing_file)
+                if match:
+                    existing_counters.append(int(match.group(1)))
+
+            if base_exists:
+                counter = max(existing_counters, default=0) + 1
+            else:
+                counter = max(existing_counters, default=0)
+
+            use_plain_basename = not base_exists
 
         ui_images = []
         compare_ui_images = []
@@ -109,7 +143,13 @@ class SaveImagePlus:
         for image in images:
             pil_image = _tensor_to_pil(image)
 
-            file_name = f"{filename}_{counter:05}.{ext}"
+            if not save and use_plain_basename:
+                file_name = f"{filename}.{ext}"
+                use_plain_basename = False
+                if len(images) > 1 and counter == 0:
+                    counter = 1
+            else:
+                file_name = f"{filename}_{counter:05}.{ext}"
             file_path = os.path.join(full_output_folder, file_name)
 
             if ext == "png":
@@ -129,7 +169,7 @@ class SaveImagePlus:
             ui_images.append({
                 "filename": file_name,
                 "subfolder": ui_subfolder,
-                "type": "output",
+                "type": output_type,
             })
 
             last_file = file_name

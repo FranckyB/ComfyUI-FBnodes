@@ -112,6 +112,26 @@ function getPreviewContainer(node) {
         || null;
 }
 
+function isNodeBypassed(node) {
+    return !!(node?.mode === 4 || node?.flags?.bypass || node?.flags?.bypassed);
+}
+
+function syncBypassPreviewStyle(node) {
+    const host = getPreviewContainer(node);
+    if (!host) return false;
+
+    const bypassed = isNodeBypassed(node);
+    host.style.opacity = bypassed ? '0.42' : '';
+    host.style.filter = bypassed ? 'grayscale(0.35) brightness(0.82)' : '';
+
+    const media = host.querySelector('video, img');
+    if (media) {
+        media.style.opacity = bypassed ? '0.9' : '';
+    }
+
+    return true;
+}
+
 function applyWarningOverlay(node) {
     const host = getPreviewContainer(node);
     if (!host) return false;
@@ -169,6 +189,7 @@ function applyWarningOverlay(node) {
 
 function syncWarningOverlay(node, attempts = 0) {
     const applied = applyWarningOverlay(node);
+    syncBypassPreviewStyle(node);
     if (!applied && attempts < 10) {
         setTimeout(() => syncWarningOverlay(node, attempts + 1), 80);
     }
@@ -515,6 +536,7 @@ app.registerExtension({
             const onDrawForeground = node.onDrawForeground;
             node.onDrawForeground = function(ctx) {
                 const drawResult = onDrawForeground ? onDrawForeground.apply(this, arguments) : undefined;
+                syncBypassPreviewStyle(node);
 
                 if (!(node.flags && node.flags.collapsed)) {
                     syncWarningOverlay(node);

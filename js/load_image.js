@@ -38,6 +38,25 @@ function hideWidget(widget) {
     if (widget.inputEl) widget.inputEl.style.display = "none";
 }
 
+function isNodeBypassed(node) {
+    return !!(node?.mode === 4 || node?.flags?.bypass || node?.flags?.bypassed);
+}
+
+function drawBypassVeil(ctx, node) {
+    if (!isNodeBypassed(node) || (node.flags && node.flags.collapsed)) return;
+    const titleH = Number(LiteGraph?.NODE_TITLE_HEIGHT || 30);
+    const bodyH = Math.max(0, Number(node.size?.[1] || 0) - titleH);
+    if (bodyH <= 0) return;
+
+    ctx.save();
+    try {
+        ctx.fillStyle = "rgba(12, 14, 18, 0.45)";
+        ctx.fillRect(0, titleH, Number(node.size?.[0] || 0), bodyH);
+    } finally {
+        ctx.restore();
+    }
+}
+
 /**
  * Build a preview URL for a filename. Absolute paths (browsed from anywhere)
  * stream through the raw-file route; relative names use ComfyUI's /view.
@@ -1194,6 +1213,8 @@ app.registerExtension({
                 } else {
                     node._previewIconBounds = null;
                 }
+
+                drawBypassVeil(ctx, node);
 
                 return result;
             };

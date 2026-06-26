@@ -114,6 +114,13 @@ app.registerExtension({
                     sectionItems.get(section).push({ display, actualPath });
                 });
 
+                // If the filtered result only maps to one section, show a plain list
+                // (no section header like ----Other----).
+                if (sectionOrder.length === 1) {
+                    const onlyItems = sectionItems.get(sectionOrder[0]) || [];
+                    return onlyItems.map((item) => item.display);
+                }
+
                 sectionOrder.forEach((section) => {
                     const items = sectionItems.get(section) || [];
                     if (items.length === 0) return;
