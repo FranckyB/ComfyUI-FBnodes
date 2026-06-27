@@ -16,24 +16,146 @@ let previewImagesDict = {};
 // Animation intervals for each node
 let animateIntervals = {};
 
+// Avoid log spam if lookup throws in a hot path.
+let nodeLookupWarned = false;
+
 // Text decoder for binary messages
 const textDecoder = new TextDecoder();
 
 /**
  * Get a node by ID, handling subgraphs
  */
+function findNodeInGraphRecursive(graph, id, visited = new Set()) {
+    if (!graph?.getNodeById) return null;
+    if (visited.has(graph)) return null;
+    visited.add(graph);
+
+    const idCandidates = [id];
+    const numericId = Number(id);
+    if (!Number.isNaN(numericId)) {
+        idCandidates.push(numericId);
+    }
+
+    for (const candidate of idCandidates) {
+        const direct = graph.getNodeById(candidate);
+        if (direct) return direct;
+    }
+
+    const subgraphs = graph.subgraphs;
+    if (subgraphs) {
+        const iterable =
+            typeof subgraphs.values === "function"
+                ? subgraphs.values()
+                : Array.isArray(subgraphs)
+                    ? subgraphs
+                    : Object.values(subgraphs);
+
+        for (const subgraph of iterable) {
+            const found = findNodeInGraphRecursive(subgraph, id, visited);
+            if (found) return found;
+        }
+    }
+
+    return null;
+}
+
+function resolveCompositeNodeId(rootGraph, compositeId) {
+    if (!rootGraph?.getNodeById || !String(compositeId).includes(':')) return null;
+
+    const parts = String(compositeId).split(':').filter(Boolean);
+    if (parts.length === 0) return null;
+
+    let currentGraph = rootGraph;
+    for (let i = 0; i < parts.length; i++) {
+        const part = parts[i];
+        const node = currentGraph.getNodeById(part) || currentGraph.getNodeById(Number(part));
+        if (!node) return null;
+        if (i === parts.length - 1) {
+            return node;
+        }
+        currentGraph = node.subgraph || node.subGraph;
+        if (!currentGraph) return null;
+    }
+
+    return null;
+}
+
 function getNodeById(id) {
-    // Try main graph first
-    let node = app.graph.getNodeById(id);
-    if (node) return node;
-    
-    // Try subgraphs if available
-    if (app.graph.subgraphs) {
-        for (const subgraph of app.graph.subgraphs.values()) {
-            node = subgraph.getNodeById(id);
+    try {
+    const rawCandidates = [
+        app.canvas?.graph,
+        app.canvas?.graph?.rootGraph,
+        app.graph,
+        app.graph?.rootGraph,
+    ].filter(Boolean);
+
+    const graphCandidates = [];
+    const seenGraphs = new Set();
+    for (const graph of rawCandidates) {
+        if (!seenGraphs.has(graph)) {
+            seenGraphs.add(graph);
+            graphCandidates.push(graph);
+        }
+    }
+
+    for (const graph of graphCandidates) {
+        const node = findNodeInGraphRecursive(graph, id, new Set());
+        if (node) return node;
+    }
+
+    // Some nested workflows report ids like parent:child:node. Resolve by path first.
+    for (const graph of graphCandidates) {
+        const node = resolveCompositeNodeId(graph, id);
+        if (node) return node;
+    }
+
+    // Final fallback for composite IDs: search by terminal node id across all nested graphs.
+    const idParts = String(id).split(':').filter(Boolean);
+    if (idParts.length > 1) {
+        const leafId = idParts[idParts.length - 1];
+        for (const graph of graphCandidates) {
+            const node = findNodeInGraphRecursive(graph, leafId, new Set());
             if (node) return node;
         }
     }
+
+    } catch (err) {
+        if (!nodeLookupWarned) {
+            nodeLookupWarned = true;
+            console.warn("[FBnodes] Latent preview node lookup fallback:", err);
+        }
+    }
+
+    // Safety fallback matching prior behavior.
+    let node = app.graph?.getNodeById?.(id);
+    if (!node) {
+        const n = Number(id);
+        if (!Number.isNaN(n)) {
+            node = app.graph?.getNodeById?.(n);
+        }
+    }
+    if (node) return node;
+
+    const subgraphs = app.graph?.subgraphs;
+    if (subgraphs) {
+        const iterable =
+            typeof subgraphs.values === "function"
+                ? subgraphs.values()
+                : Array.isArray(subgraphs)
+                    ? subgraphs
+                    : Object.values(subgraphs);
+        for (const subgraph of iterable) {
+            node = subgraph?.getNodeById?.(id);
+            if (!node) {
+                const n = Number(id);
+                if (!Number.isNaN(n)) {
+                    node = subgraph?.getNodeById?.(n);
+                }
+            }
+            if (node) return node;
+        }
+    }
+
     return null;
 }
 
