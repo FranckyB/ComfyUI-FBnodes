@@ -122,7 +122,7 @@ function getCollapsibleWidgets(node) {
 function updateControlsToggleLabel(node) {
     const toggle = node.widgets?.find((w) => isControlsToggleWidget(w));
     if (!toggle) return;
-    toggle.name = getControlsExpanded(node) ? "▼ Controls" : "▶ Controls";
+    toggle.name = getControlsExpanded(node) ? "▲ Controls" : "▶ Controls";
 }
 
 function setWidgetCollapsed(widget, collapsed) {
