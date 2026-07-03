@@ -1,6 +1,9 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 
+const CONTROLS_TOGGLE_WIDGET_KEY = "__fb_save_video_controls_toggle";
+const CONTROLS_EXPANDED_PROP = "_saveVideoControlsExpanded";
+
 function firstValue(value) {
     if (Array.isArray(value)) return value[0];
     return value;
@@ -95,6 +98,83 @@ function getPreviewContainer(node) {
     return node.videoContainer
         || node.widgets?.find((w) => w.name === "video-preview")?.element
         || null;
+}
+
+function isControlsToggleWidget(widget) {
+    return !!widget?._fbSaveVideoControlsToggle || widget?.name === CONTROLS_TOGGLE_WIDGET_KEY;
+}
+
+function isPreviewWidget(widget) {
+    return widget?.name === "video-preview";
+}
+
+function getControlsExpanded(node) {
+    if (typeof node.properties?.[CONTROLS_EXPANDED_PROP] !== "undefined") {
+        return !!node.properties[CONTROLS_EXPANDED_PROP];
+    }
+    return false;
+}
+
+function getCollapsibleWidgets(node) {
+    return (node.widgets || []).filter((widget) => !isControlsToggleWidget(widget) && !isPreviewWidget(widget));
+}
+
+function updateControlsToggleLabel(node) {
+    const toggle = node.widgets?.find((w) => isControlsToggleWidget(w));
+    if (!toggle) return;
+    toggle.name = getControlsExpanded(node) ? "▼ Controls" : "▶ Controls";
+}
+
+function setWidgetCollapsed(widget, collapsed) {
+    if (!widget) return;
+    widget.hidden = !!collapsed;
+    if (widget.inputEl) widget.inputEl.style.display = collapsed ? "none" : "";
+}
+
+function applyControlsCollapsedState(node) {
+    const collapsed = !getControlsExpanded(node);
+    for (const widget of getCollapsibleWidgets(node)) {
+        setWidgetCollapsed(widget, collapsed);
+    }
+    updateControlsToggleLabel(node);
+
+    // Recompute node height after widget visibility changes so controls are not clipped.
+    try {
+        const nextH = node.computeSize?.()[1];
+        if (Number.isFinite(nextH)) {
+            node.setSize?.([node.size?.[0] || 320, nextH]);
+        }
+    } catch {
+        // Ignore size recompute failures and still refresh canvas.
+    }
+
+    node.setDirtyCanvas?.(true, true);
+}
+
+function ensureControlsToggleWidget(node) {
+    if (!node.properties) node.properties = {};
+
+    let toggle = node.widgets?.find((w) => isControlsToggleWidget(w));
+    if (!toggle) {
+        toggle = node.addWidget("button", "▶ Controls", null, () => {
+            node.properties[CONTROLS_EXPANDED_PROP] = !getControlsExpanded(node);
+            applyControlsCollapsedState(node);
+            ensureMinWarningDisplaySize(node);
+            syncWarningOverlay(node);
+        }, {
+            serialize: false,
+        });
+
+        toggle.name = CONTROLS_TOGGLE_WIDGET_KEY;
+        toggle.serialize = false;
+        toggle._fbSaveVideoControlsToggle = true;
+    }
+
+    if (typeof node.properties[CONTROLS_EXPANDED_PROP] === "undefined") {
+        node.properties[CONTROLS_EXPANDED_PROP] = false;
+    }
+
+    applyControlsCollapsedState(node);
 }
 
 function applyWarningOverlay(node) {
@@ -231,6 +311,7 @@ app.registerExtension({
             node._saveVideoHoverPlayIcon = false;
             node._saveVideoPlayIconBounds = null;
 
+            ensureControlsToggleWidget(node);
             updateDisplayState(node);
             ensureMinWarningDisplaySize(node);
             syncWarningOverlay(node);
@@ -277,6 +358,7 @@ app.registerExtension({
         const onConfigure = nodeType.prototype.onConfigure;
         nodeType.prototype.onConfigure = function () {
             const result = onConfigure?.apply(this, arguments);
+            ensureControlsToggleWidget(this);
             updateDisplayState(this);
             ensureMinWarningDisplaySize(this);
             syncWarningOverlay(this);
