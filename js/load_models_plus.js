@@ -1,6 +1,6 @@
 import { app } from "../../scripts/app.js";
 
-const TARGET_NODE_NAMES = new Set(["LoadCheckpointPlus", "LoadDiffusionModelPlus"]);
+const TARGET_NODE_NAMES = new Set(["LoadCheckpointPlus", "LoadDiffusionModelPlus", "LoadLoraPlus"]);
 
 function getSchemaModelWidgetInfo(nodeData) {
     const required = nodeData?.input?.required || {};
@@ -9,6 +9,9 @@ function getSchemaModelWidgetInfo(nodeData) {
     }
     if (Array.isArray(required?.unet_name?.[0])) {
         return { widgetName: "unet_name", values: [...required.unet_name[0]] };
+    }
+    if (Array.isArray(required?.lora_name?.[0])) {
+        return { widgetName: "lora_name", values: [...required.lora_name[0]] };
     }
     return { widgetName: null, values: [] };
 }
@@ -27,7 +30,8 @@ app.registerExtension({
             const filterWidget = this.widgets?.find((w) => w?.name === "filter");
             const modelWidget = this.widgets?.find((w) => w?.name === schemaInfo.widgetName)
                 || this.widgets?.find((w) => w?.name === "ckpt_name")
-                || this.widgets?.find((w) => w?.name === "unet_name");
+                || this.widgets?.find((w) => w?.name === "unet_name")
+                || this.widgets?.find((w) => w?.name === "lora_name");
 
             if (!filterWidget || !modelWidget) return r;
 
@@ -45,7 +49,9 @@ app.registerExtension({
             const stripKnownExtension = (name) => name.replace(/\.(safetensors|ckpt|pt|bin|pth)$/i, "");
 
             const splitTerms = (raw) => (raw || "")
-                .split(",")
+                .toLowerCase()
+                .replace(/\band\b/g, " ")
+                .split(/[\s,]+/)
                 .map((t) => t.trim().toLowerCase())
                 .filter((t) => t.length > 0);
 

@@ -28,7 +28,7 @@ class LoadCheckpointPlus:
                     {
                         "default": "",
                         "multiline": False,
-                        "tooltip": "Filter checkpoints by comma-separated terms in name/path (e.g., 'sdxl, anime')",
+                        "tooltip": "Filter checkpoints by multiple terms in name/path (AND match; use spaces/commas, e.g., 'sdxl anime')",
                     },
                 ),
                 "ckpt_name": (
@@ -77,7 +77,7 @@ class LoadDiffusionModelPlus:
                     {
                         "default": "",
                         "multiline": False,
-                        "tooltip": "Filter diffusion models by comma-separated terms in name/path (e.g., 'flux, fp8')",
+                        "tooltip": "Filter diffusion models by multiple terms in name/path (AND match; use spaces/commas, e.g., 'flux fp8')",
                     },
                 ),
                 "unet_name": (
@@ -106,12 +106,114 @@ class LoadDiffusionModelPlus:
         return (model,)
 
 
+class LoadLoraPlus:
+    """Load/apply a LoRA with interactive frontend filtering and output its path."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        loras = _get_model_list("loras")
+        default_lora = loras[0] if loras else ""
+
+        return {
+            "required": {
+                "filter": (
+                    "STRING",
+                    {
+                        "default": "",
+                        "multiline": False,
+                        "tooltip": "Filter LoRAs by multiple terms in name/path (AND match; use spaces/commas, e.g., 'ltx turbo')",
+                    },
+                ),
+                "lora_name": (
+                    loras if loras else ["No LoRAs found"],
+                    {
+                        "default": default_lora,
+                        "tooltip": "Select LoRA (filtered by search text above)",
+                    },
+                ),
+                "strength_model": (
+                    "FLOAT",
+                    {
+                        "default": 1.0,
+                        "min": -100.0,
+                        "max": 100.0,
+                        "step": 0.01,
+                        "tooltip": "Strength applied to MODEL",
+                    },
+                ),
+                "strength_clip": (
+                    "FLOAT",
+                    {
+                        "default": 1.0,
+                        "min": -100.0,
+                        "max": 100.0,
+                        "step": 0.01,
+                        "tooltip": "Strength applied to CLIP",
+                    },
+                ),
+            },
+            "optional": {
+                "model": ("MODEL",),
+                "clip": ("CLIP",),
+            },
+        }
+
+    RETURN_TYPES = ("MODEL", "CLIP", "COMBO")
+    RETURN_NAMES = ("model", "clip", "lora_name")
+    FUNCTION = "load_lora"
+    CATEGORY = "FBnodes"
+    DESCRIPTION = "Load/apply LoRA with grouped text filter; outputs selected lora_name for downstream Load LoRA nodes"
+
+    def _resolve_lora_file(self, lora_name: str) -> str:
+        """Resolve selected LoRA value to a valid file path."""
+        candidate = str(lora_name or "").strip()
+        if not candidate:
+            raise ValueError("LoRA name/path is empty")
+
+        # Support direct absolute/relative file paths when provided.
+        if ("/" in candidate or "\\" in candidate) and folder_paths.exists_annotated_filepath(candidate):
+            return folder_paths.get_annotated_filepath(candidate)
+
+        return folder_paths.get_full_path_or_raise("loras", candidate)
+
+    def load_lora(
+        self,
+        filter: str,
+        lora_name: str,
+        strength_model: float,
+        strength_clip: float,
+        model=None,
+        clip=None,
+    ):
+        """Apply selected LoRA when model exists; always return selected lora_name."""
+        # Keep filter argument for UI parity; runtime behavior depends on selected lora_name.
+        _ = filter
+
+        # Selector-only mode: no model/clip connected, still output selected lora name/path.
+        if model is None and clip is None:
+            return (model, clip, lora_name)
+
+        if strength_model == 0 and strength_clip == 0:
+            return (model, clip, lora_name)
+
+        lora_path = self._resolve_lora_file(lora_name)
+
+        import comfy.sd
+        import comfy.utils
+
+        lora = comfy.utils.load_torch_file(lora_path, safe_load=True)
+        model_out, clip_out = comfy.sd.load_lora_for_models(model, clip, lora, strength_model, strength_clip)
+        return (model_out, clip_out, lora_name)
+
+
 NODE_CLASS_MAPPINGS = {
     "LoadCheckpointPlus": LoadCheckpointPlus,
     "LoadDiffusionModelPlus": LoadDiffusionModelPlus,
+    "LoadLoraPlus": LoadLoraPlus,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "LoadCheckpointPlus": "Load Checkpoint+",
     "LoadDiffusionModelPlus": "Load Diffusion Model+",
+    "LoadLoraPlus": "Load LoRA+",
 }
