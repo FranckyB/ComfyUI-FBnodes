@@ -107,7 +107,7 @@ class LoadDiffusionModelPlus:
 
 
 class LoadLoraPlus:
-    """Load/apply a LoRA with interactive frontend filtering and output its path."""
+    """Load/apply a LoRA to MODEL with interactive frontend filtering."""
 
     @classmethod
     def INPUT_TYPES(cls):
@@ -141,28 +141,17 @@ class LoadLoraPlus:
                         "tooltip": "Strength applied to MODEL",
                     },
                 ),
-                "strength_clip": (
-                    "FLOAT",
-                    {
-                        "default": 1.0,
-                        "min": -100.0,
-                        "max": 100.0,
-                        "step": 0.01,
-                        "tooltip": "Strength applied to CLIP",
-                    },
-                ),
             },
             "optional": {
                 "model": ("MODEL",),
-                "clip": ("CLIP",),
             },
         }
 
-    RETURN_TYPES = ("MODEL", "CLIP", "COMBO")
-    RETURN_NAMES = ("model", "clip", "lora_name")
+    RETURN_TYPES = ("MODEL", "COMBO")
+    RETURN_NAMES = ("model", "lora_name")
     FUNCTION = "load_lora"
     CATEGORY = "FBnodes"
-    DESCRIPTION = "Load/apply LoRA with grouped text filter; outputs selected lora_name for downstream Load LoRA nodes"
+    DESCRIPTION = "Load/apply LoRA to MODEL with grouped text filter; outputs selected lora_name for downstream Load LoRA nodes"
 
     def _resolve_lora_file(self, lora_name: str) -> str:
         """Resolve selected LoRA value to a valid file path."""
@@ -181,20 +170,18 @@ class LoadLoraPlus:
         filter: str,
         lora_name: str,
         strength_model: float,
-        strength_clip: float,
         model=None,
-        clip=None,
     ):
-        """Apply selected LoRA when model exists; always return selected lora_name."""
+        """Apply selected LoRA to MODEL and return model plus selected lora_name."""
         # Keep filter argument for UI parity; runtime behavior depends on selected lora_name.
         _ = filter
 
-        # Selector-only mode: no model/clip connected, still output selected lora name/path.
-        if model is None and clip is None:
-            return (model, clip, lora_name)
+        # Selector-only mode: no model connected, still output selected lora_name.
+        if model is None:
+            return (model, lora_name)
 
-        if strength_model == 0 and strength_clip == 0:
-            return (model, clip, lora_name)
+        if strength_model == 0:
+            return (model, lora_name)
 
         lora_path = self._resolve_lora_file(lora_name)
 
@@ -202,8 +189,8 @@ class LoadLoraPlus:
         import comfy.utils
 
         lora = comfy.utils.load_torch_file(lora_path, safe_load=True)
-        model_out, clip_out = comfy.sd.load_lora_for_models(model, clip, lora, strength_model, strength_clip)
-        return (model_out, clip_out, lora_name)
+        model_out, _ = comfy.sd.load_lora_for_models(model, None, lora, strength_model, 0)
+        return (model_out, lora_name)
 
 
 NODE_CLASS_MAPPINGS = {
