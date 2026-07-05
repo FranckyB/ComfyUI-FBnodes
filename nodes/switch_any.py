@@ -102,8 +102,6 @@ class SwitchAnyBool:
         return {
             "required": {
                 "condition": ("BOOLEAN", {"default": True}),
-            },
-            "optional": {
                 "on_true": ("*", {"lazy": True}),
                 "on_false": ("*", {"lazy": True}),
             },
@@ -120,16 +118,18 @@ class SwitchAnyBool:
     def VALIDATE_INPUTS(cls, **kwargs):
         return True
 
-    def check_lazy_status(self, condition, **kwargs):
-        key = "on_true" if condition else "on_false"
-        # Only request if actually connected
-        if key not in kwargs:
-            return []
-        return [key]
+    def check_lazy_status(self, condition, on_true=None, on_false=None):
+        condition = _coerce_bool(condition)
+        if condition and on_true is None:
+            return ["on_true"]
+        if not condition and on_false is None:
+            return ["on_false"]
+        return []
 
-    def switch(self, condition, **kwargs):
+    def switch(self, condition, on_true=None, on_false=None):
+        condition = _coerce_bool(condition)
         # Explicitly force the inactive branch to None.
-        on_true = kwargs.get("on_true") if condition else None
-        on_false = kwargs.get("on_false") if not condition else None
+        on_true = on_true if condition else None
+        on_false = on_false if not condition else None
         value = on_true if condition else on_false
         return (value,)

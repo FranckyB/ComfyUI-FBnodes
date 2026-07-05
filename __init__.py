@@ -87,7 +87,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "SaveVideoPlus": "Save Video+",
     "ShowTextPlus": "Show as Text",
     "SwitchAny": "Switch Any",
-    "SwitchAnyBool": "Switch Any (Boolean)",
+    "SwitchAnyBool": "Switch Any Bool",
     "VACEStitcher": "VACE Stitcher",
     "VACEStitcher_Options": "VACE Stitcher Options",
 }

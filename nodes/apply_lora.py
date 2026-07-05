@@ -27,16 +27,13 @@ class ApplyLoraPlus:
                 "lora_stack": ("*",),
                 "strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.01}),
             },
-            "optional": {
-                "clip_optional": ("CLIP",),
-            },
         }
 
-    RETURN_TYPES = ("MODEL", "CLIP")
-    RETURN_NAMES = ("model", "clip")
+    RETURN_TYPES = ("MODEL",)
+    RETURN_NAMES = ("model",)
     FUNCTION = "apply_stack"
     CATEGORY = "FBnodes"
-    DESCRIPTION = "Apply LoRAs to model/CLIP from either LORA_STACK or newline-separated STRING input, with a global strength multiplier."
+    DESCRIPTION = "Apply LoRAs to MODEL from either LORA_STACK or newline-separated STRING input, with a global strength multiplier."
 
     @staticmethod
     def _coerce_lora_stack(lora_stack):
@@ -67,21 +64,18 @@ class ApplyLoraPlus:
             return candidate, True
         return resolve_lora_path(candidate)
 
-    def apply_stack(self, model, lora_stack, strength=1.0, clip_optional=None):
-        clip = clip_optional
+    def apply_stack(self, model, lora_stack, strength=1.0):
         stack = self._coerce_lora_stack(lora_stack)
         if not stack:
-            return (model, clip)
+            return (model,)
 
         model_out = model
-        clip_out = clip
 
         for lora_name, model_strength, clip_strength in stack:
             scaled_model_strength = model_strength * strength
-            scaled_clip_strength = clip_strength * strength
 
             # Skip if no strength
-            if scaled_model_strength == 0 and scaled_clip_strength == 0:
+            if scaled_model_strength == 0:
                 continue
 
             # Resolve LoRA using direct path first, then fuzzy matching.
@@ -93,12 +87,12 @@ class ApplyLoraPlus:
             # Load the LoRA
             lora = comfy.utils.load_torch_file(lora_path, safe_load=True)
 
-            # Apply to model and clip
-            model_out, clip_out = comfy.sd.load_lora_for_models(
-                model_out, clip_out, lora, scaled_model_strength, scaled_clip_strength
+            # Apply to model only
+            model_out, _ = comfy.sd.load_lora_for_models(
+                model_out, None, lora, scaled_model_strength, 0
             )
 
-        return (model_out, clip_out)
+        return (model_out,)
 
 
 class ApplyLTXLoraPlus:
