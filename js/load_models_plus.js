@@ -92,10 +92,18 @@ app.registerExtension({
                 const sectionItems = new Map();
                 const sectionLocalCounts = new Map();
 
+                const toSectionLabel = (dirParts) => {
+                    if (!dirParts || dirParts.length === 0) {
+                        return "Other";
+                    }
+                    return dirParts.join(" - ");
+                };
+
                 actualPaths.forEach((actualPath) => {
                     const parts = actualPath.split(/[\\/]/);
                     const relParts = parts.slice(stripLevel);
-                    const section = relParts.length > 1 ? relParts[0] : "Other";
+                    const dirParts = relParts.length > 1 ? relParts.slice(0, -1) : [];
+                    const section = toSectionLabel(dirParts);
                     const fileName = relParts[relParts.length - 1] || actualPath;
                     const baseLabel = stripKnownExtension(fileName);
 

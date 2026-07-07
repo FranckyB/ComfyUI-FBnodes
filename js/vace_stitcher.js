@@ -6,6 +6,8 @@
 
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
+import { createFileBrowserModal } from "./file_browser.js";
+import { mediaFileUrl, getMediaRoots, classifySelection } from "./path_browser.js";
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -40,6 +42,10 @@ function showConfirm(title, message, confirmText = "Delete", confirmColor = "#c0
 let _currentSourceFolder = "output";
 let _currentSubfolder = "";
 
+function isAbsolutePath(value) {
+    return /^([a-zA-Z]:[\\/]|\\\\|\/)/.test(String(value || ""));
+}
+
 function isVideoFile(filename) {
     if (!filename) return false;
     const ext = filename.split(".").pop().toLowerCase();
@@ -47,6 +53,9 @@ function isVideoFile(filename) {
 }
 
 function getViewUrl(filename, sourceFolder) {
+    if (isAbsolutePath(filename)) {
+        return mediaFileUrl(filename);
+    }
     let base = filename;
     let subfolder = "";
     if (filename.includes("/")) {
@@ -311,6 +320,54 @@ function showThumbnailContextMenu(event, filename, previewElement) {
 // ── Multi-select file browser modal ──────────────────────────────────────────
 
 function openClipBrowserModal(sourceFolder, existingClips, onDone) {
+    // Use the shared Load+ file browser (browse anywhere, no input/output restriction).
+    void getMediaRoots().then((roots) => {
+        let initialPath = roots.input || roots.output || "";
+        if (existingClips.length > 0) {
+            const lastFile = existingClips[existingClips.length - 1]?.file || "";
+            if (isAbsolutePath(lastFile)) {
+                initialPath = lastFile.replace(/[\\/][^\\/]*$/, "");
+            }
+        }
+
+        createFileBrowserModal(
+            "",
+            () => {},
+            sourceFolder || "input",
+            {
+                enableNavigation: true,
+                initialPath,
+                navKind: "video",
+                allowedTypes: ["video"],
+                multiSelect: true,
+                onMultiSelect: (items) => {
+                    const out = [];
+                    for (const item of items || []) {
+                        const selected = item?.value || "";
+                        const meta = item?.meta || null;
+                        let value = selected;
+                        let resolvedSource = sourceFolder || "input";
+
+                        if (meta?.absPath) {
+                            const cls = classifySelection(meta.absPath, meta.roots || roots);
+                            value = cls?.value || meta.absPath;
+                            resolvedSource = cls?.sourceFolder || resolvedSource;
+                        }
+
+                        if (value && value !== "(none)") {
+                            out.push({ file: value, source: resolvedSource });
+                        }
+                    }
+
+                    if (out.length > 0) {
+                        onDone(out);
+                    }
+                },
+            }
+        );
+    });
+    return;
+
     _currentSourceFolder = sourceFolder || "input";
     // Return to the last directory the user added clips from
     _currentSubfolder = "";
@@ -714,12 +771,20 @@ app.registerExtension({
         nodeType.prototype.onNodeCreated = function () {
             const result = onNodeCreated?.apply(this, arguments);
             const node = this;
+            const MIN_NODE_WIDTH = 430;
 
             // ── locate widgets ──
             const clipListWidget = node.widgets?.find((w) => w.name === "clip_list");
             const sourceFolderWidget = node.widgets?.find((w) => w.name === "source_folder");
 
             if (!clipListWidget) return result;
+
+            // Keep source_folder for backward compatibility/serialization, but hide it from UI.
+            if (sourceFolderWidget) {
+                sourceFolderWidget.hidden = true;
+                sourceFolderWidget.computeSize = () => [0, -4];
+                if (sourceFolderWidget.inputEl) sourceFolderWidget.inputEl.style.display = "none";
+            }
 
             // Hide the raw JSON widget
             clipListWidget.type = "converted-widget";
@@ -773,9 +838,13 @@ app.registerExtension({
                 value: null,
                 callback: () => {
                     const sf = sourceFolderWidget?.value || "input";
-                    openClipBrowserModal(sf, clipEntries, (newFiles, sourceFolder) => {
-                        for (const f of newFiles) {
-                            clipEntries.push(cloneClipEntry({ file: f, enabled: true, source: sourceFolder }));
+                    openClipBrowserModal(sf, clipEntries, (newClips) => {
+                        for (const clip of newClips) {
+                            clipEntries.push(cloneClipEntry({
+                                file: clip.file,
+                                enabled: true,
+                                source: clip.source,
+                            }));
                         }
                         syncWidget();
                         rebuildClipListDisplay();
@@ -810,6 +879,15 @@ app.registerExtension({
             sectionHeader.appendChild(sectionTitle);
             sectionHeader.appendChild(clipCountLabel);
             sectionContainer.appendChild(sectionHeader);
+
+            const statusPanel = document.createElement("div");
+            statusPanel.style.cssText = `
+                margin:0;padding:7px 10px;border-radius:6px;
+                font-size:11px;line-height:1.35;border:1px solid rgba(66,153,225,0.35);
+                background:rgba(30,70,110,0.22);color:rgba(210,230,255,0.95);
+                white-space:pre-wrap;word-break:break-word;flex-shrink:0;display:none;
+            `;
+            statusPanel.textContent = "Processing...";
 
             // Scrollable clip list area
             const clipListContainer = document.createElement("div");
@@ -873,12 +951,18 @@ app.registerExtension({
             sectionFooter.appendChild(clearAllBtn);
             sectionContainer.appendChild(sectionFooter);
 
+            const statusInlineContainer = document.createElement("div");
+            statusInlineContainer.style.cssText = "padding:0 8px 6px 8px;flex-shrink:0;";
+            statusInlineContainer.appendChild(statusPanel);
+            sectionContainer.appendChild(statusInlineContainer);
+
             const sectionWidget = node.addDOMWidget(
                 "clip_list_section",
                 "customwidget",
                 sectionContainer,
                 { serialize: false, hideOnZoom: false }
             );
+            node._statusPanelHeight = 0;
 
             // Ensure the ComfyUI wrapper div also stretches to fill
             // (ComfyUI wraps DOM widgets in a div with overflow:hidden)
@@ -898,7 +982,7 @@ app.registerExtension({
                 const ROW_H = 30;
                 const HEADER_FOOTER = 78;
                 const visibleRows = Math.max(3, Math.min(10, clipEntries.length));
-                const h = HEADER_FOOTER + visibleRows * ROW_H;
+                const h = HEADER_FOOTER + visibleRows * ROW_H + Number(node._statusPanelHeight || 58);
                 return [width, h];
             };
 
@@ -977,6 +1061,147 @@ app.registerExtension({
             let _dragIdx = null;
             let _dragOverIdx = null;
             let _dragPlaceholder = null;
+            let _statusUpdateToken = 0;
+
+            function refreshStatusWidgetHeight() {
+                requestAnimationFrame(() => {
+                    if (statusPanel.style.display === "none") {
+                        if (Number(node._statusPanelHeight || 0) !== 0) {
+                            node._statusPanelHeight = 0;
+                            node.setDirtyCanvas(true, true);
+                        }
+                        return;
+                    }
+                    const measured = Math.max(50, Math.ceil(statusPanel.scrollHeight) + 12);
+                    if (measured !== Number(node._statusPanelHeight || 58)) {
+                        node._statusPanelHeight = measured;
+                        node.setDirtyCanvas(true, true);
+                    }
+                });
+            }
+
+            function hideStatusPanel() {
+                if (statusPanel.style.display !== "none") {
+                    statusPanel.style.display = "none";
+                    refreshStatusWidgetHeight();
+                }
+            }
+
+            function setStatusPanel(kind, message) {
+                const styles = {
+                    info: {
+                        border: "rgba(66,153,225,0.35)",
+                        bg: "rgba(30,70,110,0.22)",
+                        fg: "rgba(210,230,255,0.95)",
+                    },
+                    ok: {
+                        border: "rgba(72,187,120,0.45)",
+                        bg: "rgba(33,84,55,0.26)",
+                        fg: "rgba(214,244,223,0.96)",
+                    },
+                    warn: {
+                        border: "rgba(236,201,75,0.5)",
+                        bg: "rgba(110,90,28,0.28)",
+                        fg: "rgba(255,240,188,0.97)",
+                    },
+                    error: {
+                        border: "rgba(245,101,101,0.55)",
+                        bg: "rgba(110,38,38,0.3)",
+                        fg: "rgba(255,214,214,0.97)",
+                    },
+                };
+                const s = styles[kind] || styles.info;
+                statusPanel.style.borderColor = s.border;
+                statusPanel.style.background = s.bg;
+                statusPanel.style.color = s.fg;
+                statusPanel.textContent = message;
+                statusPanel.style.display = "block";
+                refreshStatusWidgetHeight();
+            }
+
+            async function updateClipStatusPanel() {
+                const enabledEntries = clipEntries.filter((e) => e?.enabled !== false);
+                if (enabledEntries.length === 0) {
+                    hideStatusPanel();
+                    return;
+                }
+
+                const token = ++_statusUpdateToken;
+                const source = sourceFolderWidget?.value || "input";
+                try {
+                    const resp = await fetch("/fbnodes/vace-clip-status", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ entries: clipEntries, source }),
+                    });
+                    if (token !== _statusUpdateToken) return;
+                    if (!resp.ok) {
+                        setStatusPanel("error", "Status check failed. Clip sizing info unavailable.");
+                        return;
+                    }
+
+                    const data = await resp.json();
+                    const missing = Number(data?.missing_count || 0);
+                    const changed = Number(data?.changed_count || 0);
+                    const total = Number(data?.total || 0);
+                    const hasMismatch = Boolean(data?.has_size_mismatch);
+
+                    if (missing > 0) {
+                        setStatusPanel(
+                            "error",
+                            `Missing/invalid clips: ${missing}. Please verify clip paths before processing.`
+                        );
+                        return;
+                    }
+
+                    if (hasMismatch) {
+                        setStatusPanel(
+                            "error",
+                            "WARNING: Size mismatch detected!\nAll clips must resolve to the same size."
+                        );
+                        return;
+                    }
+
+                    if (changed > 0) {
+                        const details = (Array.isArray(data?.details) ? data.details : []).filter((d) => d?.changed);
+                        let clipLine = "";
+                        if (details.length > 0) {
+                            const raw0 = `${details[0].width}x${details[0].height}`;
+                            const sameRaw = details.every((d) => `${d.width}x${d.height}` === raw0);
+                            const norm0 = `${details[0].normalized_width}x${details[0].normalized_height}`;
+                            clipLine = sameRaw
+                                ? `\nClips: ${raw0} -> ${norm0}`
+                                : `\nClips: mixed sizes -> ${norm0}`;
+                        }
+                        setStatusPanel(
+                            "warn",
+                            `WARNING: ${changed}/${total} clip(s) will be resized for VACE compatibility.` +
+                            `\nPreferred size: both width and height divisible by 32.` +
+                            clipLine
+                        );
+                        return;
+                    }
+
+                    hideStatusPanel();
+                } catch (_) {
+                    if (token !== _statusUpdateToken) return;
+                    setStatusPanel("error", "Status check failed. Clip sizing info unavailable.");
+                }
+            }
+
+            function enforceMinNodeWidth() {
+                if (Array.isArray(node.size) && node.size[0] < MIN_NODE_WIDTH) {
+                    node.size[0] = MIN_NODE_WIDTH;
+                }
+            }
+
+            const onResize = node.onResize;
+            node.onResize = function () {
+                const out = onResize ? onResize.apply(this, arguments) : undefined;
+                enforceMinNodeWidth();
+                refreshStatusWidgetHeight();
+                return out;
+            };
 
             function rebuildClipListDisplay() {
                 clipListContainer.innerHTML = "";
@@ -989,6 +1214,7 @@ app.registerExtension({
                     empty.textContent = "No clips added. Use Browse to add clips.";
                     empty.style.cssText = "color:#888;font-size:11px;text-align:center;padding:8px;";
                     clipListContainer.appendChild(empty);
+                    hideStatusPanel();
                     node.setDirtyCanvas(true, true);
                     return;
                 }
@@ -1201,6 +1427,7 @@ app.registerExtension({
 
                 // Update node height
                 node.setDirtyCanvas(true, true);
+                updateClipStatusPanel();
             }
 
             // ── Right-click context menu for clips ──
@@ -1333,11 +1560,14 @@ app.registerExtension({
                 } catch (_) {
                     clipEntries = [];
                 }
+                enforceMinNodeWidth();
                 rebuildClipListDisplay();
+                setTimeout(updateClipStatusPanel, 120);
                 return res;
             };
 
             // Initial render
+            enforceMinNodeWidth();
             setTimeout(() => rebuildClipListDisplay(), 50);
 
             return result;

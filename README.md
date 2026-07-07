@@ -110,12 +110,12 @@ You need **both** the high-noise and low-noise Wan 2.2 VACE models. Choose one f
 or **GGUF** (from QuantStack):
 - [`Wan2.2-VACE-Fun-A14B-*.gguf`](https://huggingface.co/QuantStack/Wan2.2-VACE-Fun-A14B-GGUF/tree/main) (high + low noise variants)
 
-Place models in `/models/diffusion_models/` or '/models/unet' if GGUF
+Place models in `/models/diffusion_models/` or `/models/unet` if GGUF
 
 #### Tips
 
 - Use a Wan 2.2 i2v‑distilled LoRA to lower the required step count.
-- **Lossless clips**: Save your source clips with **Save Video+** using the "Save Latent" option. VACE Stitcher will automatically detect and use the `.latent` file for lossless quality — no video decode needed. A magenta dot in the clip list indicates which clips have a latent available. For now only wan latents are supported.
+- **Lossless clips**: Save your source clips with **Save Video+** using the "Save Latent" option. VACE Stitcher will automatically detect and use the `.latent` file for lossless quality — no video decode needed. A magenta dot in the clip list indicates which clips have a latent available. For now only Wan latents are supported.
 - **First run** generates and caches all transitions. Subsequent runs skip cached pairs.
 - **Delete Transitions** clears the cache so you can regenerate with different settings.
 - Without an **Options** node connected, the seed is random each run — just delete transitions and re-queue for a new result.
@@ -131,7 +131,7 @@ Load a `.latent` file saved by Save Video+. Companion node for video+latent work
 Memory-efficient video inspector/extractor for VIDEO inputs.
 
 - Metadata-first by default (does not decode frames/audio/latent unless those outputs are connected)
-- Internal chunked frame decoding uses a fixed chunk size of 128 for to reduce memory needs.
+- Internal chunked frame decoding uses a fixed chunk size of 128 to reduce memory needs.
 - Outputs: `images`, `audio`, `fps`, `filepath`, `latent`, `width`, `height`, `frame_count`, `duration`
 - Automatically loads matching `.latent` file if one exists beside the video
 
@@ -210,7 +210,7 @@ Search for "ComfyUI-FBnodes" in ComfyUI Manager.
 ### Manual
 ```bash
 cd ComfyUI/custom_nodes
-git clone https://github.com/francoisBeaudworker/ComfyUI-FBnodes.git
+git clone https://github.com/FranckyB/ComfyUI-FBnodes.git
 pip install -r ComfyUI-FBnodes/requirements.txt
 ```
 
@@ -222,8 +222,12 @@ GPL-3.0
 
 ## Changelog
 
+### version 1.4.0
+- **Load Model+**: Added Load Checkpoint, Diffusion model and LoRA with filtering system.  Allowing, for example, to display only SDXL models.
+- **Bug Fixes**: Multiple big fixes added over time.  Including an issue with VACE Stitcher that would fail if clip size wasn't divisible by 32
+
 ### version 1.3.1
-- **Lora List+**: Utility node for testing Loras, allows adding loras to a list from anywhere on disk. Used with Outputlists-Combiner
+- **LoRA List+**: Utility node for testing LoRAs, allows adding LoRAs to a list from anywhere on disk. Used with Outputlists-Combiner
 
 ### version 1.3.0
 - **Crop Image+**: Added a new interactive crop node.
@@ -233,11 +237,11 @@ GPL-3.0
 - **Show as Text**  Added a simple Show Text node, that unlike Preview  as Text, is saved with Workflow and is maintained when switching tabs.
 
 ### version 1.1.12
-- **Load Audio+**: Added a load audio node, similar to other loaders.  As the ability to trim the In and Out point.
+- **Load Audio+**: Added a load audio node, similar to other loaders.  Has the ability to trim the In and Out point.
 - **Polish**:  Tweaked the UIs of Load Image+ and Load Video+, matching tweaks that were done to Load Audio+
 
 ### version 1.1.11
-- **Apply Lora+**: Added a simple "apply Lora Stack" node, with a strength multiplier
+- **Apply LoRA+**: Added a simple "apply LoRA Stack" node, with a strength multiplier
 
 ### version 1.1.10
 - **Load Image+ Mask Support**: Added MASK output with alpha channel extraction from images
@@ -246,11 +250,11 @@ GPL-3.0
 
 ### version 1.1.9
 - **Renamed nodes**: cleaned up internal node IDs (`SaveVideoH26x` → `SaveVideoPlus`, `PromptApplyLora` → `ApplyLoraPlus`, `BetterImageLoader` → `LoadImagePlus`). Existing workflows will use "Legacy" versions for backward compatibility.
-- **Fix Save Video+ display issues**"  Fixed issues found in Load Video+.
+- **Fix Save Video+ display issues**: Fixed issues found in Load Video+.
 
 ### version 1.1.8
 - **Speed Improvement**: Thumbnail generation now uses server-side PyAV instead of browser-based video decoding — substantially faster, especially with many clips.
-- **Improved Handling of H265 Clip**
+- **Improved Handling of H265 Clips**
 - **Renamed nodes**: Save Video H264/H265 → **Save Video+**, Better Image Loader → **Load Image+**. Existing workflows are unaffected.
 - **New node**: Added **Load Video+** — video loader with file browser, preview, and drag-drop. Outputs VIDEO for Get Video Components+.
 
@@ -272,4 +276,4 @@ GPL-3.0
 
 ### version 1.0.0
 - Initial release
-- Transfered miscellaneous from [ComfyUI-Prompt-Manager](https://github.com/FranckyB/ComfyUI-Prompt-Manager) to keep it more focused.
+- Transferred miscellaneous from [ComfyUI-Prompt-Manager](https://github.com/FranckyB/ComfyUI-Prompt-Manager) to keep it more focused.

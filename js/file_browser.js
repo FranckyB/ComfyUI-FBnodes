@@ -466,7 +466,7 @@ function setThumbnailSelected(item, selected) {
     if (isDetail) {
         item.style.background = selected ? 'rgba(50, 112, 163, 0.28)' : 'transparent';
     } else {
-        item.style.borderColor = selected ? 'rgba(66, 153, 225, 0.9)' : 'rgba(226, 232, 240, 0.2)';
+        item.style.borderColor = selected ? 'rgba(255, 255, 255, 0.95)' : 'rgba(226, 232, 240, 0.2)';
         item.style.background = selected ? 'rgba(50, 112, 163, 0.28)' : 'rgba(45, 55, 72, 0.7)';
         item.style.transform = 'translateY(0)';
     }
@@ -727,6 +727,10 @@ async function toggleAudioPreview(filename, item) {
 
 export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder, options) {
     const opts = options || {};
+    const multiSelect = opts.multiSelect === true;
+    const initialSelectedFiles = Array.isArray(opts.selectedFiles) ? opts.selectedFiles : [];
+    const selectedFilesSet = new Set(initialSelectedFiles.filter(Boolean).map((v) => String(v)));
+    const selectedMetaByFile = new Map();
     const joinBrowserPath = (base, leaf) => {
         if (!base || !leaf) return leaf || base || "";
         const cleanBase = String(base).replace(/[\\/]+$/, "");
@@ -1024,6 +1028,45 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder, 
     `;
     applyViewLayout(gridContainer);
 
+    const updateMultiSelectUI = () => {
+        if (!multiSelect || !modal._selectedCountLabel || !modal._addSelectedBtn) return;
+        const n = selectedFilesSet.size;
+        modal._selectedCountLabel.textContent = `${n} selected`;
+        modal._addSelectedBtn.disabled = n === 0;
+        modal._addSelectedBtn.style.opacity = n === 0 ? '0.45' : '1';
+        modal._addSelectedBtn.style.cursor = n === 0 ? 'default' : 'pointer';
+        modal._addSelectedBtn.textContent = n > 0
+            ? `Add ${n} Clip${n === 1 ? '' : 's'}`
+            : 'Add Selected';
+    };
+
+    const getSelectionMeta = (filename) => {
+        if (currentNavMode !== 'abs') return null;
+        const idx = String(filename || '').replace(/\\/g, '/').lastIndexOf('/');
+        const dir = idx > 0 ? String(filename).substring(0, idx) : (currentAbsDir || '');
+        return { absPath: filename, dir, roots: { ...currentAbsRoots } };
+    };
+
+    const toggleSelectedFile = (filename, item) => {
+        const key = String(filename || '');
+        if (!key) return;
+        if (selectedFilesSet.has(key)) {
+            selectedFilesSet.delete(key);
+            selectedMetaByFile.delete(key);
+            if (item) setThumbnailSelected(item, false);
+        } else {
+            selectedFilesSet.add(key);
+            selectedMetaByFile.set(key, getSelectionMeta(key));
+            if (item) setThumbnailSelected(item, true);
+        }
+        updateMultiSelectUI();
+    };
+
+    // Expose multi-select state to global loader helpers.
+    overlay._multiSelect = multiSelect;
+    overlay._isFileSelected = (filename) => selectedFilesSet.has(String(filename || ''));
+    overlay._toggleSelectedFile = (filename, item) => toggleSelectedFile(filename, item);
+
     // Create loading indicator
     const loading = document.createElement('div');
     loading.style.cssText = `
@@ -1038,6 +1081,53 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder, 
     modal.appendChild(header);
     modal.appendChild(filterBar);
     modal.appendChild(gridContainer);
+
+    if (multiSelect) {
+        const footer = document.createElement('div');
+        footer.style.cssText = `
+            border-top:1px solid rgba(255,255,255,0.12);
+            padding:10px 20px;display:flex;justify-content:space-between;align-items:center;gap:12px;
+        `;
+
+        const count = document.createElement('div');
+        count.style.cssText = 'font-size:12px;color:#9fb3c8;';
+
+        const actions = document.createElement('div');
+        actions.style.cssText = 'display:flex;gap:10px;align-items:center;';
+
+        const cancelBtn = document.createElement('button');
+        cancelBtn.textContent = 'Cancel';
+        cancelBtn.style.cssText = 'background:#3c4654;border:1px solid rgba(255,255,255,0.2);color:#dbe6f2;border-radius:6px;padding:7px 12px;cursor:pointer;';
+        cancelBtn.onclick = () => closeBrowserModal(overlay);
+
+        const addBtn = document.createElement('button');
+        addBtn.textContent = 'Add Selected';
+        addBtn.style.cssText = 'background:#2f6db3;border:1px solid rgba(117,173,235,0.55);color:#eef6ff;border-radius:6px;padding:7px 14px;cursor:pointer;';
+        addBtn.onclick = () => {
+            const values = Array.from(selectedFilesSet.values());
+            const items = values.map((value) => {
+                const meta = selectedMetaByFile.get(value) || getSelectionMeta(value);
+                return { value, meta };
+            });
+            if (typeof opts.onMultiSelect === 'function') {
+                opts.onMultiSelect(items);
+            } else {
+                onFileSelect(values, { multi: true, items });
+            }
+            closeBrowserModal(overlay);
+        };
+
+        actions.appendChild(cancelBtn);
+        actions.appendChild(addBtn);
+        footer.appendChild(count);
+        footer.appendChild(actions);
+        modal.appendChild(footer);
+
+        modal._selectedCountLabel = count;
+        modal._addSelectedBtn = addBtn;
+        updateMultiSelectUI();
+    }
+
     overlay.appendChild(modal);
 
     // Prevent right-click context menu everywhere in the browser
@@ -1078,7 +1168,11 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder, 
         if (!isEditing && e.key === 'Enter') {
             e.preventDefault();
             e.stopPropagation();
-            openSelectedThumbnail(gridContainer);
+            if (multiSelect && modal._addSelectedBtn && !modal._addSelectedBtn.disabled) {
+                modal._addSelectedBtn.click();
+            } else {
+                openSelectedThumbnail(gridContainer);
+            }
             return;
         }
 
@@ -1243,7 +1337,15 @@ async function loadFileThumbnails(container, currentFile, onFileSelect, overlay,
 
         // Create thumbnail for each file
         sortedFiles.forEach(fileEntry => {
-            const item = createThumbnailItem(fileEntry, currentFile, onFileSelect, overlay);
+            const item = createThumbnailItem(fileEntry, currentFile, onFileSelect, overlay, {
+                multiSelect: overlay?._multiSelect === true,
+                isFileSelected: typeof overlay?._isFileSelected === 'function'
+                    ? overlay._isFileSelected
+                    : (filename) => pathsEqual(filename, currentFile),
+                toggleFile: typeof overlay?._toggleSelectedFile === 'function'
+                    ? overlay._toggleSelectedFile
+                    : null,
+            });
             container.appendChild(item);
         });
 
@@ -1323,7 +1425,15 @@ async function loadFileThumbnailsAbs(container, currentFile, onFileSelect, overl
         const files = (data.files || []).map(normalizeFileEntry).sort(compareFilesForDetailSort);
         let selectedItem = null;
         for (const file of files) {
-            const thumb = createThumbnailItem(file, currentFile, onFileSelect, overlay);
+            const thumb = createThumbnailItem(file, currentFile, onFileSelect, overlay, {
+                multiSelect: overlay?._multiSelect === true,
+                isFileSelected: typeof overlay?._isFileSelected === 'function'
+                    ? overlay._isFileSelected
+                    : (filename) => pathsEqual(filename, currentFile),
+                toggleFile: typeof overlay?._toggleSelectedFile === 'function'
+                    ? overlay._toggleSelectedFile
+                    : null,
+            });
             if (thumb) {
                 container.appendChild(thumb);
                 if (currentFile && pathsEqual(file.path, currentFile)) selectedItem = thumb;
@@ -1585,9 +1695,14 @@ function createFolderItem(folderName, container, currentFile, onFileSelect, over
     return item;
 }
 
-function createThumbnailItem(fileEntryInput, currentFile, onFileSelect, overlay) {
+function createThumbnailItem(fileEntryInput, currentFile, onFileSelect, overlay, itemOptions = {}) {
     const fileEntry = normalizeFileEntry(fileEntryInput);
     const filename = fileEntry.path;
+    const isMultiSelect = itemOptions.multiSelect === true;
+    const isFileSelected = typeof itemOptions.isFileSelected === 'function'
+        ? itemOptions.isFileSelected
+        : (f) => pathsEqual(f, currentFile);
+    const toggleFile = typeof itemOptions.toggleFile === 'function' ? itemOptions.toggleFile : null;
     const item = document.createElement('div');
     item.className = 'thumbnail-item';
     item.dataset.filename = filename;
@@ -1595,7 +1710,7 @@ function createThumbnailItem(fileEntryInput, currentFile, onFileSelect, overlay)
     item.dataset.viewMode = currentViewMode;
     const fileType = item.dataset.type;
     
-    const isSelected = pathsEqual(filename, currentFile);
+    const isSelected = !!isFileSelected(filename);
     
     if (currentViewMode === 'detail') {
         item.style.cssText = `
@@ -1796,7 +1911,7 @@ function createThumbnailItem(fileEntryInput, currentFile, onFileSelect, overlay)
 
     // Hover effect
     item.onmouseenter = () => {
-        if (!isSelected) {
+        if (item.dataset.selected !== '1') {
             if (currentViewMode === 'detail') {
                 item.style.background = 'rgba(50, 112, 163, 0.28)';
             } else {
@@ -1807,7 +1922,7 @@ function createThumbnailItem(fileEntryInput, currentFile, onFileSelect, overlay)
         }
     };
     item.onmouseleave = () => {
-        if (!isSelected) {
+        if (item.dataset.selected !== '1') {
             if (currentViewMode === 'detail') {
                 item.style.background = 'transparent';
             } else {
@@ -1827,6 +1942,10 @@ function createThumbnailItem(fileEntryInput, currentFile, onFileSelect, overlay)
     };
 
     item._openFile = () => {
+        if (isMultiSelect && toggleFile) {
+            toggleFile(filename, item);
+            return;
+        }
         selectFile();
         closeBrowserModal(overlay);
     };
@@ -1838,6 +1957,10 @@ function createThumbnailItem(fileEntryInput, currentFile, onFileSelect, overlay)
         item.onclick = async (e) => {
             // Don't preview if clicking to close context menu
             if (document.querySelector('.thumbnail-context-menu')) {
+                return;
+            }
+            if (isMultiSelect && toggleFile) {
+                toggleFile(filename, item);
                 return;
             }
             selectThumbnailItem(item.parentElement, item);
@@ -1853,6 +1976,10 @@ function createThumbnailItem(fileEntryInput, currentFile, onFileSelect, overlay)
         item.onclick = (e) => {
             // Don't select if clicking to close context menu
             if (document.querySelector('.thumbnail-context-menu')) {
+                return;
+            }
+            if (isMultiSelect && toggleFile) {
+                toggleFile(filename, item);
                 return;
             }
             item._openFile();

@@ -71,6 +71,31 @@ def load_video_file(file_path: str) -> torch.Tensor:
     return torch.from_numpy(video).float() / 255.0
 
 
+def normalize_vace_resolution(width: int, height: int, multiple: int = 32) -> tuple[int, int]:
+    """Snap resolution down to a safe multiple for WAN/VACE token alignment."""
+    if multiple <= 0:
+        return width, height
+    safe_w = max(multiple, (width // multiple) * multiple)
+    safe_h = max(multiple, (height // multiple) * multiple)
+    return safe_w, safe_h
+
+
+def resolve_clip_entry_path(entry: dict, default_source: str = "input") -> str:
+    """Resolve a clip-list entry to an absolute filesystem path."""
+    rel = (entry or {}).get("file", "")
+    if not rel:
+        return ""
+    if os.path.isabs(rel):
+        return rel
+
+    entry_source = (entry or {}).get("source", default_source)
+    if entry_source == "output":
+        base_dir = folder_paths.get_output_directory()
+    else:
+        base_dir = folder_paths.get_input_directory()
+    return os.path.join(base_dir, rel)
+
+
 def _get_transitions_dir(clip_files):
     """Get a stable transitions directory in temp based on the clip list hash."""
     key_str = "|".join(os.path.abspath(f) for f in clip_files)
@@ -156,6 +181,99 @@ async def vace_transitions_info(request):
         return server.web.json_response({"exists": total > 0, "total_files": total, "dirs": len(items)})
     except Exception as e:
         return server.web.json_response({"exists": False, "total_files": 0, "error": str(e)})
+
+
+@server.PromptServer.instance.routes.post("/fbnodes/vace-clip-status")
+async def vace_clip_status(request):
+    """Return per-clip sizing status for UI warnings (resolution normalization)."""
+    try:
+        body = await request.json()
+        entries = body.get("entries", [])
+        default_source = body.get("source", "input")
+
+        if not isinstance(entries, list):
+            entries = []
+
+        details = []
+        changed_count = 0
+        ok_count = 0
+        missing_count = 0
+        raw_sizes = set()
+        normalized_sizes = set()
+
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+
+            # Match execution behavior: skip disabled clips.
+            if entry.get("enabled", True) is False:
+                continue
+
+            display_name = entry.get("file", "")
+            full = resolve_clip_entry_path(entry, default_source)
+            if not full or not os.path.isfile(full):
+                missing_count += 1
+                details.append({
+                    "file": display_name,
+                    "exists": False,
+                    "error": "Clip not found",
+                })
+                continue
+
+            try:
+                with av.open(full, mode="r") as container:
+                    stream = container.streams.video[0]
+                    w = int(stream.width or 0)
+                    h = int(stream.height or 0)
+
+                if w <= 0 or h <= 0:
+                    missing_count += 1
+                    details.append({
+                        "file": display_name,
+                        "exists": False,
+                        "error": "Could not read clip resolution",
+                    })
+                    continue
+
+                nw, nh = normalize_vace_resolution(w, h, multiple=32)
+                changed = (w != nw or h != nh)
+                if changed:
+                    changed_count += 1
+                else:
+                    ok_count += 1
+
+                raw_sizes.add((w, h))
+                normalized_sizes.add((nw, nh))
+
+                details.append({
+                    "file": display_name,
+                    "exists": True,
+                    "width": w,
+                    "height": h,
+                    "normalized_width": nw,
+                    "normalized_height": nh,
+                    "changed": changed,
+                })
+            except Exception as e:
+                missing_count += 1
+                details.append({
+                    "file": display_name,
+                    "exists": False,
+                    "error": str(e),
+                })
+
+        return server.web.json_response({
+            "total": len(details),
+            "ok_count": ok_count,
+            "changed_count": changed_count,
+            "missing_count": missing_count,
+            "raw_sizes": [f"{w}x{h}" for (w, h) in sorted(raw_sizes)],
+            "normalized_sizes": [f"{w}x{h}" for (w, h) in sorted(normalized_sizes)],
+            "has_size_mismatch": len(normalized_sizes) > 1,
+            "details": details,
+        })
+    except Exception as e:
+        return server.web.json_response({"error": str(e)}, status=500)
 
 
 @server.PromptServer.instance.routes.get("/fbnodes/video-thumbnail")
@@ -306,22 +424,59 @@ def build_vace_conditioning(
     # VAE encode both halves
     inactive_latent = vae.encode(inactive[:, :, :, :3])
     reactive_latent = vae.encode(reactive[:, :, :, :3])
+    latent_t = inactive_latent.shape[2]
+    latent_h = inactive_latent.shape[3]
+    latent_w = inactive_latent.shape[4]
     control_video_latent = torch.cat((inactive_latent, reactive_latent), dim=1)
 
     # Build downsampled mask for latent space
     vae_stride = 8
-    height_mask = height // vae_stride
-    width_mask = width // vae_stride
     mask_reshape = mask[..., 0] if mask.shape[-1] == 1 else mask
     if mask_reshape.ndim == 4:
         mask_reshape = mask_reshape[:, :, :, 0]
     # mask_reshape is now (length, H, W)
-    mask_view = mask_reshape.view(length, height_mask, vae_stride, width_mask, vae_stride)
-    mask_view = mask_view.permute(2, 4, 0, 1, 3)
-    mask_view = mask_view.reshape(vae_stride * vae_stride, length, height_mask, width_mask)
-    mask_latent = torch.nn.functional.interpolate(
-        mask_view.unsqueeze(0), size=(latent_length, height_mask, width_mask), mode='nearest-exact'
-    ).squeeze(0).unsqueeze(0)
+    if (mask_reshape.shape[1] == latent_h * vae_stride) and (mask_reshape.shape[2] == latent_w * vae_stride):
+        # Preserve the original pixel-unshuffle style mask when dimensions align exactly.
+        mask_view = mask_reshape.view(length, latent_h, vae_stride, latent_w, vae_stride)
+        mask_view = mask_view.permute(2, 4, 0, 1, 3)
+        mask_view = mask_view.reshape(vae_stride * vae_stride, length, latent_h, latent_w)
+        mask_latent = torch.nn.functional.interpolate(
+            mask_view.unsqueeze(0), size=(latent_t, latent_h, latent_w), mode='nearest-exact'
+        ).squeeze(0).unsqueeze(0)
+    else:
+        # Some WAN VAE paths can produce latent sizes that are not a strict H/8,W/8 floor.
+        # Use shape-safe nearest downsampling and broadcast to 8x8 channels.
+        mask_latent_1c = torch.nn.functional.interpolate(
+            mask_reshape.unsqueeze(0).unsqueeze(0),
+            size=(latent_t, latent_h, latent_w),
+            mode='nearest',
+        )
+        mask_latent = mask_latent_1c.repeat(1, vae_stride * vae_stride, 1, 1, 1)
+
+    # Final shape guard: ensure VACE tensors and sampled latent always share T/H/W.
+    target_t = latent_t
+    target_h = latent_h
+    target_w = latent_w
+    if control_video_latent.shape[2:] != (target_t, target_h, target_w):
+        control_video_latent = torch.nn.functional.interpolate(
+            control_video_latent,
+            size=(target_t, target_h, target_w),
+            mode="trilinear",
+            align_corners=False,
+        )
+    if mask_latent.shape[2:] != (target_t, target_h, target_w):
+        mask_latent = torch.nn.functional.interpolate(
+            mask_latent,
+            size=(target_t, target_h, target_w),
+            mode="nearest",
+        )
+
+    print(
+        "[VACE Stitcher] Conditioning shapes: "
+        f"vace_frames={tuple(control_video_latent.shape)} "
+        f"vace_mask={tuple(mask_latent.shape)} "
+        f"latent=(1,16,{target_t},{target_h},{target_w})"
+    )
 
     # Apply VACE conditioning
     positive = node_helpers.conditioning_set_values(
@@ -337,7 +492,7 @@ def build_vace_conditioning(
 
     # Create empty latent
     latent = torch.zeros(
-        [1, 16, latent_length, height // 8, width // 8],
+        [1, 16, latent_t, latent_h, latent_w],
         device=comfy.model_management.intermediate_device(),
     )
 
@@ -680,16 +835,7 @@ class VACEStitcher:
         # Resolve file paths – each clip stores its own source folder
         clip_files = []
         for entry in enabled:
-            rel = entry.get("file", "")
-            if os.path.isabs(rel):
-                full = rel
-            else:
-                entry_source = entry.get("source", source_folder)
-                if entry_source == "output":
-                    base_dir = folder_paths.get_output_directory()
-                else:
-                    base_dir = folder_paths.get_input_directory()
-                full = os.path.join(base_dir, rel)
+            full = resolve_clip_entry_path(entry, source_folder)
             if not os.path.isfile(full):
                 raise FileNotFoundError(f"Clip not found: {full}")
             clip_files.append(full)
@@ -758,20 +904,60 @@ class VACEStitcher:
         def get_clip_edge(clip_idx, edge, num_frames):
             """Get head or tail pixel frames from a clip, decoding only what's needed."""
             if clip_latents[clip_idx] is not None:
-                return decode_edge_pixels(
+                edge_px = decode_edge_pixels(
                     vae, clip_latents[clip_idx], edge, num_frames, decode_latent_batch
                 )
             else:
                 px = clip_pixels[clip_idx]
-                return px[:num_frames] if edge == 'head' else px[-num_frames:]
+                edge_px = px[:num_frames] if edge == 'head' else px[-num_frames:]
+
+            if edge_px.shape[1] != height or edge_px.shape[2] != width:
+                edge_px = comfy.utils.common_upscale(
+                    edge_px.movedim(-1, 1), width, height, "bilinear", "center"
+                ).movedim(1, -1)
+            return edge_px
 
         # Helper: get full clip pixels (decode latent or return loaded video)
         def get_clip_pixels(clip_idx):
             """Decode full clip to pixels on demand. Returns (T, H, W, 3) tensor."""
             if clip_latents[clip_idx] is not None:
-                return batched_vae_decode(vae, clip_latents[clip_idx], decode_latent_batch)
+                px = batched_vae_decode(vae, clip_latents[clip_idx], decode_latent_batch)
             else:
-                return clip_pixels[clip_idx]
+                px = clip_pixels[clip_idx]
+
+            if px.shape[1] != height or px.shape[2] != width:
+                px = comfy.utils.common_upscale(
+                    px.movedim(-1, 1), width, height, "bilinear", "center"
+                ).movedim(1, -1)
+            return px
+
+        def ensure_min_edge_frames(edge_px: torch.Tensor, required: int, edge: str) -> torch.Tensor:
+            """Pad edge frames to required length so context slicing is deterministic."""
+            if edge_px.shape[0] >= required:
+                return edge_px
+
+            if edge_px.shape[0] == 0:
+                # Should not happen for valid clips, but keep behavior safe.
+                return torch.full(
+                    (required, height, width, 3),
+                    0.5,
+                    dtype=torch.float32,
+                    device=edge_px.device,
+                )
+
+            pad_n = required - edge_px.shape[0]
+            if edge == 'head':
+                pad_frame = edge_px[-1:].repeat(pad_n, 1, 1, 1)
+                padded = torch.cat([edge_px, pad_frame], dim=0)
+            else:
+                pad_frame = edge_px[:1].repeat(pad_n, 1, 1, 1)
+                padded = torch.cat([pad_frame, edge_px], dim=0)
+
+            print(
+                f"[VACE Stitcher]   WARNING: Clip edge too short ({edge_px.shape[0]} < {required}); "
+                f"padded {pad_n} frame(s) on {edge}."
+            )
+            return padded
 
         # ── 4. Determine clip dimensions and validate ──
         # Get dimensions from first clip (decode a single frame if latent-only)
@@ -783,7 +969,15 @@ class VACEStitcher:
             height = clip_pixels[0].shape[1]
             width = clip_pixels[0].shape[2]
 
-        # Validate all clips have the same dimensions
+        raw_width, raw_height = width, height
+        width, height = normalize_vace_resolution(width, height, multiple=32)
+        if (width, height) != (raw_width, raw_height):
+            print(
+                f"[VACE Stitcher] Resolution normalized for VACE: "
+                f"{raw_width}x{raw_height} -> {width}x{height} (multiple of 32)."
+            )
+
+        # Validate all clips resolve to the same normalized dimensions
         for ci in range(1, len(clip_files)):
             if clip_latents[ci] is not None:
                 ch = clip_latents[ci].shape[3] * 8
@@ -791,11 +985,13 @@ class VACEStitcher:
             else:
                 ch = clip_pixels[ci].shape[1]
                 cw = clip_pixels[ci].shape[2]
-            if ch != height or cw != width:
+            ncw, nch = normalize_vace_resolution(cw, ch, multiple=32)
+            if nch != height or ncw != width:
                 basename = os.path.basename(clip_files[ci])
                 raise ValueError(
-                    f"Clip size mismatch! Clip 0 is {width}x{height} but clip {ci} "
-                    f"({basename}) is {cw}x{ch}. All clips must have the same resolution."
+                    f"Clip size mismatch after normalization! Clip 0 targets {width}x{height} "
+                    f"but clip {ci} ({basename}) resolves to {ncw}x{nch} "
+                    f"(raw {cw}x{ch}). All clips must normalize to the same resolution."
                 )
 
         # ── 5. Build transition pairs ──
@@ -849,6 +1045,8 @@ class VACEStitcher:
             # Decode only the edge pixels needed for VACE context (not the full clips)
             edge_a = get_clip_edge(idx_a, 'tail', required_pixels)
             edge_b = get_clip_edge(idx_b, 'head', required_pixels)
+            edge_a = ensure_min_edge_frames(edge_a, required_pixels, 'tail')
+            edge_b = ensure_min_edge_frames(edge_b, required_pixels, 'head')
 
             # Extract context frames offset by replace_frames (matching WanVACEPrepBatch)
             if replace_frames > 0:
@@ -857,6 +1055,12 @@ class VACEStitcher:
             else:
                 context_a = edge_a[-context_frames:]  # last context_frames
                 context_b = edge_b[:context_frames]   # first context_frames
+
+            if context_a.shape[0] != context_frames or context_b.shape[0] != context_frames:
+                raise ValueError(
+                    "Failed to build fixed-size VACE context windows; "
+                    f"got A={context_a.shape[0]}, B={context_b.shape[0]}, expected {context_frames}."
+                )
 
             print(f"[VACE Stitcher]   Edge A: {edge_a.shape[0]}px, "
                   f"Edge B: {edge_b.shape[0]}px, "
