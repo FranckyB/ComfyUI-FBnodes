@@ -71,6 +71,182 @@ def load_video_file(file_path: str) -> torch.Tensor:
     return torch.from_numpy(video).float() / 255.0
 
 
+def load_video_audio(file_path: str) -> tuple[torch.Tensor | None, int]:
+    """Load a video's audio stream as (1, C, S) float32 waveform and sample rate.
+
+    Returns (None, sample_rate) when no audio stream is present.
+    """
+    with av.open(file_path, mode='r') as container:
+        stream = next((s for s in container.streams if s.type == "audio"), None)
+        if stream is None:
+            return None, 44100
+
+        sample_rate = int(stream.rate or 0)
+        if sample_rate <= 0:
+            sample_rate = 44100
+
+        layout_name = None
+        if stream.layout is not None:
+            layout_name = stream.layout.name
+        if not layout_name:
+            channels = int(getattr(stream, "channels", 0) or 0)
+            layout_name = "mono" if channels <= 1 else "stereo"
+
+        resampler = av.audio.resampler.AudioResampler(
+            format="fltp",
+            layout=layout_name,
+            rate=sample_rate,
+        )
+
+        chunks = []
+        try:
+            # Decode directly from the selected stream object; using stream.index can
+            # fail on containers where audio stream indexing is sparse/non-zero.
+            for frame in container.decode(stream):
+                resampled = resampler.resample(frame)
+                if resampled is None:
+                    continue
+
+                frame_list = resampled if isinstance(resampled, list) else [resampled]
+                for audio_frame in frame_list:
+                    arr = audio_frame.to_ndarray()
+                    if arr is None or arr.size == 0:
+                        continue
+
+                    if arr.ndim == 1:
+                        arr = arr[None, :]
+                    elif arr.ndim == 2 and arr.shape[0] > arr.shape[1] and arr.shape[1] <= 8:
+                        arr = arr.T
+
+                    chunks.append(arr.astype(np.float32, copy=False))
+        except Exception as e:
+            print(f"[VACE Stitcher] WARNING: Audio decode failed for {os.path.basename(file_path)}: {e}")
+            return None, sample_rate
+
+        if not chunks:
+            return None, sample_rate
+
+        waveform_np = np.concatenate(chunks, axis=1)
+        waveform = torch.from_numpy(waveform_np).unsqueeze(0).contiguous()
+        return waveform, sample_rate
+
+
+def _empty_audio_payload(sample_rate: int = 44100, channels: int = 2):
+    return {
+        "waveform": torch.zeros((1, channels, 1), dtype=torch.float32),
+        "sample_rate": int(sample_rate),
+    }
+
+
+def _to_stereo_waveform(waveform: torch.Tensor) -> torch.Tensor:
+    if waveform.shape[1] >= 2:
+        return waveform[:, :2, :].contiguous()
+    return waveform.repeat(1, 2, 1).contiguous()
+
+
+def _resample_waveform_linear(waveform: torch.Tensor, src_rate: int, dst_rate: int) -> torch.Tensor:
+    if src_rate <= 0 or dst_rate <= 0 or src_rate == dst_rate:
+        return waveform
+
+    src_samples = int(waveform.shape[-1])
+    dst_samples = max(1, int(round(src_samples * float(dst_rate) / float(src_rate))))
+    merged = waveform.reshape(waveform.shape[0] * waveform.shape[1], 1, src_samples)
+    resized = torch.nn.functional.interpolate(merged, size=dst_samples, mode="linear", align_corners=False)
+    return resized.reshape(waveform.shape[0], waveform.shape[1], dst_samples).contiguous()
+
+
+def _audio_frame_slice(payload: dict | None, start_frame: int, end_frame: int, fps: float, sample_rate: int, channels: int):
+    if end_frame <= start_frame:
+        return torch.zeros((1, channels, 0), dtype=torch.float32)
+
+    start_sample = max(0, int(round(float(start_frame) * float(sample_rate) / float(fps))))
+    end_sample = max(start_sample, int(round(float(end_frame) * float(sample_rate) / float(fps))))
+
+    if payload is None:
+        return torch.zeros((1, channels, max(0, end_sample - start_sample)), dtype=torch.float32)
+
+    waveform = payload["waveform"]
+    total = int(waveform.shape[-1])
+    start_sample = min(start_sample, total)
+    end_sample = min(end_sample, total)
+    out = waveform[:, :, start_sample:end_sample]
+    if out.shape[-1] < (end_sample - start_sample):
+        pad = (end_sample - start_sample) - out.shape[-1]
+        out = torch.cat([out, torch.zeros((1, channels, pad), dtype=out.dtype)], dim=-1)
+    return out
+
+
+def _audio_tail_samples(payload: dict | None, sample_count: int, channels: int):
+    sample_count = max(0, int(sample_count))
+    if sample_count == 0:
+        return torch.zeros((1, channels, 0), dtype=torch.float32)
+    if payload is None:
+        return torch.zeros((1, channels, sample_count), dtype=torch.float32)
+
+    waveform = payload["waveform"]
+    have = int(waveform.shape[-1])
+    if have >= sample_count:
+        return waveform[:, :, -sample_count:]
+    pad = sample_count - have
+    return torch.cat([torch.zeros((1, channels, pad), dtype=waveform.dtype), waveform], dim=-1)
+
+
+def _audio_head_samples(payload: dict | None, sample_count: int, channels: int):
+    sample_count = max(0, int(sample_count))
+    if sample_count == 0:
+        return torch.zeros((1, channels, 0), dtype=torch.float32)
+    if payload is None:
+        return torch.zeros((1, channels, sample_count), dtype=torch.float32)
+
+    waveform = payload["waveform"]
+    have = int(waveform.shape[-1])
+    if have >= sample_count:
+        return waveform[:, :, :sample_count]
+    pad = sample_count - have
+    return torch.cat([waveform, torch.zeros((1, channels, pad), dtype=waveform.dtype)], dim=-1)
+
+
+def _build_transition_audio(
+    audio_a: dict | None,
+    audio_b: dict | None,
+    transition_frames: int,
+    new_frames: int,
+    fps: float,
+    sample_rate: int,
+    channels: int = 2,
+):
+    transition_samples = max(1, int(round(float(transition_frames) * float(sample_rate) / float(fps))))
+
+    if new_frames <= 0:
+        tail = _audio_tail_samples(audio_a, transition_samples, channels)
+        head = _audio_head_samples(audio_b, transition_samples, channels)
+        t = torch.linspace(0.0, 1.0, transition_samples, dtype=torch.float32).view(1, 1, -1)
+        return (1.0 - t) * tail + t * head
+
+    silence_samples = max(1, int(round(float(new_frames) * float(sample_rate) / float(fps))))
+    silence_samples = min(silence_samples, transition_samples)
+    pre_samples = max(0, (transition_samples - silence_samples) // 2)
+    post_samples = max(0, transition_samples - silence_samples - pre_samples)
+
+    parts = []
+    if pre_samples > 0:
+        tail = _audio_tail_samples(audio_a, pre_samples, channels)
+        fade_out = torch.linspace(1.0, 0.0, pre_samples, dtype=torch.float32).view(1, 1, -1)
+        parts.append(tail * fade_out)
+
+    if silence_samples > 0:
+        parts.append(torch.zeros((1, channels, silence_samples), dtype=torch.float32))
+
+    if post_samples > 0:
+        head = _audio_head_samples(audio_b, post_samples, channels)
+        fade_in = torch.linspace(0.0, 1.0, post_samples, dtype=torch.float32).view(1, 1, -1)
+        parts.append(head * fade_in)
+
+    if not parts:
+        return torch.zeros((1, channels, transition_samples), dtype=torch.float32)
+    return torch.cat(parts, dim=-1)
+
+
 def normalize_vace_resolution(width: int, height: int, multiple: int = 32) -> tuple[int, int]:
     """Snap resolution down to a safe multiple for WAN/VACE token alignment."""
     if multiple <= 0:
@@ -770,8 +946,8 @@ class VACEStitcher:
             },
         }
 
-    RETURN_TYPES = ("IMAGE", "FLOAT", "STRING")
-    RETURN_NAMES = ("images", "fps", "metadata")
+    RETURN_TYPES = ("IMAGE", "AUDIO", "FLOAT", "STRING")
+    RETURN_NAMES = ("images", "audio", "fps", "metadata")
     FUNCTION = "execute"
     OUTPUT_NODE = True
     CATEGORY = "FBnodes"
@@ -864,6 +1040,36 @@ class VACEStitcher:
         latent_count = sum(1 for latent in clip_latents if latent is not None)
         video_count = sum(1 for pixels in clip_pixels if pixels is not None)
         print(f"[VACE Stitcher] Loaded {len(clip_files)} clips: {latent_count} from .latent, {video_count} from video")
+
+        # Load and normalize clip audio (all clips to common sample-rate/stereo).
+        clip_audio = []
+        has_any_audio = False
+        first_audio_sr = None
+        for f in clip_files:
+            waveform, sample_rate = load_video_audio(f)
+            if waveform is None:
+                clip_audio.append(None)
+                continue
+
+            has_any_audio = True
+            if first_audio_sr is None:
+                first_audio_sr = int(sample_rate)
+
+            clip_audio.append({
+                "waveform": waveform.to(torch.float32).contiguous(),
+                "sample_rate": int(sample_rate),
+            })
+
+        target_audio_sr = int(first_audio_sr or 44100)
+        for i, payload in enumerate(clip_audio):
+            if payload is None:
+                continue
+            w = payload["waveform"]
+            sr = int(payload["sample_rate"])
+            if sr != target_audio_sr:
+                w = _resample_waveform_linear(w, sr, target_audio_sr)
+            w = _to_stereo_waveform(w)
+            clip_audio[i] = {"waveform": w.contiguous(), "sample_rate": target_audio_sr}
 
         # Extract FPS and all metadata from the first clip's video file
         clip_fps = 16.0
@@ -1190,6 +1396,7 @@ class VACEStitcher:
         single_clip_loop = (num_clips == 1 and seamless_loop)
 
         segments = []
+        audio_segments = []
 
         if single_clip_loop:
             # ── Single-clip seamless loop stitch ──
@@ -1203,6 +1410,9 @@ class VACEStitcher:
             if trans_px is None:
                 # No transition generated — just output the clip as-is
                 segments.append(cp)
+                audio_segments.append(
+                    _audio_frame_slice(clip_audio[0], 0, t_len, clip_fps, target_audio_sr, 2)
+                )
             else:
                 if color_match:
                     ref_frame = cp[-1]
@@ -1220,6 +1430,17 @@ class VACEStitcher:
 
                 # Trim clip: remove required_pixels from both edges
                 trimmed = cp[required_pixels:t_len - required_pixels]
+                trimmed_audio = _audio_frame_slice(
+                    clip_audio[0], required_pixels, t_len - required_pixels,
+                    clip_fps, target_audio_sr, 2,
+                )
+
+                trans_audio_full = _build_transition_audio(
+                    clip_audio[0], clip_audio[0], t_trans, new_frames,
+                    clip_fps, target_audio_sr, channels=2,
+                )
+                trans_audio_first_half = trans_audio_full[:, :, :mid]
+                trans_audio_second_half = trans_audio_full[:, :, mid:]
 
                 cf = context_frames
                 if crossfade and cf > 0:
@@ -1241,9 +1462,29 @@ class VACEStitcher:
                         # 2nd half with crossfade at end
                         segments.append(trans_second_half[:-actual_cf_head])
                         segments.append(crossfade_head)
+                        if actual_cf_head > 0:
+                            head_start = replace_frames if replace_frames > 0 else 0
+                            original_audio_head = _audio_frame_slice(
+                                clip_audio[0], head_start, head_start + actual_cf_head,
+                                clip_fps, target_audio_sr, 2,
+                            )
+                            vace_audio_head = trans_audio_second_half[:, :, -original_audio_head.shape[-1]:]
+                            audio_cf_head = min(vace_audio_head.shape[-1], original_audio_head.shape[-1])
+                            if trans_audio_second_half.shape[-1] > audio_cf_head:
+                                audio_segments.append(trans_audio_second_half[:, :, :-audio_cf_head])
+                            if audio_cf_head > 0:
+                                vace_audio_head = vace_audio_head[:, :, -audio_cf_head:]
+                                original_audio_head = original_audio_head[:, :, :audio_cf_head]
+                                t_ha = torch.linspace(0.0, 1.0, audio_cf_head, dtype=torch.float32).view(1, 1, -1)
+                                alpha_ha = t_ha * t_ha
+                                crossfade_audio_head = (1.0 - alpha_ha) * vace_audio_head + alpha_ha * original_audio_head
+                                audio_segments.append(crossfade_audio_head)
+                        else:
+                            audio_segments.append(trans_audio_second_half)
 
                         # Trimmed clip middle
                         segments.append(trimmed)
+                        audio_segments.append(trimmed_audio)
 
                         # Crossfade 1st half (tail side) → clip end dissolves into transition
                         vace_ctx_tail = trans_first_half[:cf]
@@ -1261,16 +1502,46 @@ class VACEStitcher:
 
                         segments.append(crossfade_tail)
                         segments.append(trans_first_half[actual_cf_tail:])
+                        if actual_cf_tail > 0:
+                            if replace_frames > 0:
+                                tail_start = t_len - (actual_cf_tail + replace_frames)
+                                tail_end = t_len - replace_frames
+                            else:
+                                tail_start = t_len - actual_cf_tail
+                                tail_end = t_len
+                            original_audio_tail = _audio_frame_slice(
+                                clip_audio[0], tail_start, tail_end,
+                                clip_fps, target_audio_sr, 2,
+                            )
+                            vace_audio_tail = trans_audio_first_half[:, :, :original_audio_tail.shape[-1]]
+                            audio_cf_tail = min(vace_audio_tail.shape[-1], original_audio_tail.shape[-1])
+                            if audio_cf_tail > 0:
+                                original_audio_tail = original_audio_tail[:, :, :audio_cf_tail]
+                                vace_audio_tail = vace_audio_tail[:, :, :audio_cf_tail]
+                                t_ta = torch.linspace(0.0, 1.0, audio_cf_tail, dtype=torch.float32).view(1, 1, -1)
+                                alpha_ta = t_ta * t_ta
+                                crossfade_audio_tail = (1.0 - alpha_ta) * original_audio_tail + alpha_ta * vace_audio_tail
+                                audio_segments.append(crossfade_audio_tail)
+                            if trans_audio_first_half.shape[-1] > audio_cf_tail:
+                                audio_segments.append(trans_audio_first_half[:, :, audio_cf_tail:])
+                        else:
+                            audio_segments.append(trans_audio_first_half)
                     else:
                         # Too short for crossfade
                         segments.append(trans_second_half)
                         segments.append(trimmed)
                         segments.append(trans_first_half)
+                        audio_segments.append(trans_audio_second_half)
+                        audio_segments.append(trimmed_audio)
+                        audio_segments.append(trans_audio_first_half)
                 else:
                     # No crossfade
                     segments.append(trans_second_half)
                     segments.append(trimmed)
                     segments.append(trans_first_half)
+                    audio_segments.append(trans_audio_second_half)
+                    audio_segments.append(trimmed_audio)
+                    audio_segments.append(trans_audio_first_half)
 
                 del trans_px
             del cp
@@ -1301,6 +1572,12 @@ class VACEStitcher:
                 end_idx = t_len - end_trim if end_trim > 0 else t_len
                 trimmed = cp[start_trim:end_idx]
                 segments.append(trimmed)
+                audio_segments.append(
+                    _audio_frame_slice(
+                        clip_audio[i], start_trim, end_idx,
+                        clip_fps, target_audio_sr, 2,
+                    )
+                )
 
                 # Build and insert the transition after this clip
                 if i < num_clips - 1:
@@ -1377,10 +1654,24 @@ class VACEStitcher:
                                     segments.append(vace_middle)
                                 segments.append(crossfade_b)
 
+                                audio_segments.append(
+                                    _build_transition_audio(
+                                        clip_audio[idx_a], clip_audio[idx_b], t_trans, new_frames,
+                                        clip_fps, target_audio_sr, channels=2,
+                                    )
+                                )
+
                                 del original_ctx_a, original_ctx_b
                         else:
                             # No crossfade: use full VACE output as-is
                             segments.append(trans_px)
+                            idx_a, idx_b = (int(x) for x in pair_key.split("_to_"))
+                            audio_segments.append(
+                                _build_transition_audio(
+                                    clip_audio[idx_a], clip_audio[idx_b], t_trans, new_frames,
+                                    clip_fps, target_audio_sr, channels=2,
+                                )
+                            )
 
                         del trans_px
 
@@ -1396,4 +1687,28 @@ class VACEStitcher:
         print(f"[VACE Stitcher] Final output: {stitched_pixels.shape} "
               f"({total_pixel_frames} pixel frames)")
 
-        return (stitched_pixels, clip_fps, clip_metadata)
+        expected_samples = max(1, int(round(float(total_pixel_frames) * float(target_audio_sr) / float(clip_fps))))
+        if has_any_audio:
+            audio_segments = [a for a in audio_segments if a is not None and a.shape[-1] > 0]
+            if audio_segments:
+                stitched_audio_waveform = torch.cat(audio_segments, dim=-1)
+            else:
+                stitched_audio_waveform = torch.zeros((1, 2, expected_samples), dtype=torch.float32)
+
+            got = int(stitched_audio_waveform.shape[-1])
+            if got < expected_samples:
+                stitched_audio_waveform = torch.cat([
+                    stitched_audio_waveform,
+                    torch.zeros((1, 2, expected_samples - got), dtype=stitched_audio_waveform.dtype),
+                ], dim=-1)
+            elif got > expected_samples:
+                stitched_audio_waveform = stitched_audio_waveform[:, :, :expected_samples]
+
+            stitched_audio = {
+                "waveform": stitched_audio_waveform.contiguous(),
+                "sample_rate": int(target_audio_sr),
+            }
+        else:
+            stitched_audio = _empty_audio_payload(sample_rate=target_audio_sr, channels=2)
+
+        return (stitched_pixels, stitched_audio, clip_fps, clip_metadata)
