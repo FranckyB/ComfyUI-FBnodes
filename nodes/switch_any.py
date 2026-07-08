@@ -61,8 +61,8 @@ class SwitchAny:
 
     CATEGORY = "FBnodes"
     DESCRIPTION = "A Universal switch with up to 10 named inputs. With True Lazy Evaluation, only the selected input is evaluated. Other inputs are completely ignored by ComfyUI, allowing you to switch between different branches of your workflow without any performance cost from the inactive branches."
-    RETURN_TYPES = ("*",)
-    RETURN_NAMES = ("output",)
+    RETURN_TYPES = ("*", "INT")
+    RETURN_NAMES = ("output", "index")
     FUNCTION = "switch"
     OUTPUT_NODE = True
 
@@ -90,8 +90,8 @@ class SwitchAny:
         for i, name in enumerate(name_list):
             if name == select:
                 value = kwargs.get(f"input_{i + 1}")
-                return (value,)
-        return (None,)
+                return (value, i + 1)
+        return (None, 1)
 
 
 class SwitchAnyBool:
@@ -109,8 +109,8 @@ class SwitchAnyBool:
 
     CATEGORY = "FBnodes"
     DESCRIPTION = "Boolean switch with true/false inputs. Only the active branch is evaluated."
-    RETURN_TYPES = ("*",)
-    RETURN_NAMES = ("output",)
+    RETURN_TYPES = ("*", "BOOLEAN")
+    RETURN_NAMES = ("output", "bool")
     FUNCTION = "switch"
     OUTPUT_NODE = True
 
@@ -132,4 +132,4 @@ class SwitchAnyBool:
         on_true = on_true if condition else None
         on_false = on_false if not condition else None
         value = on_true if condition else on_false
-        return (value,)
+        return (value, condition)
