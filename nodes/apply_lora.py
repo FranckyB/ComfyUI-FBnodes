@@ -1,5 +1,5 @@
 """
-ComfyUI Prompt Apply LoRA - Apply a LORA_STACK to model and clip
+ComfyUI Prompt Apply LoRA - Apply a LORA_STACK to model and LTX Version with separate video/audio strength multipliers.
 """
 import os
 
@@ -12,7 +12,7 @@ from ..py.lora_utils import resolve_lora_path
 
 class ApplyLoraPlus:
     """
-    Apply a LoRA stack to a model and optionally a CLIP.
+    Apply a LoRA stack to a model.
     Accepts either a LORA_STACK (list of tuples) or a multiline STRING with one
     LoRA path/name per line.
     Uses fuzzy matching to find LoRAs on disk — LoRAs not found are skipped.
@@ -37,22 +37,22 @@ class ApplyLoraPlus:
 
     @staticmethod
     def _coerce_lora_stack(lora_stack):
-        """Normalize accepted input formats into (name_or_path, model_strength, clip_strength) tuples."""
+        """Normalize accepted input formats into (name_or_path, model_strength) tuples."""
         if not lora_stack:
             return []
 
-        # Native LORA_STACK format: list[tuple(name, model_strength, clip_strength)]
+        # Native LORA_STACK format: list[tuple(name, model_strength)]
         if isinstance(lora_stack, (list, tuple)):
             normalized = []
             for entry in lora_stack:
-                if isinstance(entry, (list, tuple)) and len(entry) >= 3:
-                    normalized.append((entry[0], float(entry[1]), float(entry[2])))
+                if isinstance(entry, (list, tuple)) and len(entry) >= 2:
+                    normalized.append((entry[0], float(entry[1])))
             return normalized
 
         # STRING format: one LoRA per line (name or full path)
         if isinstance(lora_stack, str):
             lines = [line.strip() for line in lora_stack.splitlines() if line.strip()]
-            return [(line, 1.0, 1.0) for line in lines]
+            return [(line, 1.0) for line in lines]
 
         return []
 
@@ -71,7 +71,7 @@ class ApplyLoraPlus:
 
         model_out = model
 
-        for lora_name, model_strength, clip_strength in stack:
+        for lora_name, model_strength in stack:
             scaled_model_strength = model_strength * strength
 
             # Skip if no strength
@@ -112,13 +112,10 @@ class ApplyLTXLoraPlus:
                 "audio_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.01}),
                 "other_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.01}),
             },
-            "optional": {
-                "clip_optional": ("CLIP",),
-            },
         }
 
-    RETURN_TYPES = ("MODEL", "CLIP")
-    RETURN_NAMES = ("model", "clip")
+    RETURN_TYPES = ("MODEL",)
+    RETURN_NAMES = ("model",)
     FUNCTION = "apply_stack_ltx"
     CATEGORY = "FBnodes"
     DESCRIPTION = "Apply LoRAs to LTX MODEL from LORA_STACK or newline-separated STRING with separate video/audio/other strength multipliers."
@@ -152,15 +149,14 @@ class ApplyLTXLoraPlus:
     def _is_video_key(key_str):
         return "attn" in key_str or "ff.net" in key_str
 
-    def apply_stack_ltx(self, model, lora_stack, video_strength=1.0, audio_strength=1.0, other_strength=1.0, clip_optional=None):
-        clip_out = clip_optional
+    def apply_stack_ltx(self, model, lora_stack, video_strength=1.0, audio_strength=1.0, other_strength=1.0):
         stack = self._coerce_lora_stack(lora_stack)
         if not stack:
-            return (model, clip_out)
+            return (model,)
 
         model_out = model
 
-        for lora_name, model_strength, _clip_strength in stack:
+        for lora_name, model_strength in stack:
             # Resolve LoRA using direct path first, then fuzzy matching.
             lora_path, found = self._resolve_lora_path_or_name(lora_name)
             if not found:
@@ -207,4 +203,4 @@ class ApplyLTXLoraPlus:
             model_next.add_patches(loaded, float(model_strength))
             model_out = model_next
 
-        return (model_out, clip_out)
+        return (model_out,)
