@@ -352,6 +352,7 @@ class LTXReview:
             },
             "hidden": {
                 "unique_id": "UNIQUE_ID",
+                "extra_pnginfo": "EXTRA_PNGINFO",
             },
         }
 
@@ -361,8 +362,20 @@ class LTXReview:
     CATEGORY = "FBnodes"
     DESCRIPTION = "Pause for user review of an LTX video pass and then proceed or cancel while preserving video/audio latents. Supports bypass mode for immediate pass-through."
 
-    def review(self, video, video_latent, audio_latent, timeout=120, on_timeout="proceed", bypass=False, unique_id=None):
+    def review(self, video, video_latent, audio_latent, timeout=120, on_timeout="proceed", bypass=False, unique_id=None, extra_pnginfo=None):
         info = _resolve_video_info(video)
+
+        origin_graph_id = ""
+        try:
+            epi = extra_pnginfo
+            if isinstance(epi, list):
+                epi = epi[0] if epi else None
+            if isinstance(epi, dict):
+                workflow = epi.get("workflow")
+                if isinstance(workflow, dict):
+                    origin_graph_id = str(workflow.get("id") or "").strip()
+        except Exception:
+            origin_graph_id = ""
 
         if bypass:
             passthrough_path = str(info.get("path") or "").strip()
@@ -384,6 +397,7 @@ class LTXReview:
                 "event": wait_event,
                 "decision": None,
                 "node_id": str(_first(unique_id) or ""),
+                "graph_id": origin_graph_id,
                 "video_path": info["path"],
             }
 
@@ -394,6 +408,7 @@ class LTXReview:
         server.PromptServer.instance.send_sync("fbnodes.ltx_review.request", {
             "request_id": request_id,
             "node_id": str(_first(unique_id) or ""),
+            "graph_id": origin_graph_id,
             "timeout": int(timeout),
             "video_url": review_video_url,
             "video_path": display_path,

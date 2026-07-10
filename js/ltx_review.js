@@ -2,6 +2,7 @@ import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 
 const ACTIVE_DIALOGS = new Map();
+const WORKFLOW_ID_TO_TAB = new Map();
 const LTX_REVIEW_DING_URL = new URL("./audio/ding.mp3", import.meta.url).href;
 
 async function playImageFilterDing() {
@@ -37,7 +38,118 @@ async function sendDecision(requestId, decision) {
     }
 }
 
-async function tryRequeuePrompt() {
+function getActiveWorkflowId() {
+    try {
+        if (typeof app?.graph?.serialize === "function") {
+            const serialized = app.graph.serialize();
+            const workflowId = String(serialized?.id || "").trim();
+            if (workflowId) return workflowId;
+        }
+    } catch {
+        // Ignore and fall through to empty id.
+    }
+    return "";
+}
+
+function getActiveTabElement() {
+    const tab = document.getElementsByClassName("p-togglebutton-checked")[0];
+    return tab || null;
+}
+
+function rememberActiveWorkflowTab() {
+    const workflowId = getActiveWorkflowId();
+    if (!workflowId) return;
+    const tab = getActiveTabElement();
+    if (!tab) return;
+    WORKFLOW_ID_TO_TAB.set(workflowId, tab);
+}
+
+function getTabClickTarget(tab) {
+    if (!tab) return null;
+
+    const roleButton = tab.querySelector("[role='button']");
+    if (roleButton && typeof roleButton.click === "function") return roleButton;
+
+    const button = tab.querySelector("button");
+    if (button && typeof button.click === "function") return button;
+
+    if (typeof tab.click === "function") return tab;
+    return null;
+}
+
+function waitFrames(count = 1) {
+    return new Promise((resolve) => {
+        const step = (remaining) => {
+            if (remaining <= 0) {
+                resolve();
+                return;
+            }
+            requestAnimationFrame(() => step(remaining - 1));
+        };
+        step(count);
+    });
+}
+
+function dispatchSafeClick(target) {
+    if (!target) return false;
+    try {
+        target.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, button: 0 }));
+        target.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, cancelable: true, button: 0 }));
+        target.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, cancelable: true, button: 0 }));
+        target.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
+        return true;
+    } catch {
+        try {
+            target.click();
+            return true;
+        } catch {
+            return false;
+        }
+    }
+}
+
+async function tryActivateWorkflowTab(workflowId) {
+    const targetWorkflowId = String(workflowId || "").trim();
+    if (!targetWorkflowId) return true;
+
+    if (getActiveWorkflowId() === targetWorkflowId) {
+        return true;
+    }
+
+    const tab = WORKFLOW_ID_TO_TAB.get(targetWorkflowId);
+    if (!tab || !tab.isConnected) {
+        return false;
+    }
+
+    const clickTarget = getTabClickTarget(tab);
+    if (!clickTarget) {
+        return false;
+    }
+
+    const clicked = dispatchSafeClick(clickTarget);
+    if (!clicked) {
+        console.warn("[LTXReview] Failed to activate source workflow tab: click dispatch failed");
+        return false;
+    }
+
+    await waitFrames(4);
+
+    // Some tab systems attach handlers to parent wrappers instead of inner button.
+    if (getActiveWorkflowId() !== targetWorkflowId) {
+        dispatchSafeClick(tab);
+        await waitFrames(4);
+    }
+
+    return getActiveWorkflowId() === targetWorkflowId;
+}
+
+async function tryRequeuePrompt(originWorkflowId) {
+    const switched = await tryActivateWorkflowTab(originWorkflowId);
+    if (!switched) {
+        console.warn("[LTXReview] Requeue aborted: could not activate source workflow tab.", { originWorkflowId });
+        return false;
+    }
+
     if (typeof app?.queuePrompt === "function") {
         try {
             await app.queuePrompt(0);
@@ -54,6 +166,7 @@ async function tryRequeuePrompt() {
 
 function buildDialog(detail) {
     const requestId = String(detail?.request_id || "");
+    const originWorkflowId = String(detail?.graph_id || "").trim();
     const timeoutSeconds = Number(detail?.timeout || 0);
     const videoUrl = detail?.video_url || "";
     const videoPath = detail?.video_path || "";
@@ -211,8 +324,13 @@ function buildDialog(detail) {
     };
 
     requeueBtn.onclick = async () => {
-        const queued = await tryRequeuePrompt();
-        await sendDecision(requestId, queued ? "requeue" : "cancel");
+        const queued = await tryRequeuePrompt(originWorkflowId);
+        if (!queued) {
+            timer.textContent = "Could not auto-switch tab. Switch to the source workflow tab, then press Requeue again.";
+            return;
+        }
+
+        await sendDecision(requestId, "requeue");
         removeDialog(requestId);
     };
 
@@ -242,8 +360,20 @@ function buildDialog(detail) {
 app.registerExtension({
     name: "FBnodes.LTXReview",
 
+    afterConfigureGraph() {
+        rememberActiveWorkflowTab();
+    },
+
     async setup() {
+        rememberActiveWorkflowTab();
+
+        // Keep mapping fresh as users navigate workflow tabs.
+        document.addEventListener("click", () => {
+            waitFrames(1).then(() => rememberActiveWorkflowTab());
+        }, true);
+
         api.addEventListener("fbnodes.ltx_review.request", async (event) => {
+            rememberActiveWorkflowTab();
             const detail = event?.detail || {};
             const requestId = String(detail?.request_id || "");
             if (!requestId) return;
