@@ -237,6 +237,22 @@ function syncWarningOverlay(node, attempts = 0) {
     }
 }
 
+function scheduleNodeRefresh(node, frames = 4) {
+    let remaining = Math.max(1, Number(frames) || 1);
+
+    const tick = () => {
+        node.setDirtyCanvas?.(true, true);
+        syncWarningOverlay(node);
+
+        remaining -= 1;
+        if (remaining > 0) {
+            requestAnimationFrame(tick);
+        }
+    };
+
+    requestAnimationFrame(tick);
+}
+
 function drawTitlePlayIcon(node, ctx) {
     if (!hasSavedPath(node) || (node.flags && node.flags.collapsed)) {
         node._saveVideoPlayIconBounds = null;
@@ -315,6 +331,7 @@ app.registerExtension({
             updateDisplayState(node);
             ensureMinWarningDisplaySize(node);
             syncWarningOverlay(node);
+            scheduleNodeRefresh(node, 6);
 
             const onDrawForeground = node.onDrawForeground;
             node.onDrawForeground = function (ctx) {
@@ -363,6 +380,7 @@ app.registerExtension({
             ensureMinWarningDisplaySize(this);
             syncWarningOverlay(this);
             this.setDirtyCanvas?.(true, true);
+            scheduleNodeRefresh(this, 6);
             return result;
         };
 
@@ -386,6 +404,7 @@ app.registerExtension({
             ensureMinWarningDisplaySize(this);
             syncWarningOverlay(this);
             this.setDirtyCanvas?.(true, true);
+            scheduleNodeRefresh(this, 4);
             return result;
         };
     },

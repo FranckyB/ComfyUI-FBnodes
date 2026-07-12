@@ -34,14 +34,16 @@ Video loader with the same file browser and UX as Load Image+, but for videos. O
 - **VIDEO Output**: Outputs a VIDEO, ready to pipe into Get Video Components+
 
 ### LTX Review
-Review gate node for 2-pass LTX-style workflows. It pauses execution, opens a review popup with playback, and continues only when you proceed (or timeout policy allows it).
+Review gate node for 2-pass LTX-style workflows. It pauses execution, decodes video/audio latents internally, opens a review popup with playback, and continues only when you proceed (or timeout policy allows it).
 
-- **Inputs**: `video`, `video_latent`, `audio_latent`, `timeout`, `on_timeout`
+- **Inputs**: `video_latent`, `audio_latent`, `video_vae`, `audio_vae`, `fps`, `timeout`, `on_timeout`, `enable` (+ optional `preview_video`)
 - **Popup controls**: Proceed, Cancel, Requeue
-- **Audio + video playback**: Uses a browser-compatible preview clip; if needed, auto-generates H.264/yuv420 preview in temp for reliable playback
+- **Audio + video playback**: Always generates a browser-compatible H.264/yuv420 preview in temp from decoded latents
 - **Timeout behavior**: Auto-proceeds or auto-cancels based on `on_timeout`
-- **Outputs**: `video`, `video_latent`, `audio_latent`, `review_path`
-- **review_path**: Path to the clip used for review (generated temp preview path when transcoded, otherwise source path)
+- **Enable switch**: When OFF, passes through latents immediately and skips both VAE decodes/review popup
+- **Preview passthrough when disabled**: Optional `preview_video` preserves `review_path` output for preview workflows without running decode
+- **Outputs**: `video_latent`, `audio_latent`, `review_path`
+- **review_path**: Path to the generated temp preview clip
 
 ### LTX Review Preview
 Minimal companion preview node for displaying a video from a path, useful with `LTX Review`'s `review_path` output.
@@ -59,7 +61,7 @@ Checkpoint loader with a searchable, grouped dropdown designed for large model l
 - **Clean labels**: Hides common extensions in the dropdown display (`.safetensors`, `.ckpt`, `.pt`, `.bin`, `.pth`)
 - **Safe header selection**: Selecting a section header auto-selects the first model in that section
 - **Real path output**: Node still passes the real Comfy model path internally
-- **Outputs**: `MODEL`, `CLIP`, `VAE`
+- **Outputs**: `MODEL`, `CLIP`, `VAE`, `ckpt_name` (COMBO)
 
 ### Load Diffusion Model+
 Diffusion/UNET loader with the same searchable grouped dropdown UX as Load Checkpoint+.
@@ -70,7 +72,7 @@ Diffusion/UNET loader with the same searchable grouped dropdown UX as Load Check
 - **Clean labels**: Hides common extensions in the dropdown display (`.safetensors`, `.ckpt`, `.pt`, `.bin`, `.pth`)
 - **Safe header selection**: Selecting a section header auto-selects the first model in that section
 - **Real path output**: Node still passes the real Comfy model path internally
-- **Outputs**: `MODEL`
+- **Outputs**: `MODEL`, `unet_name` (COMBO)
 
 ### Crop Image+
 Interactive crop node with draggable crop box, optional aspect-ratio lock, and live preview.

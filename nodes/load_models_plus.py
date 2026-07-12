@@ -41,14 +41,15 @@ class LoadCheckpointPlus:
             },
         }
 
-    RETURN_TYPES = ("MODEL", "CLIP", "VAE")
-    RETURN_NAMES = ("MODEL", "CLIP", "VAE")
+    RETURN_TYPES = ("MODEL", "CLIP", "VAE", "COMBO")
+    RETURN_NAMES = ("MODEL", "CLIP", "VAE", "ckpt_name")
     FUNCTION = "load_checkpoint"
     CATEGORY = "FBnodes"
     DESCRIPTION = "Load checkpoint with grouped text filter"
 
     def load_checkpoint(self, filter: str, ckpt_name: str):
         """Load the selected checkpoint. The filter value is UI-only."""
+        _ = filter
         ckpt_path = folder_paths.get_full_path("checkpoints", ckpt_name)
 
         from comfy.sd import load_checkpoint_guess_config
@@ -59,7 +60,8 @@ class LoadCheckpointPlus:
             output_clip=True,
             embedding_directory=folder_paths.get_folder_paths("embeddings"),
         )
-        return out
+        model, clip, vae = out[:3]
+        return (model, clip, vae, ckpt_name)
 
 
 class LoadDiffusionModelPlus:
@@ -90,20 +92,21 @@ class LoadDiffusionModelPlus:
             },
         }
 
-    RETURN_TYPES = ("MODEL",)
-    RETURN_NAMES = ("MODEL",)
+    RETURN_TYPES = ("MODEL", "COMBO")
+    RETURN_NAMES = ("MODEL", "unet_name")
     FUNCTION = "load_unet"
     CATEGORY = "FBnodes"
     DESCRIPTION = "Load diffusion model with grouped text filter"
 
     def load_unet(self, filter: str, unet_name: str):
         """Load the selected diffusion model. The filter value is UI-only."""
+        _ = filter
         full_path = folder_paths.get_full_path_or_raise("diffusion_models", unet_name)
 
         import comfy.sd
 
         model = comfy.sd.load_diffusion_model(full_path)
-        return (model,)
+        return (model, unet_name)
 
 
 class LoadLoraPlus:

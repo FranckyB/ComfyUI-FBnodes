@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import json
 import math
 import threading
 import uuid
@@ -30,100 +31,168 @@ _PENDING_REVIEW_REQUESTS: dict[str, dict] = {}
 _SAVE_VIDEO_PREVIEW_PREFIX = "Vids/%date:yy-MM-dd%/vid_%date:HH-mm-ss%"
 
 
-def _normalize(path: str) -> str:
-    return os.path.normcase(os.path.realpath(path))
-
-
 def _first(value):
     if isinstance(value, (list, tuple)):
         return value[0] if value else None
     return value
 
 
-def _resolve_video_info(video) -> dict:
-    try:
-        source = video.get_stream_source()
-    except Exception:
-        source = None
-
-    path = source if isinstance(source, str) else ""
-    if not path:
-        return {"path": "", "url": None, "filename": "", "subfolder": "", "source_type": "", "display_path": ""}
-
-    path_real = os.path.realpath(path)
-    path_cmp = _normalize(path_real)
-
-    roots = {
-        "input": _normalize(folder_paths.get_input_directory()),
-        "output": _normalize(folder_paths.get_output_directory()),
-        "temp": _normalize(folder_paths.get_temp_directory()),
-    }
-
-    source_type = ""
-    rel_path = None
-    for root_type, root in roots.items():
-        if path_cmp == root or path_cmp.startswith(root + os.sep):
-            source_type = root_type
-            rel_path = os.path.relpath(path_real, os.path.realpath(getattr(folder_paths, f"get_{root_type}_directory")()))
-            break
-
-    filename = ""
-    subfolder = ""
-    url = None
-    if rel_path is not None:
-        rel_norm = rel_path.replace("\\", "/")
-        filename = os.path.basename(rel_norm)
-        subfolder = os.path.dirname(rel_norm).replace("\\", "/")
-        query = {
-            "filename": filename,
-            "type": source_type,
-        }
-        if subfolder:
-            query["subfolder"] = subfolder
-        url = f"/view?{urlencode(query)}"
-
-    return {
-        "path": path_real,
-        "url": url,
-        "filename": filename,
-        "subfolder": subfolder,
-        "source_type": source_type,
-        "display_path": path_real,
-    }
+def _extract_latent_samples(latent: dict, label: str) -> torch.Tensor:
+    if not isinstance(latent, dict):
+        raise TypeError(f"{label} latent must be a dict")
+    samples = latent.get("samples")
+    if samples is None or not torch.is_tensor(samples):
+        raise ValueError(f"{label} latent is missing tensor key 'samples'")
+    return samples
 
 
-def _is_browser_compatible_file(video_path: str) -> bool:
-    """
-    Quick compatibility probe for browser playback.
+def _decode_video_images(video_latent: dict, video_vae) -> torch.Tensor:
+    samples = _extract_latent_samples(video_latent, "Video")
+    decoded = video_vae.decode(samples)
+    if not torch.is_tensor(decoded):
+        raise ValueError("Video VAE decode did not return a tensor")
 
-    Conservative rule: HEVC/H265 or 4:2:2/4:4:4/10-bit-like formats are
-    treated as not browser-compatible and get a generated preview.
-    """
-    try:
-        with av.open(video_path) as container:
-            stream = next((s for s in container.streams if s.type == "video"), None)
-            if stream is None:
-                return False
+    # Normalize to image sequence [frames, H, W, C] for encoding.
+    if decoded.ndim == 5:
+        # Common layouts: [B, T, H, W, C] or [B, C, T, H, W].
+        if decoded.shape[-1] in (1, 3, 4):
+            decoded = decoded.reshape(-1, decoded.shape[2], decoded.shape[3], decoded.shape[4])
+        elif decoded.shape[1] in (1, 3, 4):
+            decoded = decoded.permute(0, 2, 3, 4, 1).reshape(-1, decoded.shape[3], decoded.shape[4], decoded.shape[1])
+        else:
+            raise ValueError(f"Unsupported decoded video tensor shape: {tuple(decoded.shape)}")
+    elif decoded.ndim == 4:
+        # [B, H, W, C] or [B, C, H, W]
+        if decoded.shape[-1] in (1, 3, 4):
+            decoded = decoded
+        elif decoded.shape[1] in (1, 3, 4):
+            decoded = decoded.permute(0, 2, 3, 1)
+        else:
+            raise ValueError(f"Unsupported decoded video tensor shape: {tuple(decoded.shape)}")
+    else:
+        raise ValueError(f"Unsupported decoded video tensor rank: {decoded.ndim}")
 
-            codec_name = str(getattr(stream.codec_context, "name", "") or "").lower()
-            pix_fmt = str(getattr(stream.codec_context, "pix_fmt", "") or "").lower()
+    return decoded[..., :3].clamp(0.0, 1.0)
 
-            if codec_name in {"hevc", "h265"}:
-                return False
-            if "422" in pix_fmt or "444" in pix_fmt or "10" in pix_fmt:
-                return False
 
-            # h264/vp8/vp9/av1 + non-problematic pix fmt are usually browser-safe.
-            if codec_name in {"h264", "vp8", "vp9", "av1"}:
-                return True
+def _decode_audio_waveform(audio_latent: dict, audio_vae) -> tuple[torch.Tensor, int]:
+    samples = _extract_latent_samples(audio_latent, "Audio")
+    if getattr(samples, "is_nested", False):
+        samples = samples.unbind()[-1]
 
-            return False
-    except Exception:
-        return False
+    if not hasattr(audio_vae, "decode"):
+        raise ValueError("audio_vae is not decodable. Connect an LTXV Audio VAE Decode-compatible Audio VAE.")
+
+    decoded = audio_vae.decode(samples)
+    if not torch.is_tensor(decoded):
+        raise ValueError("Audio VAE decode did not return a tensor")
+
+    waveform = decoded.movedim(-1, 1)
+    first_stage = getattr(audio_vae, "first_stage_model", None)
+    sample_rate = int(getattr(first_stage, "output_sample_rate", 0) or 0)
+    if sample_rate <= 0:
+        raise ValueError("audio_vae is missing output sample rate. Use the LTXV Audio VAE model for audio decode.")
+    return waveform, sample_rate
+
+
+def _encode_h264_preview_from_decoded(
+    images: torch.Tensor,
+    audio_waveform: torch.Tensor | None,
+    audio_sample_rate: int | None,
+    fps: float,
+    dst_path: str,
+    metadata_dict: dict | None = None,
+):
+    frame_rate = float(fps) if float(fps) > 0 else 24.0
+    rate = Fraction(round(frame_rate * 1000), 1000)
+
+    if images.ndim != 4:
+        raise ValueError(f"Expected decoded images as [frames,H,W,C], got shape {tuple(images.shape)}")
+
+    height = int(images.shape[1])
+    width = int(images.shape[2])
+
+    # Use metadata tags in MP4 container so workflow/prompt survive in temp preview files.
+    with av.open(dst_path, mode="w", format="mp4", options={"movflags": "use_metadata_tags"}) as dst:
+        _apply_container_metadata(dst, metadata_dict)
+
+        out_stream = dst.add_stream("libx264", rate=rate)
+        out_stream.width = width
+        out_stream.height = height
+        out_stream.pix_fmt = "yuv420p"
+        out_stream.options = {"crf": "23", "preset": "veryfast"}
+
+        out_audio_stream = None
+        if audio_waveform is not None and torch.is_tensor(audio_waveform):
+            sr = int(audio_sample_rate or 0) or 44100
+            out_audio_stream = dst.add_stream("aac", rate=sr)
+
+        for frame_tensor in images:
+            img = (frame_tensor[..., :3] * 255.0).clamp(0, 255).byte().cpu().numpy()
+            frame = av.VideoFrame.from_ndarray(img, format="rgb24")
+            frame = frame.reformat(format="yuv420p")
+            for packet in out_stream.encode(frame):
+                dst.mux(packet)
+
+        for packet in out_stream.encode(None):
+            dst.mux(packet)
+
+        if out_audio_stream is not None and audio_waveform is not None:
+            audio_tensor = audio_waveform
+            if audio_tensor.ndim != 3:
+                raise ValueError(f"Expected audio waveform as [batch,channels,samples], got shape {tuple(audio_tensor.shape)}")
+
+            sr = int(audio_sample_rate or 0) or 44100
+            max_audio_samples = math.ceil((sr / float(frame_rate)) * int(images.shape[0]))
+            audio_tensor = audio_tensor[:, :, :max_audio_samples]
+
+            channels = int(audio_tensor.shape[1])
+            layout = "mono" if channels <= 1 else "stereo"
+            frame = av.AudioFrame.from_ndarray(
+                audio_tensor.movedim(2, 1).reshape(1, -1).float().cpu().numpy(),
+                format="flt",
+                layout=layout,
+            )
+            frame.sample_rate = sr
+            frame.pts = 0
+            for packet in out_audio_stream.encode(frame):
+                dst.mux(packet)
+            for packet in out_audio_stream.encode(None):
+                dst.mux(packet)
 
 
 def _temp_view_url(filename: str) -> str:
     return f"/view?{urlencode({'filename': filename, 'type': 'temp'})}"
+
+
+def _apply_container_metadata(container, metadata_dict: dict | None):
+    if not metadata_dict:
+        return
+
+    for key, value in metadata_dict.items():
+        try:
+            container.metadata[str(key)] = json.dumps(value) if not isinstance(value, str) else value
+        except Exception:
+            # Skip invalid metadata fields rather than failing preview generation.
+            continue
+
+
+def _build_review_metadata(extra_pnginfo) -> dict:
+    metadata_dict = {}
+    try:
+        epi = extra_pnginfo
+        if isinstance(epi, list):
+            epi = epi[0] if epi else None
+        if isinstance(epi, dict):
+            # Keep metadata payload focused for drag/drop workflow reuse.
+            if "workflow" in epi:
+                metadata_dict["workflow"] = epi["workflow"]
+            if "prompt" in epi:
+                metadata_dict["prompt"] = epi["prompt"]
+    except Exception:
+        return {}
+
+    return metadata_dict
 
 
 def _expand_date_format(text: str) -> str:
@@ -163,141 +232,19 @@ def _build_temp_preview_path() -> str:
     return os.path.join(temp_dir, file)
 
 
-def _encode_h264_preview_from_file(src_path: str, dst_path: str):
-    with av.open(src_path) as src, av.open(dst_path, mode="w", format="mp4") as dst:
-        in_stream = next((s for s in src.streams if s.type == "video"), None)
-        if in_stream is None:
-            raise ValueError("No video stream available for preview transcode")
-
-        in_audio_stream = next((s for s in src.streams if s.type == "audio"), None)
-
-        rate = in_stream.average_rate if in_stream.average_rate is not None else Fraction(24, 1)
-        out_stream = dst.add_stream("libx264", rate=rate)
-        out_stream.width = int(getattr(in_stream, "width", 0) or 0)
-        out_stream.height = int(getattr(in_stream, "height", 0) or 0)
-        out_stream.pix_fmt = "yuv420p"
-        out_stream.options = {"crf": "23", "preset": "veryfast"}
-
-        out_audio_stream = None
-        audio_resampler = None
-        if in_audio_stream is not None:
-            audio_rate = int(getattr(in_audio_stream, "rate", 0) or 0) or 44100
-            out_audio_stream = dst.add_stream("aac", rate=audio_rate)
-            audio_layout = None
-            if getattr(in_audio_stream, "layout", None) is not None:
-                audio_layout = in_audio_stream.layout.name
-            if not audio_layout:
-                channels = int(getattr(in_audio_stream, "channels", 0) or 0)
-                audio_layout = "mono" if channels <= 1 else "stereo"
-
-            audio_resampler = av.audio.resampler.AudioResampler(
-                format="fltp",
-                layout=audio_layout,
-                rate=audio_rate,
-            )
-
-        for frame in src.decode(video=in_stream.index):
-            frame = frame.reformat(format="yuv420p")
-            for packet in out_stream.encode(frame):
-                dst.mux(packet)
-
-        for packet in out_stream.encode(None):
-            dst.mux(packet)
-
-        if in_audio_stream is not None and out_audio_stream is not None and audio_resampler is not None:
-            for audio_frame in src.decode(audio=in_audio_stream.index):
-                resampled = audio_resampler.resample(audio_frame)
-                if resampled is None:
-                    continue
-                frame_list = resampled if isinstance(resampled, list) else [resampled]
-                for frame in frame_list:
-                    for packet in out_audio_stream.encode(frame):
-                        dst.mux(packet)
-
-            try:
-                resampled_tail = audio_resampler.resample(None)
-            except Exception:
-                resampled_tail = None
-
-            if resampled_tail is not None:
-                tail_list = resampled_tail if isinstance(resampled_tail, list) else [resampled_tail]
-                for frame in tail_list:
-                    for packet in out_audio_stream.encode(frame):
-                        dst.mux(packet)
-
-            for packet in out_audio_stream.encode(None):
-                dst.mux(packet)
-
-
-def _encode_h264_preview_from_video_obj(video, dst_path: str):
-    components = video.get_components()
-    images = getattr(components, "images", None)
-    if images is None or not torch.is_tensor(images) or images.ndim < 4:
-        raise ValueError("VIDEO input does not provide tensor frames for preview generation")
-
-    width, height = video.get_dimensions()
-    frame_rate = float(getattr(components, "frame_rate", 0.0) or 24.0)
-    rate = Fraction(round(frame_rate * 1000), 1000)
-
-    with av.open(dst_path, mode="w", format="mp4") as dst:
-        out_stream = dst.add_stream("libx264", rate=rate)
-        out_stream.width = int(width)
-        out_stream.height = int(height)
-        out_stream.pix_fmt = "yuv420p"
-        out_stream.options = {"crf": "23", "preset": "veryfast"}
-
-        audio = getattr(components, "audio", None)
-        out_audio_stream = None
-        audio_sample_rate = 1
-        if audio is not None:
-            audio_sample_rate = int(audio.get("sample_rate", 0) or 0) or 44100
-            out_audio_stream = dst.add_stream("aac", rate=audio_sample_rate)
-
-        for frame_tensor in images:
-            img = (frame_tensor[..., :3] * 255.0).clamp(0, 255).byte().cpu().numpy()
-            frame = av.VideoFrame.from_ndarray(img, format="rgb24")
-            frame = frame.reformat(format="yuv420p")
-            for packet in out_stream.encode(frame):
-                dst.mux(packet)
-
-        for packet in out_stream.encode(None):
-            dst.mux(packet)
-
-        if out_audio_stream is not None and audio is not None:
-            waveform = audio.get("waveform")
-            if waveform is not None and torch.is_tensor(waveform):
-                waveform = waveform[:, :, :math.ceil((audio_sample_rate / float(frame_rate)) * images.shape[0])]
-                layout = "mono" if waveform.shape[1] == 1 else "stereo"
-                frame = av.AudioFrame.from_ndarray(
-                    waveform.movedim(2, 1).reshape(1, -1).float().cpu().numpy(),
-                    format="flt",
-                    layout=layout,
-                )
-                frame.sample_rate = audio_sample_rate
-                frame.pts = 0
-                for packet in out_audio_stream.encode(frame):
-                    dst.mux(packet)
-                for packet in out_audio_stream.encode(None):
-                    dst.mux(packet)
-
-
-def _resolve_review_video_url(video, info: dict) -> tuple[str | None, str]:
-    # Use the original file URL when it's already browser-compatible.
-    src_path = str(info.get("path") or "")
-    src_url = info.get("url")
-    if src_path and src_url and os.path.exists(src_path) and _is_browser_compatible_file(src_path):
-        return src_url, src_path
-
-    # Otherwise generate a temporary H.264/yuv420 preview clip.
-    preview_path = _build_temp_preview_path()
-    preview_name = os.path.basename(preview_path)
-
-    if src_path and os.path.exists(src_path):
-        _encode_h264_preview_from_file(src_path, preview_path)
-    else:
-        _encode_h264_preview_from_video_obj(video, preview_path)
-
-    return _temp_view_url(preview_name), preview_path
+def _resolve_video_source_path(video) -> str:
+    if video is None:
+        return ""
+    try:
+        source = video.get_stream_source()
+    except Exception:
+        source = None
+    if not isinstance(source, str) or not source.strip():
+        return ""
+    try:
+        return os.path.realpath(source)
+    except Exception:
+        return source
 
 
 @server.PromptServer.instance.routes.post("/fbnodes/ltx-review/decision")
@@ -331,9 +278,17 @@ class LTXReview:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "video": ("VIDEO", {"tooltip": "Video to review before continuing."}),
                 "video_latent": ("LATENT", {"tooltip": "Video latent to pass through if you proceed."}),
                 "audio_latent": ("LATENT", {"tooltip": "Audio latent to pass through if you proceed."}),
+                "video_vae": ("VAE", {"tooltip": "Video VAE used to decode video_latent for review clip generation."}),
+                "audio_vae": ("VAE", {"tooltip": "Audio VAE used by LTXV Audio VAE Decode behavior to decode audio_latent for review clip generation."}),
+                "fps": ("FLOAT", {
+                    "default": 24.0,
+                    "min": 1.0,
+                    "max": 240.0,
+                    "step": 0.1,
+                    "tooltip": "Frame rate used when encoding the review clip."
+                }),
                 "timeout": ("INT", {
                     "default": 120,
                     "min": 1,
@@ -345,10 +300,13 @@ class LTXReview:
                     "default": "proceed",
                     "tooltip": "Action used if no decision is received before timeout."
                 }),
-                "bypass": ("BOOLEAN", {
-                    "default": False,
-                    "tooltip": "When ON, skip review popup and pass through video/latents immediately."
+                "enable": ("BOOLEAN", {
+                    "default": True,
+                    "tooltip": "When ON, run review flow and decode latents for preview. When OFF, pass through latents immediately and skip decoding."
                 }),
+            },
+            "optional": {
+                "preview_video": ("VIDEO", {"tooltip": "Optional source VIDEO used only to preserve review_path passthrough when enable is OFF."}),
             },
             "hidden": {
                 "unique_id": "UNIQUE_ID",
@@ -356,14 +314,14 @@ class LTXReview:
             },
         }
 
-    RETURN_TYPES = ("VIDEO", "LATENT", "LATENT", "STRING")
-    RETURN_NAMES = ("video", "video_latent", "audio_latent", "review_path")
+    RETURN_TYPES = ("LATENT", "LATENT", "STRING")
+    RETURN_NAMES = ("video_latent", "audio_latent", "review_path")
     FUNCTION = "review"
     CATEGORY = "FBnodes"
-    DESCRIPTION = "Pause for user review of an LTX video pass and then proceed or cancel while preserving video/audio latents. Supports bypass mode for immediate pass-through."
+    DESCRIPTION = "Pause for user review of an LTX pass. Decodes video/audio latents with VAEs, generates review clip internally, then proceed/cancel while preserving latents."
 
-    def review(self, video, video_latent, audio_latent, timeout=120, on_timeout="proceed", bypass=False, unique_id=None, extra_pnginfo=None):
-        info = _resolve_video_info(video)
+    def review(self, video_latent, audio_latent, video_vae, audio_vae, fps=24.0, timeout=120, on_timeout="proceed", enable=True, preview_video=None, unique_id=None, extra_pnginfo=None):
+        review_metadata = _build_review_metadata(extra_pnginfo)
 
         origin_graph_id = ""
         try:
@@ -377,17 +335,31 @@ class LTXReview:
         except Exception:
             origin_graph_id = ""
 
-        if bypass:
-            passthrough_path = str(info.get("path") or "").strip()
-            return {"result": (video, video_latent, audio_latent, passthrough_path)}
+        if not bool(enable):
+            passthrough_path = _resolve_video_source_path(preview_video)
+            ui = {
+                "ltx_review_video_path": [passthrough_path],
+            }
+            return {"ui": ui, "result": (video_latent, audio_latent, passthrough_path)}
 
-        review_clip_path = str(info.get("path") or "")
+        review_video_url = None
+        review_clip_path = ""
+
         try:
-            review_video_url, review_clip_path = _resolve_review_video_url(video, info)
+            decoded_images = _decode_video_images(video_latent, video_vae)
+            decoded_audio, decoded_sample_rate = _decode_audio_waveform(audio_latent, audio_vae)
+            review_clip_path = _build_temp_preview_path()
+            _encode_h264_preview_from_decoded(
+                decoded_images,
+                decoded_audio,
+                decoded_sample_rate,
+                fps,
+                review_clip_path,
+                review_metadata,
+            )
+            review_video_url = _temp_view_url(os.path.basename(review_clip_path))
         except Exception as e:
-            print(f"[LTXReview] Could not build browser preview clip: {e}")
-            review_video_url = info.get("url")
-            review_clip_path = str(info.get("path") or "")
+            raise RuntimeError(f"LTXReview could not decode/encode review clip: {e}") from e
 
         request_id = str(uuid.uuid4())
         wait_event = threading.Event()
@@ -398,10 +370,10 @@ class LTXReview:
                 "decision": None,
                 "node_id": str(_first(unique_id) or ""),
                 "graph_id": origin_graph_id,
-                "video_path": info["path"],
+                "video_path": review_clip_path,
             }
 
-        display_path = (info.get("display_path") or info.get("path") or "").strip()
+        display_path = str(review_clip_path or "").strip()
         if not display_path and review_clip_path:
             display_path = os.path.basename(review_clip_path)
 
@@ -412,9 +384,10 @@ class LTXReview:
             "timeout": int(timeout),
             "video_url": review_video_url,
             "video_path": display_path,
-            "source_type": info["source_type"],
-            "filename": info["filename"],
-            "subfolder": info["subfolder"],
+            "source_type": "temp",
+            "filename": os.path.basename(review_clip_path),
+            "subfolder": "",
+            "workflow_embedded": bool(review_metadata.get("workflow")),
         })
 
         signaled = wait_event.wait(timeout=float(timeout))
@@ -436,7 +409,7 @@ class LTXReview:
             "ltx_review_video_path": [review_clip_path],
         }
 
-        return {"ui": ui, "result": (video, video_latent, audio_latent, review_clip_path)}
+        return {"ui": ui, "result": (video_latent, audio_latent, review_clip_path)}
 
 
 def _parse_path_annotation(path_value: str) -> tuple[str, str | None]:

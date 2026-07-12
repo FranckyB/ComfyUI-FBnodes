@@ -37,7 +37,7 @@ app.registerExtension({
 
             modelWidget.options = modelWidget.options || {};
             const runtimeValues = Array.isArray(modelWidget.options.values) ? modelWidget.options.values : [];
-            const sourceValues = schemaInfo.values.length > 0 ? schemaInfo.values : runtimeValues;
+            const sourceValues = runtimeValues.length > 0 ? runtimeValues : schemaInfo.values;
             modelWidget.options.values_original = [...sourceValues];
             modelWidget.options.values = [...sourceValues];
 
@@ -47,6 +47,35 @@ app.registerExtension({
 
             const isHeader = (value) => typeof value === "string" && value.startsWith("----") && value.endsWith("----");
             const stripKnownExtension = (name) => name.replace(/\.(safetensors|ckpt|pt|bin|pth)$/i, "");
+            const normalizeOptionValues = (rawValues) => {
+                const values = [];
+                const seen = new Set();
+
+                if (Array.isArray(rawValues)) {
+                    for (const value of rawValues) {
+                        if (typeof value !== "string") continue;
+                        if (isHeader(value)) continue;
+                        const actual = displayToActual.get(value) || value;
+                        if (!seen.has(actual)) {
+                            seen.add(actual);
+                            values.push(actual);
+                        }
+                    }
+                    return values;
+                }
+
+                if (rawValues && typeof rawValues === "object") {
+                    for (const value of Object.values(rawValues)) {
+                        if (typeof value !== "string") continue;
+                        if (!seen.has(value)) {
+                            seen.add(value);
+                            values.push(value);
+                        }
+                    }
+                }
+
+                return values;
+            };
 
             const splitTerms = (raw) => (raw || "")
                 .toLowerCase()
@@ -157,6 +186,55 @@ app.registerExtension({
                 modelPaths.set(name, name);
             });
 
+            let refreshScheduled = false;
+            let settingValuesInternally = false;
+            let trackedValues = modelWidget.options.values;
+
+            const scheduleFilterRefresh = () => {
+                if (refreshScheduled) return;
+                refreshScheduled = true;
+                Promise.resolve().then(() => {
+                    refreshScheduled = false;
+                    updateFilteredModels();
+                });
+            };
+
+            const options = modelWidget.options;
+            if (!Object.prototype.hasOwnProperty.call(options, "_fb_values_tracked")) {
+                Object.defineProperty(options, "_fb_values_tracked", {
+                    value: true,
+                    writable: false,
+                    enumerable: false,
+                    configurable: true,
+                });
+
+                Object.defineProperty(options, "values", {
+                    get() {
+                        return trackedValues;
+                    },
+                    set(nextValues) {
+                        trackedValues = nextValues;
+
+                        if (settingValuesInternally) {
+                            return;
+                        }
+
+                        const refreshedValues = normalizeOptionValues(nextValues);
+                        if (refreshedValues.length > 0) {
+                            modelWidget.options.values_original = [...refreshedValues];
+                            modelPaths.clear();
+                            refreshedValues.forEach((name) => {
+                                modelPaths.set(name, name);
+                            });
+                        }
+
+                        scheduleFilterRefresh();
+                    },
+                    enumerable: true,
+                    configurable: true,
+                });
+            }
+
             const updateFilteredModels = () => {
                 const currentValue = modelWidget.value;
                 const currentActual = displayToActual.get(currentValue) || currentValue;
@@ -175,7 +253,12 @@ app.registerExtension({
 
                 const groupedValues = buildGroupedDisplay(filtered);
                 const fallbackValues = buildGroupedDisplay(originalValues);
-                modelWidget.options.values = groupedValues.length > 0 ? groupedValues : fallbackValues;
+                settingValuesInternally = true;
+                try {
+                    modelWidget.options.values = groupedValues.length > 0 ? groupedValues : fallbackValues;
+                } finally {
+                    settingValuesInternally = false;
+                }
 
                 let resolvedDisplay = null;
                 for (const displayName of modelWidget.options.values) {
