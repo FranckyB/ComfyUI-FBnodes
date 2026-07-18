@@ -615,7 +615,9 @@ class SaveVideoPlus:
                             rate=sample_rate,
                         )
 
-                    for frame in source.decode(video=src_video.index):
+                    # PyAV decode(video=...) expects the Nth video stream (0-based),
+                    # not the container-wide stream index. 
+                    for frame in source.decode(video=0):
                         frame = frame.reformat(format='yuv420p')
                         for packet in out_video.encode(frame):
                             output.mux(packet)
@@ -624,7 +626,7 @@ class SaveVideoPlus:
                         output.mux(packet)
 
                     if src_audio is not None and out_audio is not None:
-                        for frame in source.decode(audio=src_audio.index):
+                        for frame in source.decode(audio=0):
                             converted = resampler.resample(frame) if resampler is not None else frame
                             frames = converted if isinstance(converted, list) else [converted]
                             for audio_frame in frames:
