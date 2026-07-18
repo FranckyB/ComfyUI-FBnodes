@@ -3,10 +3,50 @@ import { api } from "../../scripts/api.js";
 
 const CONTROLS_TOGGLE_WIDGET_KEY = "__fb_save_video_controls_toggle";
 const CONTROLS_EXPANDED_PROP = "_saveVideoControlsExpanded";
+const CONTROLS_COLLAPSED_SIZE_PROP = "_saveVideoCollapsedSize";
 
 function firstValue(value) {
     if (Array.isArray(value)) return value[0];
     return value;
+}
+
+function normalizeBool(value) {
+    const raw = firstValue(value);
+    if (typeof raw === "string") {
+        const normalized = raw.trim().toLowerCase();
+        if (normalized === "true" || normalized === "1" || normalized === "yes" || normalized === "on") {
+            return true;
+        }
+        if (normalized === "false" || normalized === "0" || normalized === "no" || normalized === "off" || normalized === "") {
+            return false;
+        }
+    }
+    return !!raw;
+}
+
+function extractExecutionPayload(message) {
+    if (!message || typeof message !== "object") {
+        return {};
+    }
+
+    const candidates = [
+        message,
+        message.ui,
+        message.output,
+        message.data,
+    ];
+
+    for (const candidate of candidates) {
+        if (!candidate || typeof candidate !== "object") {
+            continue;
+        }
+
+        if (candidate.saved_video_path !== undefined || candidate.needs_external_player !== undefined) {
+            return candidate;
+        }
+    }
+
+    return message;
 }
 
 function hasSavedPath(node) {
@@ -40,6 +80,78 @@ function openInSystemPlayer(node) {
 function updateDisplayState(node) {
     const needsExternal = !!node.properties?._needsExternalPlayer;
     node._saveVideoShowCompatWarning = !!needsExternal;
+}
+
+function payloadHasVideoResult(payload) {
+    return payload?.saved_video_path !== undefined || payload?.needs_external_player !== undefined;
+}
+
+function setResultData(node, message) {
+    const payload = extractExecutionPayload(message);
+    if (!payloadHasVideoResult(payload)) {
+        return false;
+    }
+
+    if (!node.properties) node.properties = {};
+    ensurePreviewContainer(node);
+
+    const savedPath = firstValue(payload?.saved_video_path);
+    if (typeof savedPath === "string") {
+        node.properties._lastSavedVideoPath = savedPath;
+    }
+
+    const needsExternal = firstValue(payload?.needs_external_player);
+    if (typeof needsExternal !== "undefined") {
+        node.properties._needsExternalPlayer = normalizeBool(needsExternal);
+    }
+
+    updateDisplayState(node);
+    ensureMinWarningDisplaySize(node);
+    syncWarningOverlay(node);
+    node.setDirtyCanvas?.(true, true);
+    return true;
+}
+
+const _fbSaveVideoExecutedCache = new Map();
+let _fbSaveVideoExecutedListenerInstalled = false;
+
+function cacheExecutedPayload(detail) {
+    const nodeId = detail?.node;
+    if (nodeId === undefined || nodeId === null) {
+        return;
+    }
+
+    const payload = extractExecutionPayload(detail?.output);
+    if (!payloadHasVideoResult(payload)) {
+        return;
+    }
+
+    _fbSaveVideoExecutedCache.set(String(nodeId), payload);
+}
+
+function restoreFromExecutedCache(node) {
+    const nodeId = node?.id;
+    if (nodeId === undefined || nodeId === null) {
+        return false;
+    }
+
+    const cached = _fbSaveVideoExecutedCache.get(String(nodeId));
+    if (!cached) {
+        return false;
+    }
+
+    return setResultData(node, cached);
+}
+
+function installExecutedSync() {
+    if (_fbSaveVideoExecutedListenerInstalled) {
+        return;
+    }
+    _fbSaveVideoExecutedListenerInstalled = true;
+
+    api.addEventListener("executed", (event) => {
+        cacheExecutedPayload(event?.detail || {});
+    });
 }
 
 function getWidgetHeight(node, widget) {
@@ -100,6 +212,89 @@ function getPreviewContainer(node) {
         || null;
 }
 
+function ensurePreviewContainer(node) {
+    let container = getPreviewContainer(node);
+    if (container) {
+        if (!node.videoContainer) {
+            node.videoContainer = container;
+        }
+        return container;
+    }
+
+    container = document.createElement("div");
+    container.classList.add("comfy-img-preview");
+    node.videoContainer = container;
+
+    if (!node.widgets?.some((w) => w.name === "video-preview")) {
+        const w = node.addDOMWidget("video-preview", "video", container, {
+            canvasOnly: true,
+            hideOnZoom: false,
+        });
+        w.serialize = false;
+        w.computeLayoutSize = () => ({
+            minHeight: 256,
+            minWidth: 256,
+        });
+    }
+
+    return container;
+}
+
+function getFramePreviewUrl(node) {
+    const path = node.properties?._lastSavedVideoPath;
+    if (!path) return null;
+    return `/fbnodes/video-frame?filename=${encodeURIComponent(path)}&source=output&position=0`;
+}
+
+function getFramePreviewLayer(host) {
+    let frameImg = host?.querySelector(".fbnodes-save-video-frame-preview");
+    if (frameImg) return frameImg;
+
+    frameImg = document.createElement("img");
+    frameImg.className = "fbnodes-save-video-frame-preview";
+    frameImg.alt = "Video frame preview";
+    frameImg.style.position = "absolute";
+    frameImg.style.left = "8px";
+    frameImg.style.right = "8px";
+    frameImg.style.top = "12px";
+    frameImg.style.bottom = "84px";
+    frameImg.style.width = "calc(100% - 16px)";
+    frameImg.style.height = "calc(100% - 96px)";
+    frameImg.style.objectFit = "contain";
+    frameImg.style.background = "rgba(0, 0, 0, 0.28)";
+    frameImg.style.borderRadius = "4px";
+    frameImg.style.pointerEvents = "none";
+    frameImg.style.display = "none";
+    frameImg.style.zIndex = "9";
+    host.appendChild(frameImg);
+    return frameImg;
+}
+
+function syncFramePreviewLayer(node, host) {
+    if (!host) return;
+
+    const frameImg = getFramePreviewLayer(host);
+    const showWarning = !!node._saveVideoShowCompatWarning;
+    if (!showWarning) {
+        frameImg.style.display = "none";
+        return;
+    }
+
+    const frameUrl = getFramePreviewUrl(node);
+    if (!frameUrl) {
+        frameImg.style.display = "none";
+        return;
+    }
+
+    const savedPath = node.properties?._lastSavedVideoPath || "";
+    if (node._saveVideoFramePreviewForPath !== savedPath) {
+        node._saveVideoFramePreviewForPath = savedPath;
+        frameImg.src = `${frameUrl}&t=${Date.now()}`;
+    }
+
+    frameImg.style.display = "block";
+}
+
 function isControlsToggleWidget(widget) {
     return !!widget?._fbSaveVideoControlsToggle || widget?.name === CONTROLS_TOGGLE_WIDGET_KEY;
 }
@@ -142,10 +337,23 @@ function applyControlsCollapsedState(node) {
     try {
         const nextH = node.computeSize?.()[1];
         if (Number.isFinite(nextH)) {
-            node.setSize?.([node.size?.[0] || 320, nextH]);
+            const nextW = node.size?.[0] || 320;
+            node.setSize?.([nextW, nextH]);
         }
     } catch {
         // Ignore size recompute failures and still refresh canvas.
+    }
+
+    // Restore the exact pre-expand footprint when collapsing controls.
+    if (collapsed) {
+        const saved = node.properties?.[CONTROLS_COLLAPSED_SIZE_PROP];
+        if (Array.isArray(saved) && saved.length >= 2) {
+            const savedW = Number(saved[0]);
+            const savedH = Number(saved[1]);
+            if (Number.isFinite(savedW) && Number.isFinite(savedH) && savedW > 0 && savedH > 0) {
+                node.setSize?.([savedW, savedH]);
+            }
+        }
     }
 
     node.setDirtyCanvas?.(true, true);
@@ -157,6 +365,13 @@ function ensureControlsToggleWidget(node) {
     let toggle = node.widgets?.find((w) => isControlsToggleWidget(w));
     if (!toggle) {
         toggle = node.addWidget("button", "▶ Controls", null, () => {
+            const expanding = !getControlsExpanded(node);
+            if (expanding) {
+                node.properties[CONTROLS_COLLAPSED_SIZE_PROP] = [
+                    Number(node.size?.[0] || 320),
+                    Number(node.size?.[1] || 240),
+                ];
+            }
             node.properties[CONTROLS_EXPANDED_PROP] = !getControlsExpanded(node);
             applyControlsCollapsedState(node);
             ensureMinWarningDisplaySize(node);
@@ -178,12 +393,14 @@ function ensureControlsToggleWidget(node) {
 }
 
 function applyWarningOverlay(node) {
-    const host = getPreviewContainer(node);
+    const host = ensurePreviewContainer(node);
     if (!host) return false;
 
     if (!host.style.position) {
         host.style.position = "relative";
     }
+
+    syncFramePreviewLayer(node, host);
 
     let overlay = host.querySelector(".fbnodes-save-video-warning");
     if (!overlay) {
@@ -195,6 +412,7 @@ function applyWarningOverlay(node) {
         // Keep warning away from the native control strip and slightly higher.
         overlay.style.top = "12px";
         overlay.style.bottom = "84px";
+        overlay.style.zIndex = "11";
         overlay.style.pointerEvents = "none";
         overlay.style.display = "none";
         overlay.style.flexDirection = "column";
@@ -235,22 +453,6 @@ function syncWarningOverlay(node, attempts = 0) {
     if (!applied && attempts < 10) {
         setTimeout(() => syncWarningOverlay(node, attempts + 1), 80);
     }
-}
-
-function scheduleNodeRefresh(node, frames = 4) {
-    let remaining = Math.max(1, Number(frames) || 1);
-
-    const tick = () => {
-        node.setDirtyCanvas?.(true, true);
-        syncWarningOverlay(node);
-
-        remaining -= 1;
-        if (remaining > 0) {
-            requestAnimationFrame(tick);
-        }
-    };
-
-    requestAnimationFrame(tick);
 }
 
 function drawTitlePlayIcon(node, ctx) {
@@ -318,6 +520,8 @@ app.registerExtension({
     beforeRegisterNodeDef(nodeType, nodeData) {
         if (nodeData?.name !== "SaveVideoPlus") return;
 
+        installExecutedSync();
+
         const onNodeCreated = nodeType.prototype.onNodeCreated;
         nodeType.prototype.onNodeCreated = function () {
             const result = onNodeCreated?.apply(this, arguments);
@@ -328,10 +532,11 @@ app.registerExtension({
             node._saveVideoPlayIconBounds = null;
 
             ensureControlsToggleWidget(node);
+            ensurePreviewContainer(node);
             updateDisplayState(node);
+            restoreFromExecutedCache(node);
             ensureMinWarningDisplaySize(node);
             syncWarningOverlay(node);
-            scheduleNodeRefresh(node, 6);
 
             const onDrawForeground = node.onDrawForeground;
             node.onDrawForeground = function (ctx) {
@@ -376,35 +581,24 @@ app.registerExtension({
         nodeType.prototype.onConfigure = function () {
             const result = onConfigure?.apply(this, arguments);
             ensureControlsToggleWidget(this);
+            ensurePreviewContainer(this);
             updateDisplayState(this);
+            restoreFromExecutedCache(this);
             ensureMinWarningDisplaySize(this);
             syncWarningOverlay(this);
             this.setDirtyCanvas?.(true, true);
-            scheduleNodeRefresh(this, 6);
             return result;
         };
 
         const onExecuted = nodeType.prototype.onExecuted;
         nodeType.prototype.onExecuted = function (message) {
             const result = onExecuted?.apply(this, arguments);
+            const payload = extractExecutionPayload(message);
 
-            if (!this.properties) this.properties = {};
-
-            const savedPath = firstValue(message?.saved_video_path);
-            if (typeof savedPath === "string") {
-                this.properties._lastSavedVideoPath = savedPath;
+            setResultData(this, payload);
+            if (this.id !== undefined && this.id !== null && payloadHasVideoResult(payload)) {
+                _fbSaveVideoExecutedCache.set(String(this.id), payload);
             }
-
-            const needsExternal = firstValue(message?.needs_external_player);
-            if (typeof needsExternal !== "undefined") {
-                this.properties._needsExternalPlayer = !!needsExternal;
-            }
-
-            updateDisplayState(this);
-            ensureMinWarningDisplaySize(this);
-            syncWarningOverlay(this);
-            this.setDirtyCanvas?.(true, true);
-            scheduleNodeRefresh(this, 4);
             return result;
         };
     },

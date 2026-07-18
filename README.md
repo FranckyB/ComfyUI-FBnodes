@@ -36,7 +36,7 @@ Video loader with the same file browser and UX as Load Image+, but for videos. O
 ### LTX Review
 Review gate node for 2-pass LTX-style workflows. It pauses execution, decodes video/audio latents internally, opens a review popup with playback, and continues only when you proceed (or timeout policy allows it).
 
-- **Inputs**: `video_latent`, `audio_latent`, `video_vae`, `audio_vae`, `fps`, `timeout`, `on_timeout`, `enable` (+ optional `preview_video`)
+- **Inputs**: `video_latent`, `audio_latent`, `video_vae`, `audio_vae`, `fps`, `timeout`, `on_timeout`, `enable`
 - **Popup controls**: Proceed, Cancel, Requeue
 - **Audio + video playback**: Always generates a browser-compatible H.264/yuv420 preview in temp from decoded latents
 - **Timeout behavior**: Auto-proceeds or auto-cancels based on `on_timeout`
@@ -73,6 +73,18 @@ Diffusion/UNET loader with the same searchable grouped dropdown UX as Load Check
 - **Safe header selection**: Selecting a section header auto-selects the first model in that section
 - **Real path output**: Node still passes the real Comfy model path internally
 - **Outputs**: `MODEL`, `unet_name` (COMBO)
+
+### Load LoRA+
+LoRA loader/applier with the same searchable grouped dropdown UX as the other Load Model+ nodes.
+
+- **Text filter**: Supports comma-separated terms (example: `ltx, turbo`)
+- **AND matching**: All typed terms must match in LoRA name or path
+- **Grouped list UI**: Displays a flat list with section headers
+- **Clean labels**: Hides common extensions in the dropdown display (`.safetensors`, `.ckpt`, `.pt`, `.bin`, `.pth`)
+- **Apply strength**: `strength_model` controls how strongly the selected LoRA is applied to connected `MODEL`
+- **Selector mode**: Works without a connected model and still outputs selected `lora_name` for downstream nodes
+- **Real path output**: Node still resolves and uses the real Comfy LoRA path internally when applying
+- **Outputs**: `model`, `lora_name` (COMBO)
 
 ### Crop Image+
 Interactive crop node with draggable crop box, optional aspect-ratio lock, and live preview.

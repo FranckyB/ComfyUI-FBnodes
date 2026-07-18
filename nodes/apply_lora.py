@@ -13,8 +13,8 @@ from ..py.lora_utils import resolve_lora_path
 class ApplyLoraPlus:
     """
     Apply a LoRA stack to a model.
-    Accepts either a LORA_STACK (list of tuples) or a multiline STRING with one
-    LoRA path/name per line.
+    Accepts either a LORA_STACK (list of tuples), a MULTI_LORA_STACK payload
+    ({a,b,c,d}), or a multiline STRING with one LoRA path/name per line.
     Uses fuzzy matching to find LoRAs on disk — LoRAs not found are skipped.
     """
 
@@ -33,7 +33,7 @@ class ApplyLoraPlus:
     RETURN_NAMES = ("model",)
     FUNCTION = "apply_stack"
     CATEGORY = "FBnodes"
-    DESCRIPTION = "Apply LoRAs to MODEL from either LORA_STACK or newline-separated STRING input, with a global strength multiplier."
+    DESCRIPTION = "Apply LoRAs to MODEL from LORA_STACK, MULTI_LORA_STACK, or newline-separated STRING input, with a global strength multiplier."
 
     @staticmethod
     def _coerce_lora_stack(lora_stack):
@@ -41,13 +41,26 @@ class ApplyLoraPlus:
         if not lora_stack:
             return []
 
-        # Native LORA_STACK format: list[tuple(name, model_strength)]
-        if isinstance(lora_stack, (list, tuple)):
+        def _normalize_entries(entries):
             normalized = []
-            for entry in lora_stack:
+            if not isinstance(entries, (list, tuple)):
+                return normalized
+            for entry in entries:
                 if isinstance(entry, (list, tuple)) and len(entry) >= 2:
                     normalized.append((entry[0], float(entry[1])))
             return normalized
+
+        # MULTI_LORA_STACK format: dict with stacks in slots a/b/c/d.
+        # Flatten in deterministic slot order: a -> b -> c -> d.
+        if isinstance(lora_stack, dict):
+            normalized = []
+            for slot in ("a", "b", "c", "d"):
+                normalized.extend(_normalize_entries(lora_stack.get(slot)))
+            return normalized
+
+        # Native LORA_STACK format: list[tuple(name, model_strength)]
+        if isinstance(lora_stack, (list, tuple)):
+            return _normalize_entries(lora_stack)
 
         # STRING format: one LoRA per line (name or full path)
         if isinstance(lora_stack, str):
@@ -98,8 +111,8 @@ class ApplyLoraPlus:
 class ApplyLTXLoraPlus:
     """
     Apply a LoRA stack to an LTX model with separate video/audio strength multipliers.
-    Accepts either a LORA_STACK (list of tuples) or a multiline STRING with one
-    LoRA path/name per line.
+    Accepts either a LORA_STACK (list of tuples), a MULTI_LORA_STACK payload
+    ({a,b,c,d}), or a multiline STRING with one LoRA path/name per line.
     """
 
     @classmethod
@@ -118,7 +131,7 @@ class ApplyLTXLoraPlus:
     RETURN_NAMES = ("model",)
     FUNCTION = "apply_stack_ltx"
     CATEGORY = "FBnodes"
-    DESCRIPTION = "Apply LoRAs to LTX MODEL from LORA_STACK or newline-separated STRING with separate video/audio/other strength multipliers."
+    DESCRIPTION = "Apply LoRAs to LTX MODEL from LORA_STACK, MULTI_LORA_STACK, or newline-separated STRING with separate video/audio/other strength multipliers."
 
     @staticmethod
     def _coerce_lora_stack(lora_stack):

@@ -232,21 +232,6 @@ def _build_temp_preview_path() -> str:
     return os.path.join(temp_dir, file)
 
 
-def _resolve_video_source_path(video) -> str:
-    if video is None:
-        return ""
-    try:
-        source = video.get_stream_source()
-    except Exception:
-        source = None
-    if not isinstance(source, str) or not source.strip():
-        return ""
-    try:
-        return os.path.realpath(source)
-    except Exception:
-        return source
-
-
 @server.PromptServer.instance.routes.post("/fbnodes/ltx-review/decision")
 async def ltx_review_decision(request):
     try:
@@ -305,9 +290,6 @@ class LTXReview:
                     "tooltip": "When ON, run review flow and decode latents for preview. When OFF, pass through latents immediately and skip decoding."
                 }),
             },
-            "optional": {
-                "preview_video": ("VIDEO", {"tooltip": "Optional source VIDEO used only to preserve review_path passthrough when enable is OFF."}),
-            },
             "hidden": {
                 "unique_id": "UNIQUE_ID",
                 "extra_pnginfo": "EXTRA_PNGINFO",
@@ -318,9 +300,9 @@ class LTXReview:
     RETURN_NAMES = ("video_latent", "audio_latent", "review_path")
     FUNCTION = "review"
     CATEGORY = "FBnodes"
-    DESCRIPTION = "Pause for user review of an LTX pass. Decodes video/audio latents with VAEs, generates review clip internally, then proceed/cancel while preserving latents."
+    DESCRIPTION = "Pause for user review of an LTX pass. Decodes video/audio latents with VAEs and generates review clip internally, then proceed/cancel while preserving latents."
 
-    def review(self, video_latent, audio_latent, video_vae, audio_vae, fps=24.0, timeout=120, on_timeout="proceed", enable=True, preview_video=None, unique_id=None, extra_pnginfo=None):
+    def review(self, video_latent, audio_latent, video_vae, audio_vae, fps=24.0, timeout=120, on_timeout="proceed", enable=True, unique_id=None, extra_pnginfo=None):
         review_metadata = _build_review_metadata(extra_pnginfo)
 
         origin_graph_id = ""
@@ -336,7 +318,7 @@ class LTXReview:
             origin_graph_id = ""
 
         if not bool(enable):
-            passthrough_path = _resolve_video_source_path(preview_video)
+            passthrough_path = ""
             ui = {
                 "ltx_review_video_path": [passthrough_path],
             }

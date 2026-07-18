@@ -1,4 +1,5 @@
 import { app } from "../../scripts/app.js";
+import { api } from "../../scripts/api.js";
 
 function applyJpgQualityVisibility(node) {
     const formatWidget = node.widgets?.find((w) => w?.name === "format");
@@ -88,6 +89,34 @@ function normalizeBool(raw) {
         return !!raw[0];
     }
     return !!raw;
+}
+
+function extractSavePayload(message) {
+    if (!message || typeof message !== "object") {
+        return {};
+    }
+
+    const candidates = [
+        message,
+        message.ui,
+        message.output,
+        message.data,
+    ];
+
+    for (const candidate of candidates) {
+        if (!candidate || typeof candidate !== "object") {
+            continue;
+        }
+        if (
+            candidate.saved_images !== undefined ||
+            candidate.images !== undefined ||
+            candidate.compare_images !== undefined
+        ) {
+            return candidate;
+        }
+    }
+
+    return message;
 }
 
 function addRoundedRectPath(ctx, x, y, w, h, r = 8) {
@@ -684,13 +713,14 @@ function drawCompareCanvas(ctx, node) {
 
 function setResultData(node, message) {
     const state = ensureCompareState(node);
+    const payload = extractSavePayload(message);
 
-    const savedItems = normalizeImageEntries(message?.saved_images ?? message?.images);
-    const compareItems = normalizeImageEntries(message?.compare_images);
+    const savedItems = normalizeImageEntries(payload?.saved_images ?? payload?.images);
+    const compareItems = normalizeImageEntries(payload?.compare_images);
 
     state.savedItems = savedItems;
     state.compareItems = compareItems;
-    state.paired = normalizeBool(message?.compare_paired) && compareItems.length === savedItems.length;
+    state.paired = normalizeBool(payload?.compare_paired) && compareItems.length === savedItems.length;
     if (!state.paired) {
         state.paired = compareItems.length > 0 && compareItems.length === savedItems.length;
     }
@@ -709,6 +739,53 @@ function setResultData(node, message) {
 
     persistCompareData(node, state);
     ensureMinDisplaySize(node);
+}
+
+const _fbSaveImageExecutedCache = new Map();
+let _fbSaveImageExecutedListenerInstalled = false;
+
+function cacheExecutedPayload(detail) {
+    const nodeId = detail?.node;
+    if (nodeId === undefined || nodeId === null) {
+        return;
+    }
+
+    const payload = extractSavePayload(detail?.output);
+    const hasSaved = normalizeImageEntries(payload?.saved_images ?? payload?.images).length > 0;
+    const hasCompare = normalizeImageEntries(payload?.compare_images).length > 0;
+    if (!hasSaved && !hasCompare) {
+        return;
+    }
+
+    _fbSaveImageExecutedCache.set(String(nodeId), payload);
+}
+
+function restoreFromExecutedCache(node) {
+    const nodeId = node?.id;
+    if (nodeId === undefined || nodeId === null) {
+        return false;
+    }
+
+    const cached = _fbSaveImageExecutedCache.get(String(nodeId));
+    if (!cached) {
+        return false;
+    }
+
+    setResultData(node, cached);
+    node.imgs = [];
+    node.setDirtyCanvas?.(true, true);
+    return true;
+}
+
+function installExecutedSync() {
+    if (_fbSaveImageExecutedListenerInstalled) {
+        return;
+    }
+    _fbSaveImageExecutedListenerInstalled = true;
+
+    api.addEventListener("executed", (event) => {
+        cacheExecutedPayload(event?.detail || {});
+    });
 }
 
 function persistCompareData(node, state) {
@@ -1008,6 +1085,8 @@ app.registerExtension({
             this.imgs = [];
             applyJpgQualityVisibility(this);
             installKeyNavigation();
+            installExecutedSync();
+            restoreFromExecutedCache(this);
             return result;
         };
 
@@ -1023,6 +1102,7 @@ app.registerExtension({
 
             this.imgs = [];
             applyJpgQualityVisibility(this);
+            restoreFromExecutedCache(this);
             ensureMinDisplaySize(this);
             return result;
         };
@@ -1031,7 +1111,11 @@ app.registerExtension({
         nodeType.prototype.onExecuted = function (message) {
             const result = onExecuted?.apply(this, arguments);
 
-            setResultData(this, message || {});
+            const payload = extractSavePayload(message || {});
+            setResultData(this, payload);
+            if (this.id !== undefined && this.id !== null) {
+                _fbSaveImageExecutedCache.set(String(this.id), payload);
+            }
             const state = ensureCompareState(this);
 
             if (!this.properties) {

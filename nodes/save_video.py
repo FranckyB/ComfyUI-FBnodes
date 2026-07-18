@@ -578,6 +578,77 @@ class SaveVideoPlus:
             # Use NVIDIA encoder for preview if available
             preview_codec, preview_is_nvidia = _detect_nvidia_encoder("h264")
 
+            def _transcode_preview_from_file(source_path: str, target_path: str, selected_codec_name: str, selected_is_nvidia: bool):
+                method = "nvidia" if selected_is_nvidia else "cpu"
+                _log(
+                    f"Transcoding preview from encoded file (PyAV): method={method}, encoder={selected_codec_name}, "
+                    f"source={source_path}, target={target_path}"
+                )
+
+                with av.open(source_path) as source, av.open(target_path, mode='w', format='mp4') as output:
+                    src_video = next((s for s in source.streams if s.type == 'video'), None)
+                    if src_video is None:
+                        raise RuntimeError("Source file has no video stream")
+
+                    src_rate = src_video.average_rate if src_video.average_rate is not None else frame_rate_frac
+                    out_video = output.add_stream(selected_codec_name, rate=src_rate)
+                    out_video.width = int(getattr(src_video, 'width', 0) or width)
+                    out_video.height = int(getattr(src_video, 'height', 0) or height)
+                    out_video.pix_fmt = 'yuv420p'
+
+                    if selected_is_nvidia:
+                        out_video.options = {'cq': '23', 'rc': 'vbr'}
+                    else:
+                        out_video.options = {'crf': '23', 'preset': 'fast'}
+
+                    src_audio = next((s for s in source.streams if s.type == 'audio'), None)
+                    out_audio = None
+                    resampler = None
+                    if src_audio is not None:
+                        sample_rate = int(getattr(src_audio, 'rate', 0) or 44100)
+                        channels = int(getattr(src_audio, 'channels', 0) or 2)
+                        layout = 'mono' if channels <= 1 else 'stereo'
+                        out_audio = output.add_stream('aac', rate=sample_rate)
+                        resampler = av.audio.resampler.AudioResampler(
+                            format='fltp',
+                            layout=layout,
+                            rate=sample_rate,
+                        )
+
+                    for frame in source.decode(video=src_video.index):
+                        frame = frame.reformat(format='yuv420p')
+                        for packet in out_video.encode(frame):
+                            output.mux(packet)
+
+                    for packet in out_video.encode(None):
+                        output.mux(packet)
+
+                    if src_audio is not None and out_audio is not None:
+                        for frame in source.decode(audio=src_audio.index):
+                            converted = resampler.resample(frame) if resampler is not None else frame
+                            frames = converted if isinstance(converted, list) else [converted]
+                            for audio_frame in frames:
+                                if audio_frame is None:
+                                    continue
+                                for packet in out_audio.encode(audio_frame):
+                                    output.mux(packet)
+
+                        if resampler is not None:
+                            try:
+                                tail = resampler.resample(None)
+                            except Exception:
+                                tail = None
+                            if tail is not None:
+                                tail_frames = tail if isinstance(tail, list) else [tail]
+                                for audio_frame in tail_frames:
+                                    if audio_frame is None:
+                                        continue
+                                    for packet in out_audio.encode(audio_frame):
+                                        output.mux(packet)
+
+                        for packet in out_audio.encode(None):
+                            output.mux(packet)
+
             def _encode_preview_to_path(target_path: str, selected_codec_name: str, selected_is_nvidia: bool):
                 method = "nvidia" if selected_is_nvidia else "cpu"
                 _log(f"Encoding preview: method={method}, encoder={selected_codec_name}, path={target_path}")
@@ -629,13 +700,18 @@ class SaveVideoPlus:
                             preview_output.mux(packet)
 
             try:
-                _encode_preview_to_path(preview_path, preview_codec, preview_is_nvidia)
+                _transcode_preview_from_file(file_path, preview_path, preview_codec, preview_is_nvidia)
             except Exception as e:
                 if preview_is_nvidia:
-                    print(f"[SaveVideoPlus] NVIDIA preview encoder failed ({e}). Falling back to libx264.")
-                    _encode_preview_to_path(preview_path, 'libx264', False)
+                    print(f"[SaveVideoPlus] NVIDIA preview transcode failed ({e}). Falling back to libx264.")
+                    try:
+                        _transcode_preview_from_file(file_path, preview_path, 'libx264', False)
+                    except Exception as e2:
+                        print(f"[SaveVideoPlus] libx264 preview transcode failed ({e2}). Falling back to tensor encode.")
+                        _encode_preview_to_path(preview_path, 'libx264', False)
                 else:
-                    raise
+                    print(f"[SaveVideoPlus] Preview transcode failed ({e}). Falling back to tensor encode.")
+                    _encode_preview_to_path(preview_path, 'libx264', False)
 
             return {
                 "ui": {
