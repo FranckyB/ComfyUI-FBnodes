@@ -2,6 +2,7 @@
 LoadImagePlus - A streamlined image/video loader with file browser and preview.
 """
 import os
+import re
 import json
 import time
 import base64
@@ -29,6 +30,15 @@ LIST_FILES_VIDEO_EXTENSIONS = ['.mp4', '.webm', '.mov', '.avi']
 
 # Cache of probed media metadata keyed by (path, mtime, size)
 _media_meta_cache = {}
+_SOURCE_ANNOTATION_RE = re.compile(r"^(.*)\s+\[(input|output|temp)\]$")
+
+
+def _strip_source_annotation(path: str) -> str:
+    """Strip only Comfy source suffixes like ' [input]' from a selected path."""
+    if not path:
+        return path
+    match = _SOURCE_ANNOTATION_RE.match(path)
+    return match.group(1) if match else path
 
 
 def _probe_media_meta(file_path: str, ext: str) -> dict:
@@ -849,11 +859,7 @@ class LoadImagePlus:
         resolved_path = None
         file_path = ""
         if image and image.strip():
-            file_path = image.strip()
-
-            # Strip annotated filepath suffix from MaskEditor (e.g. "file.png [input]")
-            if ' [' in file_path:
-                file_path = file_path[:file_path.rindex(' [')]
+            file_path = _strip_source_annotation(image.strip())
 
             if not os.path.isabs(file_path):
                 if source_folder == "output":
@@ -1027,7 +1033,7 @@ class LoadImagePlus:
     def IS_CHANGED(cls, image, source_folder="input", frame_position=0.0, mask_data="", **kwargs):
         mtime = "no_file"
         if image:
-            file_path = image.strip()
+            file_path = _strip_source_annotation(image.strip())
             if not os.path.isabs(file_path):
                 if source_folder == "output":
                     base_dir = folder_paths.get_output_directory()
