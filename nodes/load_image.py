@@ -658,6 +658,94 @@ def load_image_as_tensor(file_path):
         return None, None
 
 
+def _stroke_points_to_pixels(points, width, height):
+    out = []
+    for point in points or []:
+        if not isinstance(point, (list, tuple)) or len(point) < 2:
+            continue
+        try:
+            x = max(0.0, min(1.0, float(point[0]))) * max(1, width - 1)
+            y = max(0.0, min(1.0, float(point[1]))) * max(1, height - 1)
+            out.append((x, y))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def _smooth_stroke_points(points):
+    if len(points) < 3:
+        return points
+
+    smoothed = [points[0]]
+    for i in range(1, len(points) - 1):
+        p0 = points[i]
+        p1 = ((points[i][0] + points[i + 1][0]) * 0.5, (points[i][1] + points[i + 1][1]) * 0.5)
+        steps = max(4, int(max(abs(p1[0] - smoothed[-1][0]), abs(p1[1] - smoothed[-1][1])) / 4))
+        start = smoothed[-1]
+        for step in range(1, steps + 1):
+            t = step / steps
+            mt = 1.0 - t
+            x = mt * mt * start[0] + 2.0 * mt * t * p0[0] + t * t * p1[0]
+            y = mt * mt * start[1] + 2.0 * mt * t * p0[1] + t * t * p1[1]
+            smoothed.append((x, y))
+    smoothed.append(points[-1])
+    return smoothed
+
+
+def render_stroke_mask(mask_data, width, height, batch_size=1):
+    """Render normalized stroke data from the frontend into a ComfyUI mask tensor."""
+    if not mask_data or not isinstance(mask_data, str):
+        return None
+
+    try:
+        data = json.loads(mask_data)
+    except Exception:
+        return None
+
+    strokes = data.get("strokes") if isinstance(data, dict) else None
+    if not isinstance(strokes, list) or not strokes:
+        return None
+
+    try:
+        from PIL import ImageDraw
+        mask_img = Image.new("L", (int(width), int(height)), 0)
+        draw = ImageDraw.Draw(mask_img)
+
+        for stroke in strokes:
+            if not isinstance(stroke, dict):
+                continue
+            points = _stroke_points_to_pixels(stroke.get("points"), width, height)
+            if not points:
+                continue
+
+            try:
+                size_norm = stroke.get("sizeNorm")
+                if size_norm is not None:
+                    brush_size = int(round(float(size_norm) * max(width, height)))
+                else:
+                    brush_size = int(round(float(stroke.get("size", 24))))
+            except (TypeError, ValueError):
+                brush_size = 24
+            brush_size = max(1, min(max(width, height), brush_size))
+            radius = brush_size * 0.5
+            fill = 0 if stroke.get("mode") == "erase" else 255
+
+            path = _smooth_stroke_points(points)
+            if len(path) > 1:
+                draw.line(path, fill=fill, width=brush_size, joint="curve")
+            for x, y in path:
+                draw.ellipse((x - radius, y - radius, x + radius, y + radius), fill=fill)
+
+        mask_np = (np.array(mask_img) > 0).astype(np.float32)
+        mask_tensor = torch.from_numpy(mask_np).unsqueeze(0)
+        if batch_size > 1:
+            mask_tensor = mask_tensor.repeat(batch_size, 1, 1)
+        return mask_tensor
+    except Exception as e:
+        print(f"[FBnodes] Error rendering LoadImagePlus mask strokes: {e}")
+        return None
+
+
 def get_placeholder_image_tensor():
     """Return a small black square tensor for missing/failed image loads."""
     return torch.zeros((1, 64, 64, 3), dtype=torch.float32)
@@ -703,6 +791,7 @@ class LoadImagePlus:
                 }),
                 "image": (files, {}),
                 "frame_position": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.01, "display": "slider"}),
+                "mask_data": ("STRING", {"default": "", "multiline": False}),
             },
             "hidden": {
                 "unique_id": "UNIQUE_ID",
@@ -720,7 +809,7 @@ class LoadImagePlus:
     def VALIDATE_INPUTS(cls, **kwargs):
         return True
 
-    def load(self, image="", source_folder="input", frame_position=0.0, unique_id=None):
+    def load(self, image="", source_folder="input", frame_position=0.0, mask_data="", unique_id=None):
         if frame_position is None:
             frame_position = 0.0
 
@@ -800,6 +889,12 @@ class LoadImagePlus:
 
         if mask_tensor is None:
             mask_tensor = torch.zeros((64, 64), dtype=torch.float32, device="cpu").unsqueeze(0)
+
+        if image_tensor is not None:
+            _, height, width, _ = image_tensor.shape
+            rendered_mask = render_stroke_mask(mask_data, width, height, image_tensor.shape[0])
+            if rendered_mask is not None:
+                mask_tensor = rendered_mask
 
         return {
             "ui": {"images": preview_images},
@@ -903,7 +998,7 @@ class LoadImagePlus:
         return results
 
     @classmethod
-    def IS_CHANGED(cls, image, source_folder="input", frame_position=0.0, **kwargs):
+    def IS_CHANGED(cls, image, source_folder="input", frame_position=0.0, mask_data="", **kwargs):
         mtime = "no_file"
         if image:
             file_path = image.strip()
@@ -918,4 +1013,4 @@ class LoadImagePlus:
             elif os.path.exists(file_path):
                 mtime = os.path.getmtime(file_path)
 
-        return (mtime, source_folder, frame_position)
+        return (mtime, source_folder, frame_position, mask_data)

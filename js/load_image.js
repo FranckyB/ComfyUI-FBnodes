@@ -15,6 +15,11 @@ import { createFileBrowserModal } from "./file_browser.js";
 
 // Placeholder image path
 const PLACEHOLDER_IMAGE_PATH = new URL("./placeholder.png", import.meta.url).href;
+const MASK_TOOLBAR_MIN_WIDTH = 300;
+const MASK_TOOLBAR_HEIGHT = 26;
+const MASK_PANEL_INSET = 10;
+const MASK_MIN_HEIGHT = 320;
+const MASK_RESIZE_STRIP = 18;
 
 // Track videos that the browser can't decode (H265/yuv444) to skip browser attempt on future scrubs
 const _nonBrowserDecodableVideos = new Set();
@@ -391,6 +396,7 @@ async function loadImageFile(node, filename, requestId) {
             }
             node.imgs = [img];
             node.imageIndex = 0;
+            updateMaskDomImage(node);
             if (!node.properties) node.properties = {};
             node.properties._loadedFramePosition = 0;
 
@@ -425,6 +431,7 @@ function loadVideoFrameFromServer(node, filename, framePosition, viewType, reque
         }
         node.imgs = [img];
         node.imageIndex = 0;
+        updateMaskDomImage(node);
         if (!node.properties) node.properties = {};
         node.properties._loadedFramePosition = framePosition;
 
@@ -504,6 +511,7 @@ async function loadVideoFrame(node, filename, requestId = null) {
                 }
                 node.imgs = [img];
                 node.imageIndex = 0;
+                updateMaskDomImage(node);
                 if (!node.properties) node.properties = {};
                 node.properties._loadedFramePosition = framePosition;
 
@@ -567,10 +575,834 @@ function showPlaceholder(node, requestId = null) {
     placeholderImg.onload = () => {
         node.imgs = [placeholderImg];
         node.imageIndex = 0;
+        updateMaskDomImage(node);
 
         node.setDirtyCanvas(true, true);
         app.graph.setDirtyCanvas(true, true);
     };
+}
+
+function getMaskDataWidget(node) {
+    return node.widgets?.find(w => w.name === "mask_data") || null;
+}
+
+function parseMaskData(value) {
+    if (!value || typeof value !== "string") {
+        return { version: 1, brushSize: 32, erasing: false, strokes: [] };
+    }
+    try {
+        const data = JSON.parse(value);
+        return {
+            version: 1,
+            brushSize: Math.max(1, Number(data?.brushSize || 32)),
+            erasing: !!data?.erasing,
+            strokes: Array.isArray(data?.strokes) ? data.strokes : [],
+        };
+    } catch (err) {
+        return { version: 1, brushSize: 32, erasing: false, strokes: [] };
+    }
+}
+
+function ensureMaskState(node) {
+    if (!node._maskState) {
+        const widget = getMaskDataWidget(node);
+        const stored = widget?.value || node.properties?._maskData || "";
+        const parsed = parseMaskData(stored);
+        node._maskState = {
+            enabled: false,
+            brushSize: parsed.brushSize,
+            erasing: parsed.erasing,
+            hideWhilePressed: false,
+            drawing: false,
+            activeControl: null,
+            activeStroke: null,
+            strokes: parsed.strokes,
+            redo: [],
+        };
+    }
+    return node._maskState;
+}
+
+function syncMaskData(node) {
+    const state = ensureMaskState(node);
+    const data = state.strokes.length > 0 ? JSON.stringify({
+        version: 1,
+        brushSize: state.brushSize,
+        erasing: state.erasing,
+        strokes: state.strokes,
+    }) : "";
+    const widget = getMaskDataWidget(node);
+    if (widget) widget.value = data;
+    if (!node.properties) node.properties = {};
+    node.properties._maskData = data;
+    node.setDirtyCanvas(true, true);
+    app.graph?.setDirtyCanvas(true, true);
+}
+
+function clamp01(value) {
+    return Math.max(0, Math.min(1, value));
+}
+
+function pointInRect(pos, rect) {
+    return !!rect && pos[0] >= rect.x && pos[0] <= rect.x + rect.w && pos[1] >= rect.y && pos[1] <= rect.y + rect.h;
+}
+
+function getMaskBodyTop(node) {
+    const titleHeight = LiteGraph.NODE_TITLE_HEIGHT || 30;
+    const widgetHeight = LiteGraph.NODE_WIDGET_HEIGHT || 20;
+    const visibleWidgets = (node.widgets || []).filter(w => !w.hidden && Number.isFinite(w.last_y));
+    if (visibleWidgets.length === 0) return titleHeight;
+
+    let bottom = titleHeight;
+    for (const widget of visibleWidgets) {
+        const widgetSize = typeof widget.computeSize === "function" ? widget.computeSize(node.size?.[0] || 320) : null;
+        const height = Number(widgetSize?.[1]) || widgetHeight;
+        bottom = Math.max(bottom, widget.last_y + Math.max(1, height));
+    }
+    return bottom + 6;
+}
+
+function getMaskBodyRect(node) {
+    const bodyTop = Math.min(Math.max(0, getMaskBodyTop(node)), Math.max(0, (node.size?.[1] || 1) - 1));
+    return {
+        x: 0,
+        y: bodyTop,
+        w: Math.max(1, node.size?.[0] || 1),
+        h: Math.max(1, (node.size?.[1] || bodyTop + 1) - bodyTop),
+    };
+}
+
+function consumeMaskPointerEvent(event, canvas, node) {
+    event?.preventDefault?.();
+    event?.stopPropagation?.();
+    if (canvas) {
+        if (canvas.node_dragged === node) canvas.node_dragged = null;
+        if (canvas.dragging_node === node) canvas.dragging_node = null;
+    }
+}
+
+function roundedRectPath(ctx, x, y, w, h, r) {
+    const radius = Math.max(0, Math.min(r, w * 0.5, h * 0.5));
+    ctx.moveTo(x + radius, y);
+    ctx.lineTo(x + w - radius, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + radius);
+    ctx.lineTo(x + w, y + h - radius);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - radius, y + h);
+    ctx.lineTo(x + radius, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - radius);
+    ctx.lineTo(x, y + radius);
+    ctx.quadraticCurveTo(x, y, x + radius, y);
+}
+
+function firstFiniteNumber(values) {
+    for (const value of values) {
+        const number = Number(value);
+        if (Number.isFinite(number)) return number;
+    }
+    return NaN;
+}
+
+function getImageDrawRect(node) {
+    const img = node.imgs?.[node.imageIndex || 0] || node.imgs?.[0];
+    const bodyRect = getMaskBodyRect(node);
+    if (!img) return bodyRect;
+
+    const candidates = [
+        node._imageRect,
+        node.imageRect,
+        Array.isArray(node.imageRects) ? node.imageRects[node.imageIndex || 0] : null,
+    ];
+    for (const r of candidates) {
+        if (!r) continue;
+        const x = firstFiniteNumber([r.x, r[0]]);
+        const y = firstFiniteNumber([r.y, r[1]]);
+        const w = firstFiniteNumber([r.w, r.width, r[2]]);
+        const h = firstFiniteNumber([r.h, r.height, r[3]]);
+        if (Number.isFinite(x) && Number.isFinite(y) && w > 0 && h > 0) {
+            return { x, y, w, h };
+        }
+    }
+
+    const imgW = img.naturalWidth || img.videoWidth || img.width || 1;
+    const imgH = img.naturalHeight || img.videoHeight || img.height || 1;
+    const scale = Math.min(bodyRect.w / imgW, bodyRect.h / imgH);
+    const w = imgW * scale;
+    const h = imgH * scale;
+    return {
+        x: bodyRect.x + (bodyRect.w - w) * 0.5,
+        y: bodyRect.y + (bodyRect.h - h) * 0.5,
+        w,
+        h,
+    };
+}
+
+function ensureMaskNodeWidth(node) {
+    if (!node?.size || node.size[0] >= MASK_TOOLBAR_MIN_WIDTH) return;
+    if (typeof node.setSize === "function") {
+        node.setSize([MASK_TOOLBAR_MIN_WIDTH, node.size[1]]);
+    } else {
+        node.size[0] = MASK_TOOLBAR_MIN_WIDTH;
+    }
+}
+
+function localToMaskPoint(pos, rect) {
+    return [
+        clamp01((pos[0] - rect.x) / rect.w),
+        clamp01((pos[1] - rect.y) / rect.h),
+    ];
+}
+
+function drawSmoothMaskStroke(ctx, stroke, rect) {
+    const points = Array.isArray(stroke.points) ? stroke.points : [];
+    if (points.length === 0) return;
+    const toCanvas = (p) => [rect.x + clamp01(Number(p[0])) * rect.w, rect.y + clamp01(Number(p[1])) * rect.h];
+    const scaledSize = Math.max(1, Number(stroke.sizeNorm || 0) * Math.max(rect.w, rect.h) || Number(stroke.size || 24));
+
+    ctx.save();
+    try {
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        ctx.lineWidth = scaledSize;
+        ctx.globalCompositeOperation = stroke.mode === "erase" ? "destination-out" : "source-over";
+        ctx.strokeStyle = "rgba(255, 0, 0, 1)";
+        ctx.fillStyle = "rgba(255, 0, 0, 1)";
+
+        const first = toCanvas(points[0]);
+        if (points.length === 1) {
+            ctx.beginPath();
+            ctx.arc(first[0], first[1], scaledSize * 0.5, 0, Math.PI * 2);
+            ctx.fill();
+            return;
+        }
+
+        ctx.beginPath();
+        ctx.moveTo(first[0], first[1]);
+        for (let i = 1; i < points.length - 1; i++) {
+            const current = toCanvas(points[i]);
+            const next = toCanvas(points[i + 1]);
+            ctx.quadraticCurveTo(current[0], current[1], (current[0] + next[0]) * 0.5, (current[1] + next[1]) * 0.5);
+        }
+        const last = toCanvas(points[points.length - 1]);
+        ctx.lineTo(last[0], last[1]);
+        ctx.stroke();
+    } finally {
+        ctx.restore();
+    }
+}
+
+function drawMaskOverlay(ctx, node) {
+    if (node._maskDom) return;
+    const state = ensureMaskState(node);
+    const rect = getImageDrawRect(node);
+    node._maskImageRect = rect;
+    if (!state.enabled || !rect) {
+        node._maskControls = null;
+        return;
+    }
+
+    ctx.save();
+    try {
+        ctx.beginPath();
+        ctx.rect(rect.x, rect.y, rect.w, rect.h);
+        ctx.clip();
+
+        if (!state.hideWhilePressed && state.strokes.length > 0 && rect.w > 0 && rect.h > 0) {
+            const maskCanvas = document.createElement("canvas");
+            maskCanvas.width = Math.max(1, Math.round(rect.w));
+            maskCanvas.height = Math.max(1, Math.round(rect.h));
+            const maskCtx = maskCanvas.getContext("2d");
+            const localRect = { x: 0, y: 0, w: maskCanvas.width, h: maskCanvas.height };
+            for (const stroke of state.strokes) {
+                drawSmoothMaskStroke(maskCtx, stroke, localRect);
+            }
+            ctx.globalAlpha = 0.5;
+            ctx.drawImage(maskCanvas, rect.x, rect.y, rect.w, rect.h);
+            ctx.globalAlpha = 1;
+        }
+    } finally {
+        ctx.restore();
+    }
+
+    drawMaskToolbar(ctx, node, rect, state);
+}
+
+function drawToolbarIcon(ctx, type, x, y, size, active) {
+    ctx.save();
+    try {
+        ctx.strokeStyle = active ? "#ffffff" : "#d7d7d7";
+        ctx.fillStyle = active ? "#ffffff" : "#d7d7d7";
+        ctx.lineWidth = 1.6;
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        const cx = x + size * 0.5;
+        const cy = y + size * 0.5;
+        if (type === "eye") {
+            ctx.beginPath();
+            ctx.ellipse(cx, cy, size * 0.34, size * 0.22, 0, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.arc(cx, cy, size * 0.09, 0, Math.PI * 2);
+            ctx.fill();
+        } else if (type === "undo" || type === "redo") {
+            const dir = type === "undo" ? -1 : 1;
+            ctx.beginPath();
+            ctx.moveTo(cx + dir * size * 0.28, cy - size * 0.16);
+            ctx.quadraticCurveTo(cx - dir * size * 0.16, cy - size * 0.34, cx - dir * size * 0.28, cy + size * 0.02);
+            ctx.quadraticCurveTo(cx - dir * size * 0.12, cy + size * 0.28, cx + dir * size * 0.24, cy + size * 0.16);
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(cx - dir * size * 0.30, cy + size * 0.02);
+            ctx.lineTo(cx - dir * size * 0.10, cy - size * 0.12);
+            ctx.lineTo(cx - dir * size * 0.10, cy + size * 0.16);
+            ctx.closePath();
+            ctx.fill();
+        } else if (type === "erase") {
+            ctx.translate(cx, cy);
+            ctx.rotate(-0.7);
+            ctx.strokeRect(-size * 0.22, -size * 0.13, size * 0.44, size * 0.26);
+            ctx.beginPath();
+            ctx.moveTo(size * 0.02, -size * 0.13);
+            ctx.lineTo(size * 0.02, size * 0.13);
+            ctx.stroke();
+        } else if (type === "clear") {
+            ctx.beginPath();
+            ctx.moveTo(cx - size * 0.18, cy - size * 0.18);
+            ctx.lineTo(cx + size * 0.18, cy + size * 0.18);
+            ctx.moveTo(cx + size * 0.18, cy - size * 0.18);
+            ctx.lineTo(cx - size * 0.18, cy + size * 0.18);
+            ctx.stroke();
+        }
+    } finally {
+        ctx.restore();
+    }
+}
+
+function drawMaskToolbar(ctx, node, rect, state) {
+    const height = MASK_TOOLBAR_HEIGHT;
+    const margin = 6;
+    const button = 22;
+    const gap = 5;
+    const fixedControlsW = button * 5 + gap * 5 + 12;
+    const bodyRect = getMaskBodyRect(node);
+    const toolbarW = Math.max(1, bodyRect.w - margin * 2);
+    const toolbarX = bodyRect.x + margin;
+    const toolbarY = bodyRect.y + margin;
+    const sliderW = Math.max(42, toolbarW - fixedControlsW);
+    const controls = {};
+
+    ctx.save();
+    try {
+        ctx.fillStyle = "rgba(30, 31, 36, 0.92)";
+        ctx.strokeStyle = "rgba(255, 255, 255, 0.22)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        roundedRectPath(ctx, toolbarX, toolbarY, toolbarW, height, 4);
+        ctx.fill();
+        ctx.stroke();
+
+        const sliderX = toolbarX + 8;
+        const sliderY = toolbarY + height * 0.5;
+        controls.slider = { x: sliderX, y: toolbarY, w: sliderW, h: height };
+        ctx.strokeStyle = "#6e879c";
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(sliderX, sliderY);
+        ctx.lineTo(sliderX + sliderW, sliderY);
+        ctx.stroke();
+        const t = (Math.max(1, Math.min(128, state.brushSize)) - 1) / 127;
+        ctx.strokeStyle = "#41a7d8";
+        ctx.beginPath();
+        ctx.moveTo(sliderX, sliderY);
+        ctx.lineTo(sliderX + sliderW * t, sliderY);
+        ctx.stroke();
+        ctx.fillStyle = "#d8dce2";
+        ctx.strokeStyle = "#ffffff";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(sliderX + sliderW * t, sliderY, 6, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.stroke();
+
+        let x = sliderX + sliderW + gap;
+        for (const item of ["eye", "undo", "redo", "erase", "clear"]) {
+            const active = (item === "erase" && state.erasing) || (item === "eye" && state.hideWhilePressed);
+            controls[item] = { x, y: toolbarY + 2, w: button, h: button };
+            ctx.fillStyle = active ? "rgba(65, 167, 216, 0.6)" : "rgba(255, 255, 255, 0.08)";
+            ctx.strokeStyle = active ? "rgba(255, 255, 255, 0.45)" : "rgba(255, 255, 255, 0.18)";
+            ctx.beginPath();
+            roundedRectPath(ctx, x, toolbarY + 2, button, button, 4);
+            ctx.fill();
+            ctx.stroke();
+            drawToolbarIcon(ctx, item, x, toolbarY + 2, button, active);
+            x += button + gap;
+        }
+    } finally {
+        ctx.restore();
+    }
+    node._maskControls = controls;
+}
+
+function maskControlAt(node, localPos) {
+    const controls = node._maskControls;
+    if (!controls) return null;
+    for (const [name, rect] of Object.entries(controls)) {
+        if (pointInRect(localPos, rect)) return name;
+    }
+    return null;
+}
+
+function updateBrushFromSlider(node, localPos) {
+    const slider = node._maskControls?.slider;
+    if (!slider) return;
+    const state = ensureMaskState(node);
+    const t = clamp01((localPos[0] - slider.x) / slider.w);
+    state.brushSize = Math.round(1 + t * 127);
+    syncMaskData(node);
+}
+
+function appendMaskPoint(node, localPos) {
+    const state = ensureMaskState(node);
+    const rect = node._maskImageRect || getImageDrawRect(node);
+    if (!state.activeStroke || !rect) return;
+    const point = localToMaskPoint(localPos, rect);
+    const points = state.activeStroke.points;
+    const last = points[points.length - 1];
+    if (last && Math.abs(last[0] - point[0]) < 0.0015 && Math.abs(last[1] - point[1]) < 0.0015) return;
+    points.push(point);
+    node.setDirtyCanvas(true, true);
+}
+
+function getCurrentPreviewImage(node) {
+    return node.imgs?.[node.imageIndex || 0] || node.imgs?.[0] || node._maskDomSourceImg || null;
+}
+
+function updateMaskDomImage(node) {
+    if (!node._maskDom) return;
+    const img = getCurrentPreviewImage(node);
+    if (!img || !img.src) return;
+    node._maskDomSourceImg = img;
+    const dom = node._maskDom;
+    const changed = dom.img.src !== img.src;
+    if (changed) dom.img.src = img.src;
+    dom.img.draggable = false;
+    if (changed) resizeMaskNodeToFit(node);
+}
+
+function resizeMaskNodeToFit(node) {
+    const dom = node._maskDom;
+    if (!dom || typeof node.setSize !== "function") return;
+    // Auto-size the node ONCE (first image) to the image aspect, exactly like
+    // TrixLoader. After that the node is freely resizable: we never touch its
+    // height again, so there is no feedback loop fighting the resize handle.
+    if (node._maskAutoSized || node._configuredFromWorkflow) return;
+    node._maskAutoSized = true;
+    const width = Math.max(MASK_TOOLBAR_MIN_WIDTH, node.size?.[0] || MASK_TOOLBAR_MIN_WIDTH);
+    const top = getMaskControlBottom(node);
+    const target = top + dom.getDefaultHeight(width);
+    node.setSize([width, target]);
+    node.setDirtyCanvas(true, true);
+    app.graph?.setDirtyCanvas(true, true);
+}
+
+function setMaskDomVisible(node, editing) {
+    if (!node._maskDom) return;
+    const dom = node._maskDom;
+    // The DOM image display is ALWAYS shown so the image looks identical whether
+    // mask editing is on or off. Only the toolbar and drawing input are toggled.
+    // The DOM root stays pointer-events:none so empty/transparent areas pass
+    // clicks through to LiteGraph (node stays draggable/resizable). Only the
+    // toolbar (always) and the drawing canvas (only when Mask is On) capture
+    // input. This matches TrixLoader's canvas gating.
+    dom.root.style.display = "block";
+    dom.toolbar.style.display = editing ? "grid" : "none";
+    dom.canvas.style.pointerEvents = editing ? "auto" : "none";
+    dom.canvas.style.cursor = editing ? "crosshair" : "default";
+    if (!editing) dom.cursor.style.display = "none";
+    updateMaskDomImage(node);
+    node.setDirtyCanvas(true, true);
+    app.graph?.setDirtyCanvas(true, true);
+}
+
+function getMaskControlBottom(node) {
+    const titleHeight = LiteGraph.NODE_TITLE_HEIGHT || 30;
+    const widgetHeight = LiteGraph.NODE_WIDGET_HEIGHT || 20;
+    let bottom = titleHeight;
+    for (const widget of node.widgets || []) {
+        if (!widget || widget.hidden || widget.name === "fb_mask_editor" || !Number.isFinite(widget.last_y)) continue;
+        const widgetSize = typeof widget.computeSize === "function" ? widget.computeSize(node.size?.[0] || 320) : null;
+        bottom = Math.max(bottom, widget.last_y + (Number(widgetSize?.[1]) || widgetHeight));
+    }
+    return bottom + 6;
+}
+
+function createMaskDomUI(node) {
+    if (node._maskDom || typeof node.addDOMWidget !== "function") return node._maskDom || null;
+
+    const stop = (event) => {
+        event.preventDefault?.();
+        event.stopPropagation?.();
+    };
+    const stopBubble = (event) => {
+        event.stopPropagation?.();
+    };
+
+    const root = document.createElement("div");
+    root.style.cssText = `
+        display: none; position: relative; width: 100%; height: 100%;
+        background: transparent; box-sizing: border-box; pointer-events: none;
+        user-select: none; overflow: hidden; gap: 0;
+    `;
+
+    const toolbar = document.createElement("div");
+    toolbar.style.cssText = `
+        position: absolute; left: 0; top: 0; z-index: 8; width: 100%;
+        display: grid; grid-template-columns: minmax(44px, 1fr) 22px 22px 22px 22px 22px;
+        align-items: center; gap: 4px; height: ${MASK_TOOLBAR_HEIGHT}px;
+        padding: 4px 10px; box-sizing: border-box; background: transparent;
+        pointer-events: auto;
+    `;
+    for (const name of ["mousedown", "mouseup", "mousemove", "click", "dblclick", "contextmenu", "pointerdown", "pointermove", "pointerup"]) {
+        toolbar.addEventListener(name, name === "contextmenu" ? stop : stopBubble, { passive: false });
+    }
+
+    const slider = document.createElement("input");
+    slider.type = "range";
+    slider.min = "1";
+    slider.max = "128";
+    slider.value = String(ensureMaskState(node).brushSize || 32);
+    slider.title = "Brush size";
+    slider.style.cssText = "width: 100%; min-width: 16px; height: 14px; margin: 0; accent-color: #41a7d8; cursor: pointer;";
+    slider.addEventListener("input", () => {
+        const state = ensureMaskState(node);
+        state.brushSize = Math.max(1, Number(slider.value) || 32);
+        syncMaskData(node);
+        updateMaskCursor(node);
+    });
+    slider.addEventListener("pointerdown", stopBubble, { passive: false });
+    slider.addEventListener("mousedown", stopBubble, { passive: false });
+
+    const svgIcon = (inner) =>
+        `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" ` +
+        `stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${inner}</svg>`;
+    const ICON_EYE = svgIcon('<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle>');
+    const ICON_UNDO = svgIcon('<polyline points="9 14 4 9 9 4"></polyline><path d="M20 20v-7a4 4 0 0 0-4-4H4"></path>');
+    const ICON_REDO = svgIcon('<polyline points="15 14 20 9 15 4"></polyline><path d="M4 20v-7a4 4 0 0 1 4-4h12"></path>');
+    const ICON_ERASE = svgIcon('<path d="M20 20H7L3 16C2.5 15.5 2.5 14.5 3 14L13 4C13.5 3.5 14.5 3.5 15 4L20 9C20.5 9.5 20.5 10.5 20 11L11 20H20V20Z"></path><line x1="17" y1="14" x2="10" y2="7"></line>');
+    const ICON_CLEAR = svgIcon('<polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line>');
+
+    const makeButton = (iconSvg, title) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.innerHTML = iconSvg;
+        button.title = title;
+        button.style.cssText = `
+            width: 22px; height: 20px; padding: 0; margin: 0; border-radius: 4px;
+            border: none; background: transparent; color: #b9c2ce; cursor: pointer;
+            display: flex; align-items: center; justify-content: center;
+            line-height: 0; flex-shrink: 0; transition: background 0.12s, color 0.12s;
+        `;
+        button.addEventListener("pointerenter", () => {
+            if (button.dataset.active !== "1") button.style.background = "rgba(255,255,255,0.10)";
+            button.style.color = "#eef2f7";
+        });
+        button.addEventListener("pointerleave", () => {
+            if (button.dataset.active !== "1") {
+                button.style.background = "transparent";
+                button.style.color = "#b9c2ce";
+            }
+        });
+        button.addEventListener("pointerdown", stop, { passive: false });
+        button.addEventListener("click", stop, { passive: false });
+        return button;
+    };
+
+    const eyeBtn = makeButton(ICON_EYE, "Hold to hide mask");
+    const undoBtn = makeButton(ICON_UNDO, "Undo");
+    const redoBtn = makeButton(ICON_REDO, "Redo");
+    const eraseBtn = makeButton(ICON_ERASE, "Erase");
+    const clearBtn = makeButton(ICON_CLEAR, "Clear");
+
+    toolbar.append(slider, eyeBtn, undoBtn, redoBtn, eraseBtn, clearBtn);
+
+    const preview = document.createElement("div");
+    preview.style.cssText = `position: absolute; left: 0; top: ${MASK_TOOLBAR_HEIGHT}px; right: 0; bottom: 0; overflow: hidden; background: transparent; display: block;`;
+
+    const imgWrap = document.createElement("div");
+    imgWrap.style.cssText = "position: absolute; left: 0; top: 0; transform-origin: 0 0; overflow: visible;";
+
+    const img = document.createElement("img");
+    img.draggable = false;
+    img.crossOrigin = "anonymous";
+    img.style.cssText = "position: absolute; left: 0; top: 0; display: block; object-fit: fill; user-select: none; pointer-events: none;";
+
+    const canvas = document.createElement("canvas");
+    canvas.style.cssText = "position: absolute; left: 0; top: 0; pointer-events: auto; cursor: crosshair; touch-action: none;";
+
+    const cursor = document.createElement("div");
+    cursor.style.cssText = `
+        position: absolute; display: none; border: 1.5px solid rgba(255,255,255,0.9);
+        border-radius: 50%; pointer-events: none; transform: translate(-50%, -50%);
+        box-sizing: border-box; z-index: 4; box-shadow: 0 0 2px rgba(0,0,0,0.85);
+    `;
+    cursor.innerHTML = `<div style="position:absolute;left:50%;top:50%;width:2px;height:2px;border-radius:50%;background:white;transform:translate(-50%,-50%);box-shadow:0 0 1px black;"></div>`;
+
+    imgWrap.append(img, canvas, cursor);
+    preview.append(imgWrap);
+    root.append(toolbar, preview);
+
+    const fitCanvas = () => {
+        const naturalW = img.naturalWidth || 1;
+        const naturalH = img.naturalHeight || 1;
+        // Use layout box (clientWidth/Height) which is NOT affected by LiteGraph
+        // canvas zoom, unlike getBoundingClientRect (screen pixels).
+        const boxW = preview.clientWidth;
+        const boxH = preview.clientHeight;
+        if (boxW <= 0 || boxH <= 0) return;
+        const scale = Math.min(boxW / naturalW, boxH / naturalH);
+        const width = Math.max(1, naturalW * scale);
+        const height = Math.max(1, naturalH * scale);
+        const left = (boxW - width) * 0.5;
+        const top = (boxH - height) * 0.5;
+        imgWrap.style.left = `${left}px`;
+        imgWrap.style.top = `${top}px`;
+        imgWrap.style.width = `${width}px`;
+        imgWrap.style.height = `${height}px`;
+        img.style.left = "0px";
+        img.style.top = "0px";
+        img.style.width = `${width}px`;
+        img.style.height = `${height}px`;
+        canvas.style.left = "0px";
+        canvas.style.top = "0px";
+        canvas.style.width = `${width}px`;
+        canvas.style.height = `${height}px`;
+        canvas.width = Math.max(1, naturalW);
+        canvas.height = Math.max(1, naturalH);
+        renderMaskDomCanvas(node);
+        updateMaskCursor(node);
+    };
+
+    const toNormPoint = (event) => {
+        const rect = canvas.getBoundingClientRect();
+        return [
+            clamp01((event.clientX - rect.left) / Math.max(1, rect.width)),
+            clamp01((event.clientY - rect.top) / Math.max(1, rect.height)),
+        ];
+    };
+
+    const addPoint = (event) => {
+        const state = ensureMaskState(node);
+        if (!state.activeStroke) return;
+        const point = toNormPoint(event);
+        const points = state.activeStroke.points;
+        const last = points[points.length - 1];
+        if (!last || Math.abs(last[0] - point[0]) > 0.0015 || Math.abs(last[1] - point[1]) > 0.0015) {
+            points.push(point);
+            renderMaskDomCanvas(node);
+        }
+    };
+
+    const updateCursorFromEvent = (event) => {
+        node._maskDom.lastPointerEvent = event;
+        updateMaskCursor(node);
+    };
+
+    canvas.addEventListener("pointerenter", (event) => {
+        updateCursorFromEvent(event);
+        cursor.style.display = "block";
+    }, { passive: false });
+
+    canvas.addEventListener("pointerleave", () => {
+        if (!ensureMaskState(node).drawing) cursor.style.display = "none";
+        node._maskDom.lastPointerEvent = null;
+    }, { passive: false });
+
+    canvas.addEventListener("pointerdown", (event) => {
+        stop(event);
+        if (event.button !== 0) return;
+        if (app.canvas) app.canvas.allow_dragcanvas = false;
+        try { canvas.setPointerCapture(event.pointerId); } catch (err) {}
+        const state = ensureMaskState(node);
+        state.redo = [];
+        state.drawing = true;
+        state.activeStroke = {
+            mode: state.erasing ? "erase" : "draw",
+            size: state.brushSize,
+            sizeNorm: state.brushSize / Math.max(canvas.width, canvas.height),
+            points: [],
+        };
+        state.strokes.push(state.activeStroke);
+        updateCursorFromEvent(event);
+        addPoint(event);
+    }, { passive: false });
+
+    canvas.addEventListener("pointermove", (event) => {
+        const state = ensureMaskState(node);
+        updateCursorFromEvent(event);
+        if (!state.drawing) return;
+        stop(event);
+        addPoint(event);
+    }, { passive: false });
+
+    const finishDrawing = (event) => {
+        const state = ensureMaskState(node);
+        if (!state.drawing && !state.activeStroke) return;
+        stop(event);
+        addPoint(event);
+        state.drawing = false;
+        state.activeStroke = null;
+        if (app.canvas) app.canvas.allow_dragcanvas = true;
+        try { canvas.releasePointerCapture(event.pointerId); } catch (err) {}
+        syncMaskData(node);
+        renderMaskDomCanvas(node);
+        updateMaskCursor(node);
+    };
+    canvas.addEventListener("pointerup", finishDrawing, { passive: false });
+    canvas.addEventListener("pointercancel", finishDrawing, { passive: false });
+
+    eyeBtn.addEventListener("pointerdown", (event) => {
+        stop(event);
+        ensureMaskState(node).hideWhilePressed = true;
+        renderMaskDomCanvas(node);
+    }, { passive: false });
+    const restoreEye = (event) => {
+        stop(event);
+        ensureMaskState(node).hideWhilePressed = false;
+        renderMaskDomCanvas(node);
+    };
+    eyeBtn.addEventListener("pointerup", restoreEye, { passive: false });
+    eyeBtn.addEventListener("pointerleave", restoreEye, { passive: false });
+
+    undoBtn.addEventListener("click", (event) => {
+        stop(event);
+        const state = ensureMaskState(node);
+        const stroke = state.strokes.pop();
+        if (stroke) state.redo.push(stroke);
+        syncMaskData(node);
+        renderMaskDomCanvas(node);
+    }, { passive: false });
+    redoBtn.addEventListener("click", (event) => {
+        stop(event);
+        const state = ensureMaskState(node);
+        const stroke = state.redo.pop();
+        if (stroke) state.strokes.push(stroke);
+        syncMaskData(node);
+        renderMaskDomCanvas(node);
+    }, { passive: false });
+    eraseBtn.addEventListener("click", (event) => {
+        stop(event);
+        const state = ensureMaskState(node);
+        state.erasing = !state.erasing;
+        eraseBtn.dataset.active = state.erasing ? "1" : "0";
+        eraseBtn.style.background = state.erasing ? "#2f6f92" : "transparent";
+        eraseBtn.style.color = state.erasing ? "#ffffff" : "#b9c2ce";
+        syncMaskData(node);
+    }, { passive: false });
+    clearBtn.addEventListener("click", (event) => {
+        stop(event);
+        const state = ensureMaskState(node);
+        state.strokes = [];
+        state.redo = [];
+        syncMaskData(node);
+        renderMaskDomCanvas(node);
+    }, { passive: false });
+
+    img.onload = fitCanvas;
+    const observer = new ResizeObserver(fitCanvas);
+    observer.observe(preview);
+
+    const dom = {
+        root, toolbar, preview, imgWrap, img, canvas, cursor, slider, eraseBtn,
+        observer,
+        // Aspect-fit height used ONCE to pick a sensible default node size on the
+        // first image load. After that the widget just fills the user's node size.
+        getDefaultHeight: (width) => {
+            const imgNode = getCurrentPreviewImage(node);
+            const naturalW = imgNode?.naturalWidth || imgNode?.width || img.naturalWidth || 1;
+            const naturalH = imgNode?.naturalHeight || imgNode?.height || img.naturalHeight || 1;
+            // Panel inner width = node width minus the two side insets.
+            const availableW = Math.max(120, (width || node.size?.[0] || 320) - MASK_PANEL_INSET * 2);
+            const imageH = Math.round(availableW * naturalH / naturalW);
+            return Math.max(MASK_MIN_HEIGHT - 40, imageH + MASK_TOOLBAR_HEIGHT);
+        },
+    };
+    node._maskDom = dom;
+
+    const widget = node.addDOMWidget("fb_mask_editor", "div", root, { hideOnZoom: false });
+    dom.widget = widget;
+    if (widget?.element) {
+        widget.element.style.pointerEvents = "auto";
+        widget.element.style.background = "transparent";
+        widget.element.style.overflow = "hidden";
+    }
+    // Force the DOM panel to match the node width (inset on both sides like the
+    // save image node). Its height is the image-aspect panel height (width-based,
+    // no vertical feedback). A bare strip is left below the panel so the node's
+    // bottom-right resize handle stays reachable.
+    const origWidgetDraw = widget.draw;
+    widget.draw = function (ctx, n, widgetWidth, y, H) {
+        if (origWidgetDraw) origWidgetDraw.apply(this, arguments);
+        if (!this.element || (n.flags && n.flags.collapsed)) return;
+        // Match TrixLoader: pin width/position only, NEVER force height. Letting
+        // the DOM widget fill the node body is what keeps the node freely
+        // resizable. Transparent bg means empty areas show the node's own colour.
+        this.element.style.setProperty("width", (n.size[0] - 2) + "px", "important");
+        this.element.style.setProperty("left", "-9px", "important");
+        this.element.style.setProperty("margin", "0px", "important");
+        this.element.style.setProperty("padding", "0px 2px", "important");
+        this.element.style.setProperty("box-sizing", "border-box", "important");
+        this.element.style.setProperty("background", "transparent", "important");
+        this.element.style.setProperty("overflow", "hidden", "important");
+    };
+    setMaskDomVisible(node, false);
+    return dom;
+}
+
+function renderMaskDomCanvas(node) {
+    const dom = node._maskDom;
+    if (!dom?.canvas) return;
+    const state = ensureMaskState(node);
+    const canvas = dom.canvas;
+    const ctx = canvas.getContext("2d");
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (state.hideWhilePressed) return;
+
+    const maskCanvas = document.createElement("canvas");
+    maskCanvas.width = canvas.width;
+    maskCanvas.height = canvas.height;
+    const maskCtx = maskCanvas.getContext("2d");
+    const rect = { x: 0, y: 0, w: canvas.width, h: canvas.height };
+    for (const stroke of state.strokes) {
+        drawSmoothMaskStroke(maskCtx, stroke, rect);
+    }
+
+    ctx.globalAlpha = 0.5;
+    ctx.drawImage(maskCanvas, 0, 0);
+    ctx.globalAlpha = 1;
+}
+
+function updateMaskCursor(node) {
+    const dom = node._maskDom;
+    if (!dom?.cursor || !dom?.canvas) return;
+
+    const state = ensureMaskState(node);
+    // imgWrap layout size (unscaled) vs its on-screen rect (scaled by zoom).
+    const layoutW = dom.imgWrap.offsetWidth || 1;
+    const wrapRect = dom.imgWrap.getBoundingClientRect();
+    const zoom = wrapRect.width / Math.max(1, layoutW);
+    // Brush size is stored in natural pixels; convert to imgWrap-local layout px.
+    const localScale = layoutW / Math.max(1, dom.canvas.width);
+    const size = Math.max(2, state.brushSize * localScale);
+
+    dom.cursor.style.width = `${size}px`;
+    dom.cursor.style.height = `${size}px`;
+
+    const event = dom.lastPointerEvent;
+    if (event && wrapRect.width > 0 && wrapRect.height > 0) {
+        // Convert screen delta into imgWrap-local layout coordinates.
+        dom.cursor.style.left = `${(event.clientX - wrapRect.left) / zoom}px`;
+        dom.cursor.style.top = `${(event.clientY - wrapRect.top) / zoom}px`;
+        dom.cursor.style.display = "block";
+    }
 }
 
 let _fbLoadImageKeyListenerInstalled = false;
@@ -667,6 +1499,10 @@ app.registerExtension({
             const framePositionWidget = this.widgets?.find(w => w.name === "frame_position");
             if (framePositionWidget) {
                 framePositionWidget.value = coerceFramePosition(framePositionWidget.value);
+            }
+            const maskDataWidget = this.widgets?.find(w => w.name === "mask_data");
+            if (maskDataWidget) {
+                hideWidget(maskDataWidget);
             }
             let imageWidget = null;
             let imagePickerWidget = null;
@@ -997,6 +1833,48 @@ app.registerExtension({
                 this.widgets.splice(imageWidgetIndex + 2, 0, browseButton);
                 Object.defineProperty(browseButton, "node", { value: node });
 
+                const maskButton = {
+                    type: "button",
+                    name: "Mask",
+                    value: null,
+                    callback: () => {
+                        const state = ensureMaskState(node);
+                        state.enabled = !state.enabled;
+                        if (state.enabled) {
+                            ensureMaskNodeWidth(node);
+                            createMaskDomUI(node);
+                            updateMaskDomImage(node);
+                        }
+                        setMaskDomVisible(node, state.enabled);
+                        maskButton.name = state.enabled ? "Mask: On" : "Mask";
+                        node.setDirtyCanvas(true, true);
+                        app.graph?.setDirtyCanvas(true, true);
+                    },
+                    serialize: false
+                };
+                this.widgets.splice(imageWidgetIndex + 3, 0, maskButton);
+                Object.defineProperty(maskButton, "node", { value: node });
+                createMaskDomUI(node);
+
+                // Start at a comfortable default size (only for brand-new nodes;
+                // configured nodes get their saved size restored in onConfigure).
+                if (!node._configuredFromWorkflow) {
+                    const cw = Math.max(node.size?.[0] || 0, MASK_TOOLBAR_MIN_WIDTH + 40);
+                    const ch = Math.max(node.size?.[1] || 0, MASK_MIN_HEIGHT + 140);
+                    node.setSize([cw, ch]);
+                }
+
+                const originalOnResize = node.onResize;
+                node.onResize = function(size) {
+                    // Clamp minimums so the toolbar/image are never cut off. The
+                    // image itself re-fits via the preview ResizeObserver.
+                    if (size) {
+                        if (size[0] < MASK_TOOLBAR_MIN_WIDTH) size[0] = MASK_TOOLBAR_MIN_WIDTH;
+                        if (size[1] < MASK_MIN_HEIGHT) size[1] = MASK_MIN_HEIGHT;
+                    }
+                    return originalOnResize ? originalOnResize.apply(this, arguments) : undefined;
+                };
+
                 node._isVideoFile = false;
 
                 const updateVideoUIVisibility = () => {
@@ -1060,6 +1938,13 @@ app.registerExtension({
                 } else {
                     refreshImageOptionsForSource(node._sourceFolder, { preferredValue: imageWidget?.value });
                 }
+
+                node._maskState = null;
+                const maskWidget = getMaskDataWidget(node);
+                if (maskWidget && !maskWidget.value && node.properties?._maskData) {
+                    maskWidget.value = node.properties._maskData;
+                }
+                ensureMaskState(node);
 
                 // Restore persisted display state from properties (survives tab switches)
                 if (!node.properties) node.properties = {};
@@ -1178,6 +2063,20 @@ app.registerExtension({
                 return true;
             };
 
+            // The image is always shown through the DOM mask-editor widget, so
+            // suppress ComfyUI's native node.imgs preview to avoid a duplicate
+            // copy of the image being drawn (e.g. after the workflow executes).
+            const onDrawBackground = node.onDrawBackground;
+            node.onDrawBackground = function(ctx) {
+                const savedImgs = this.imgs;
+                this.imgs = null;
+                try {
+                    return onDrawBackground ? onDrawBackground.apply(this, arguments) : undefined;
+                } finally {
+                    this.imgs = savedImgs;
+                }
+            };
+
             // Preview play icon
             const onDrawForeground = node.onDrawForeground;
             node.onDrawForeground = function(ctx) {
@@ -1214,6 +2113,7 @@ app.registerExtension({
                     node._previewIconBounds = null;
                 }
 
+                drawMaskOverlay(ctx, node);
                 drawBypassVeil(ctx, node);
 
                 return result;
@@ -1221,6 +2121,9 @@ app.registerExtension({
 
             const onMouseMove = node.onMouseMove;
             node.onMouseMove = function(e, localPos, canvas) {
+                // Mask drawing is handled entirely by the DOM canvas (over the
+                // image only). The node body must NOT start strokes, otherwise it
+                // captures clicks in the corners/margins and blocks resizing.
                 const result = onMouseMove ? onMouseMove.apply(this, arguments) : undefined;
                 if (node._previewIconBounds) {
                     const bounds = node._previewIconBounds;
@@ -1243,6 +2146,8 @@ app.registerExtension({
 
             const onMouseDown = node.onMouseDown;
             node.onMouseDown = function(e, localPos, canvas) {
+                // Mask strokes are captured by the DOM canvas over the image only,
+                // never by the node body — keeps corners/margins free for resizing.
                 if (node._previewIconBounds && node.imgs && node.imgs.length > 0) {
                     const bounds = node._previewIconBounds;
                     if (localPos[0] >= bounds.x && localPos[0] <= bounds.x + bounds.width &&
@@ -1260,6 +2165,11 @@ app.registerExtension({
                     }
                 }
                 return onMouseDown ? onMouseDown.apply(this, arguments) : undefined;
+            };
+
+            const onMouseUp = node.onMouseUp;
+            node.onMouseUp = function(e, localPos, canvas) {
+                return onMouseUp ? onMouseUp.apply(this, arguments) : undefined;
             };
 
             return result;
