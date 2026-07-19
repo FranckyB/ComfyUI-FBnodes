@@ -20,6 +20,11 @@ const MASK_TOOLBAR_HEIGHT = 26;
 const MASK_PANEL_INSET = 10;
 const MASK_MIN_HEIGHT = 320;
 const MASK_RESIZE_STRIP = 18;
+const MASK_PREVIEW_FRAME_GAP = 6;
+const MASK_FOOTER_HEIGHT = 24;
+const MASK_TOOLBAR_FRAME_HEIGHT = MASK_TOOLBAR_HEIGHT + 2;
+const MASK_TOP_INSET_OFF = 0;
+const MASK_TOP_INSET_ON = MASK_TOOLBAR_FRAME_HEIGHT + 2;
 
 // Track videos that the browser can't decode (H265/yuv444) to skip browser attempt on future scrubs
 const _nonBrowserDecodableVideos = new Set();
@@ -357,7 +362,7 @@ function isStalePreviewRequest(node, requestId, expectedFilename) {
  */
 async function loadAndDisplayImage(node, filename) {
     if (!filename || filename === '(none)') {
-        showPlaceholder(node);
+        showEmptyPreview(node);
         return;
     }
     filename = stripAnnotation(filename);
@@ -378,6 +383,39 @@ async function loadAndDisplayImage(node, filename) {
     }
 
     showPlaceholder(node, requestId);
+}
+
+function showEmptyPreview(node, requestId = null) {
+    if (requestId != null && node._previewRequestId !== requestId) {
+        return;
+    }
+    if (!node.properties) node.properties = {};
+    node.properties._loadedImageFilename = null;
+    node.properties._loadedFramePosition = null;
+
+    node.imgs = [];
+    node.imageIndex = 0;
+    node._maskDomSourceImg = null;
+
+    const dom = node._maskDom;
+    if (dom) {
+        dom.hasImage = false;
+        dom.img.removeAttribute("src");
+        dom.imgWrap.style.display = "none";
+        dom.toolbar.style.display = "none";
+        dom.toolbarFrame.style.display = "none";
+        dom.previewFrame.style.display = "block";
+        dom.footer.style.display = "block";
+        dom.footerText.textContent = "—";
+        const ctx = dom.canvas?.getContext?.("2d");
+        if (ctx && dom.canvas.width > 0 && dom.canvas.height > 0) {
+            ctx.clearRect(0, 0, dom.canvas.width, dom.canvas.height);
+        }
+        dom.cursor.style.display = "none";
+    }
+
+    node.setDirtyCanvas(true, true);
+    app.graph?.setDirtyCanvas(true, true);
 }
 
 /**
@@ -1010,14 +1048,43 @@ function getCurrentPreviewImage(node) {
 
 function updateMaskDomImage(node) {
     if (!node._maskDom) return;
-    const img = getCurrentPreviewImage(node);
-    if (!img || !img.src) return;
-    node._maskDomSourceImg = img;
     const dom = node._maskDom;
+    const img = getCurrentPreviewImage(node);
+    if (!img || !img.src) {
+        dom.hasImage = false;
+        dom.img.removeAttribute("src");
+        dom.imgWrap.style.display = "none";
+        dom.toolbar.style.display = "none";
+        dom.toolbarFrame.style.display = "none";
+        dom.previewFrame.style.top = `${MASK_TOP_INSET_OFF}px`;
+        dom.previewFrame.style.display = "block";
+        dom.footer.style.display = "block";
+        dom.footerText.textContent = "—";
+        return;
+    }
+    dom.hasImage = true;
+    node._maskDomSourceImg = img;
     const changed = dom.img.src !== img.src;
     if (changed) dom.img.src = img.src;
     dom.img.draggable = false;
+    dom.imgWrap.style.display = "block";
+    const showToolbar = ensureMaskState(node).enabled;
+    dom.toolbarFrame.style.display = showToolbar ? "block" : "none";
+    dom.toolbar.style.display = showToolbar ? "grid" : "none";
+    dom.previewFrame.style.top = showToolbar
+        ? `${MASK_TOP_INSET_ON}px`
+        : `${MASK_TOP_INSET_OFF}px`;
+    dom.previewFrame.style.display = "block";
+    dom.footer.style.display = "block";
+    updateMaskFooter(dom);
     if (changed) resizeMaskNodeToFit(node);
+}
+
+function updateMaskFooter(dom) {
+    if (!dom?.footerText) return;
+    const width = Number(dom.img?.naturalWidth || 0);
+    const height = Number(dom.img?.naturalHeight || 0);
+    dom.footerText.textContent = width > 0 && height > 0 ? `${width} × ${height}` : "—";
 }
 
 function resizeMaskNodeToFit(node) {
@@ -1046,7 +1113,15 @@ function setMaskDomVisible(node, editing) {
     // toolbar (always) and the drawing canvas (only when Mask is On) capture
     // input. This matches TrixLoader's canvas gating.
     dom.root.style.display = "block";
-    dom.toolbar.style.display = editing ? "grid" : "none";
+    const showImageArea = !!dom.hasImage;
+    const showToolbar = showImageArea && editing;
+    dom.toolbarFrame.style.display = showToolbar ? "block" : "none";
+    dom.toolbar.style.display = showToolbar ? "grid" : "none";
+    dom.previewFrame.style.top = showToolbar
+        ? `${MASK_TOP_INSET_ON}px`
+        : `${MASK_TOP_INSET_OFF}px`;
+    dom.previewFrame.style.display = "block";
+    dom.footer.style.display = "block";
     dom.canvas.style.pointerEvents = editing ? "auto" : "none";
     dom.canvas.style.cursor = editing ? "crosshair" : "default";
     if (!editing) dom.cursor.style.display = "none";
@@ -1086,12 +1161,21 @@ function createMaskDomUI(node) {
         user-select: none; overflow: hidden; gap: 0;
     `;
 
+    const toolbarFrame = document.createElement("div");
+    toolbarFrame.style.cssText = `
+        position: absolute; left: ${MASK_PANEL_INSET}px; right: ${MASK_PANEL_INSET}px;
+        top: 0; height: ${MASK_TOOLBAR_FRAME_HEIGHT}px; z-index: 8;
+        overflow: hidden; background: rgba(34, 39, 48, 0.98); display: none;
+        border: 1px solid rgba(78, 90, 108, 0.72); border-radius: 10px;
+        box-sizing: border-box; pointer-events: none;
+    `;
+
     const toolbar = document.createElement("div");
     toolbar.style.cssText = `
-        position: absolute; left: 0; top: 0; z-index: 8; width: 100%;
+        position: absolute; left: 1px; top: 1px; z-index: 8; width: calc(100% - 2px); height: calc(100% - 2px);
         display: grid; grid-template-columns: minmax(44px, 1fr) 22px 22px 22px 22px 22px;
-        align-items: center; gap: 4px; height: ${MASK_TOOLBAR_HEIGHT}px;
-        padding: 4px 10px; box-sizing: border-box; background: transparent;
+        align-items: center; gap: 4px;
+        padding: 0 10px; box-sizing: border-box; background: transparent;
         pointer-events: auto;
     `;
     for (const name of ["mousedown", "mouseup", "mousemove", "click", "dblclick", "contextmenu", "pointerdown", "pointermove", "pointerup"]) {
@@ -1156,9 +1240,33 @@ function createMaskDomUI(node) {
     const clearBtn = makeButton(ICON_CLEAR, "Clear");
 
     toolbar.append(slider, eyeBtn, undoBtn, redoBtn, eraseBtn, clearBtn);
+    toolbarFrame.append(toolbar);
+
+    const previewFrame = document.createElement("div");
+    previewFrame.style.cssText = `
+        position: absolute; left: ${MASK_PANEL_INSET}px; top: ${MASK_TOP_INSET_OFF}px;
+        right: ${MASK_PANEL_INSET}px; bottom: ${MASK_FOOTER_HEIGHT + MASK_PREVIEW_FRAME_GAP + 8}px;
+        overflow: hidden; background: rgba(34, 39, 48, 0.98); display: none;
+        border: 1px solid rgba(78, 90, 108, 0.72); border-radius: 10px;
+        box-sizing: border-box;
+    `;
 
     const preview = document.createElement("div");
-    preview.style.cssText = `position: absolute; left: 0; top: ${MASK_TOOLBAR_HEIGHT}px; right: 0; bottom: 0; overflow: hidden; background: transparent; display: block;`;
+    preview.style.cssText = "position: absolute; left: 1px; top: 1px; right: 1px; bottom: 1px; overflow: hidden; background: transparent; display: block;";
+
+    const footer = document.createElement("div");
+    footer.style.cssText = `
+        position: absolute; left: ${MASK_PANEL_INSET}px; right: ${MASK_PANEL_INSET}px;
+        bottom: 8px; height: ${MASK_FOOTER_HEIGHT}px; display: none;
+        border-radius: 8px; border: 1px solid rgba(66, 72, 84, 0.95);
+        background: rgba(42, 46, 54, 0.94); box-sizing: border-box;
+        color: rgba(192, 206, 222, 0.95); font: 600 10px "Segoe UI";
+        line-height: ${MASK_FOOTER_HEIGHT}px; text-align: center;
+        pointer-events: none;
+    `;
+    const footerText = document.createElement("span");
+    footerText.textContent = "—";
+    footer.appendChild(footerText);
 
     const imgWrap = document.createElement("div");
     imgWrap.style.cssText = "position: absolute; left: 0; top: 0; transform-origin: 0 0; overflow: visible;";
@@ -1181,7 +1289,8 @@ function createMaskDomUI(node) {
 
     imgWrap.append(img, canvas, cursor);
     preview.append(imgWrap);
-    root.append(toolbar, preview);
+    previewFrame.append(preview);
+    root.append(toolbarFrame, previewFrame, footer);
 
     const fitCanvas = () => {
         const naturalW = img.naturalWidth || 1;
@@ -1210,6 +1319,7 @@ function createMaskDomUI(node) {
         canvas.style.height = `${height}px`;
         canvas.width = Math.max(1, naturalW);
         canvas.height = Math.max(1, naturalH);
+        updateMaskFooter(node._maskDom);
         renderMaskDomCanvas(node);
         updateMaskCursor(node);
     };
@@ -1344,7 +1454,8 @@ function createMaskDomUI(node) {
     observer.observe(preview);
 
     const dom = {
-        root, toolbar, preview, imgWrap, img, canvas, cursor, slider, eraseBtn,
+        root, toolbarFrame, toolbar, previewFrame, preview, footer, footerText, imgWrap, img, canvas, cursor, slider, eraseBtn,
+        hasImage: false,
         observer,
         // Aspect-fit height used ONCE to pick a sensible default node size on the
         // first image load. After that the widget just fills the user's node size.
@@ -1355,7 +1466,10 @@ function createMaskDomUI(node) {
             // Panel inner width = node width minus the two side insets.
             const availableW = Math.max(120, (width || node.size?.[0] || 320) - MASK_PANEL_INSET * 2);
             const imageH = Math.round(availableW * naturalH / naturalW);
-            return Math.max(MASK_MIN_HEIGHT - 40, imageH + MASK_TOOLBAR_HEIGHT);
+            return Math.max(
+                MASK_MIN_HEIGHT - 40,
+                imageH + MASK_TOOLBAR_HEIGHT + MASK_PREVIEW_FRAME_GAP + MASK_FOOTER_HEIGHT + MASK_PREVIEW_FRAME_GAP + 8,
+            );
         },
     };
     node._maskDom = dom;
@@ -1397,6 +1511,7 @@ function renderMaskDomCanvas(node) {
     const canvas = dom.canvas;
     const ctx = canvas.getContext("2d");
     ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (!dom.hasImage) return;
     // Mask turned off (or momentarily hidden) => show no red overlay.
     if (!state.enabled || state.hideWhilePressed) return;
 
@@ -2103,7 +2218,7 @@ app.registerExtension({
                             loadAndDisplayImage(node, imageWidget.value);
                         }
                     } else {
-                        showPlaceholder(node);
+                        showEmptyPreview(node);
                     }
                 }, 10);
             }
