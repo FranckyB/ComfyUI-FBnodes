@@ -232,10 +232,6 @@ function estimateSelectionRowsHeight(state) {
 
 function ensureMinDisplaySize(node) {
     const state = ensureCompareState(node);
-    if (!state.savedItems.length) {
-        return false;
-    }
-
     const contentTop = getContentStartY(node);
     const controlsH = estimateSelectionRowsHeight(state);
     const frameMinH = 140;
@@ -595,13 +591,7 @@ function drawCompareCanvas(ctx, node) {
         return;
     }
     node.imgs = [];
-
-    if (!state.savedItems.length) {
-        state.previewRect = null;
-        state.buttonZones = [];
-        state.gridZones = [];
-        return;
-    }
+    const hasSavedItems = state.savedItems.length > 0;
 
     ensureMinDisplaySize(node);
 
@@ -633,53 +623,62 @@ function drawCompareCanvas(ctx, node) {
     ctx.stroke();
     ctx.clip();
 
-    const savedItem = state.savedItems[state.selectedSaved];
-    const savedUrl = imageInfoToUrl(savedItem);
-    const savedImg = getCachedImage(state, savedUrl, node);
+    let savedImg = null;
     const drawRect = { x: frameX + 1, y: frameY + 1, w: frameW - 2, h: frameH - 2 };
 
-    if (state.gridMode && state.savedItems.length > 1) {
-        drawImageGrid(ctx, state, node, drawRect);
+    if (!hasSavedItems) {
         state.previewRect = null;
+        state.buttonZones = [];
+        state.gridZones = [];
         ctx.restore();
     } else {
-        state.gridZones = [];
-        const savedDraw = drawContainImage(ctx, savedImg, drawRect);
+        const savedItem = state.savedItems[state.selectedSaved];
+        const savedUrl = imageInfoToUrl(savedItem);
+        savedImg = getCachedImage(state, savedUrl, node);
 
-        const hasCompare = state.compareItems.length > 0;
-        const pairedView = state.paired && !state.unpaired;
-        const compareIndex = pairedView ? clampIndex(state.selectedSaved, state.compareItems.length) : state.selectedCompare;
-        const compareItem = hasCompare ? state.compareItems[compareIndex] : null;
+        if (state.gridMode && state.savedItems.length > 1) {
+            drawImageGrid(ctx, state, node, drawRect);
+            state.previewRect = null;
+            ctx.restore();
+        } else {
+            state.gridZones = [];
+            const savedDraw = drawContainImage(ctx, savedImg, drawRect);
 
-        if (compareItem && savedDraw && state.hovering) {
-            const compareUrl = imageInfoToUrl(compareItem);
-            const compareImg = getCachedImage(state, compareUrl, node);
+            const hasCompare = state.compareItems.length > 0;
+            const pairedView = state.paired && !state.unpaired;
+            const compareIndex = pairedView ? clampIndex(state.selectedSaved, state.compareItems.length) : state.selectedCompare;
+            const compareItem = hasCompare ? state.compareItems[compareIndex] : null;
 
-            if (compareImg && compareImg.naturalWidth && compareImg.naturalHeight) {
-                const splitX = savedDraw.x + clamp(state.split, 0, 1) * savedDraw.w;
+            if (compareItem && savedDraw && state.hovering) {
+                const compareUrl = imageInfoToUrl(compareItem);
+                const compareImg = getCachedImage(state, compareUrl, node);
 
-                ctx.save();
-                ctx.beginPath();
-                ctx.rect(savedDraw.x, savedDraw.y, Math.max(0, splitX - savedDraw.x), savedDraw.h);
-                ctx.clip();
-                drawContainImage(ctx, compareImg, drawRect);
-                ctx.restore();
+                if (compareImg && compareImg.naturalWidth && compareImg.naturalHeight) {
+                    const splitX = savedDraw.x + clamp(state.split, 0, 1) * savedDraw.w;
 
-                ctx.fillStyle = "rgba(245, 249, 255, 0.95)";
-                ctx.fillRect(splitX - 1, savedDraw.y, 2, savedDraw.h);
-                ctx.beginPath();
-                ctx.arc(splitX, savedDraw.y + savedDraw.h * 0.5, 5, 0, Math.PI * 2);
-                ctx.fill();
+                    ctx.save();
+                    ctx.beginPath();
+                    ctx.rect(savedDraw.x, savedDraw.y, Math.max(0, splitX - savedDraw.x), savedDraw.h);
+                    ctx.clip();
+                    drawContainImage(ctx, compareImg, drawRect);
+                    ctx.restore();
 
-                state.previewRect = savedDraw;
+                    ctx.fillStyle = "rgba(245, 249, 255, 0.95)";
+                    ctx.fillRect(splitX - 1, savedDraw.y, 2, savedDraw.h);
+                    ctx.beginPath();
+                    ctx.arc(splitX, savedDraw.y + savedDraw.h * 0.5, 5, 0, Math.PI * 2);
+                    ctx.fill();
+
+                    state.previewRect = savedDraw;
+                } else {
+                    state.previewRect = savedDraw;
+                }
             } else {
                 state.previewRect = savedDraw;
             }
-        } else {
-            state.previewRect = savedDraw;
-        }
 
-        ctx.restore();
+            ctx.restore();
+        }
     }
 
     // Footer: image size box. Shows the displayed image's size, or the first
@@ -1087,6 +1086,7 @@ app.registerExtension({
             installKeyNavigation();
             installExecutedSync();
             restoreFromExecutedCache(this);
+            ensureMinDisplaySize(this);
             return result;
         };
 
