@@ -102,6 +102,8 @@ class SwitchAnyBool:
         return {
             "required": {
                 "condition": ("BOOLEAN", {"default": True}),
+            },
+            "optional": {
                 "on_true": ("*", {"lazy": True}),
                 "on_false": ("*", {"lazy": True}),
             },
