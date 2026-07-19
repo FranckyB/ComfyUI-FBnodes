@@ -588,26 +588,32 @@ function getMaskDataWidget(node) {
 
 function parseMaskData(value) {
     if (!value || typeof value !== "string") {
-        return { version: 1, brushSize: 32, erasing: false, strokes: [] };
+        return { version: 1, brushSize: 64, erasing: false, strokes: [] };
     }
     try {
         const data = JSON.parse(value);
         return {
             version: 1,
-            brushSize: Math.max(1, Number(data?.brushSize || 32)),
+            brushSize: Math.max(1, Number(data?.brushSize || 64)),
             erasing: !!data?.erasing,
             strokes: Array.isArray(data?.strokes) ? data.strokes : [],
         };
     } catch (err) {
-        return { version: 1, brushSize: 32, erasing: false, strokes: [] };
+        return { version: 1, brushSize: 64, erasing: false, strokes: [] };
     }
 }
 
 function ensureMaskState(node) {
     if (!node._maskState) {
-        const widget = getMaskDataWidget(node);
-        const stored = widget?.value || node.properties?._maskData || "";
-        const parsed = parseMaskData(stored);
+        // Vector strokes for editing/undo live in node.properties._maskStrokes
+        // (persisted across tab switches / in the workflow). The mask_data widget
+        // itself holds a rasterized PNG data URL for the backend (TrixLoader
+        // style), so parse strokes from properties, falling back to a legacy
+        // JSON widget value for old workflows.
+        const strokeJson = node.properties?._maskStrokes
+            || (typeof getMaskDataWidget(node)?.value === "string" && getMaskDataWidget(node).value.startsWith("{")
+                ? getMaskDataWidget(node).value : "");
+        const parsed = parseMaskData(strokeJson);
         node._maskState = {
             enabled: false,
             brushSize: parsed.brushSize,
@@ -623,18 +629,44 @@ function ensureMaskState(node) {
     return node._maskState;
 }
 
+// Rasterize the current strokes into a full-strength PNG data URL at the image's
+// natural resolution. The alpha channel encodes mask coverage, exactly matching
+// what the user drew (no server-side re-rendering mismatch). This mirrors how
+// ComfyUI-TrixLoader saves its mask (canvas -> PNG data URL -> backend decodes
+// the alpha channel).
+function buildMaskDataURL(node) {
+    const state = ensureMaskState(node);
+    if (!state.strokes || state.strokes.length === 0) return "";
+    const img = getCurrentPreviewImage(node);
+    const domCanvas = node._maskDom?.canvas;
+    const width = Math.max(1, img?.naturalWidth || img?.width || domCanvas?.width || 512);
+    const height = Math.max(1, img?.naturalHeight || img?.height || domCanvas?.height || 512);
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d");
+    const rect = { x: 0, y: 0, w: width, h: height };
+    for (const stroke of state.strokes) {
+        drawSmoothMaskStroke(ctx, stroke, rect);
+    }
+    return canvas.toDataURL("image/png");
+}
+
 function syncMaskData(node) {
     const state = ensureMaskState(node);
-    const data = state.strokes.length > 0 ? JSON.stringify({
+    // Backend consumes a rasterized PNG data URL (TrixLoader style). When Mask is
+    // turned off we output NOTHING (empty value) so the node returns no mask,
+    // while still keeping the strokes below so they come back if re-enabled.
+    const widget = getMaskDataWidget(node);
+    if (widget) widget.value = state.enabled ? buildMaskDataURL(node) : "";
+    // Editable vector strokes persist separately so undo/redo survives reloads.
+    if (!node.properties) node.properties = {};
+    node.properties._maskStrokes = state.strokes.length > 0 ? JSON.stringify({
         version: 1,
         brushSize: state.brushSize,
         erasing: state.erasing,
         strokes: state.strokes,
     }) : "";
-    const widget = getMaskDataWidget(node);
-    if (widget) widget.value = data;
-    if (!node.properties) node.properties = {};
-    node.properties._maskData = data;
     node.setDirtyCanvas(true, true);
     app.graph?.setDirtyCanvas(true, true);
 }
@@ -909,7 +941,7 @@ function drawMaskToolbar(ctx, node, rect, state) {
         ctx.moveTo(sliderX, sliderY);
         ctx.lineTo(sliderX + sliderW, sliderY);
         ctx.stroke();
-        const t = (Math.max(1, Math.min(128, state.brushSize)) - 1) / 127;
+        const t = (Math.max(1, Math.min(512, state.brushSize)) - 1) / 511;
         ctx.strokeStyle = "#41a7d8";
         ctx.beginPath();
         ctx.moveTo(sliderX, sliderY);
@@ -956,7 +988,7 @@ function updateBrushFromSlider(node, localPos) {
     if (!slider) return;
     const state = ensureMaskState(node);
     const t = clamp01((localPos[0] - slider.x) / slider.w);
-    state.brushSize = Math.round(1 + t * 127);
+    state.brushSize = Math.round(1 + t * 511);
     syncMaskData(node);
 }
 
@@ -1019,6 +1051,7 @@ function setMaskDomVisible(node, editing) {
     dom.canvas.style.cursor = editing ? "crosshair" : "default";
     if (!editing) dom.cursor.style.display = "none";
     updateMaskDomImage(node);
+    renderMaskDomCanvas(node);
     node.setDirtyCanvas(true, true);
     app.graph?.setDirtyCanvas(true, true);
 }
@@ -1068,13 +1101,13 @@ function createMaskDomUI(node) {
     const slider = document.createElement("input");
     slider.type = "range";
     slider.min = "1";
-    slider.max = "128";
-    slider.value = String(ensureMaskState(node).brushSize || 32);
+    slider.max = "512";
+    slider.value = String(ensureMaskState(node).brushSize || 64);
     slider.title = "Brush size";
     slider.style.cssText = "width: 100%; min-width: 16px; height: 14px; margin: 0; accent-color: #41a7d8; cursor: pointer;";
     slider.addEventListener("input", () => {
         const state = ensureMaskState(node);
-        state.brushSize = Math.max(1, Number(slider.value) || 32);
+        state.brushSize = Math.max(1, Number(slider.value) || 64);
         syncMaskData(node);
         updateMaskCursor(node);
     });
@@ -1364,7 +1397,8 @@ function renderMaskDomCanvas(node) {
     const canvas = dom.canvas;
     const ctx = canvas.getContext("2d");
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    if (state.hideWhilePressed) return;
+    // Mask turned off (or momentarily hidden) => show no red overlay.
+    if (!state.enabled || state.hideWhilePressed) return;
 
     const maskCanvas = document.createElement("canvas");
     maskCanvas.width = canvas.width;
@@ -1407,6 +1441,44 @@ function updateMaskCursor(node) {
 
 let _fbLoadImageKeyListenerInstalled = false;
 
+// --- Mask keyboard shortcut helpers (active when Mask is On + node selected) ---
+function maskSetBrushSize(node, size) {
+    const state = ensureMaskState(node);
+    state.brushSize = Math.max(1, Math.min(512, Math.round(size)));
+    const dom = node._maskDom;
+    if (dom?.slider) dom.slider.value = String(state.brushSize);
+    syncMaskData(node);
+    updateMaskCursor(node);
+}
+
+function maskToggleErase(node) {
+    const state = ensureMaskState(node);
+    state.erasing = !state.erasing;
+    const dom = node._maskDom;
+    if (dom?.eraseBtn) {
+        dom.eraseBtn.dataset.active = state.erasing ? "1" : "0";
+        dom.eraseBtn.style.background = state.erasing ? "#2f6f92" : "transparent";
+        dom.eraseBtn.style.color = state.erasing ? "#ffffff" : "#b9c2ce";
+    }
+    syncMaskData(node);
+}
+
+function maskUndo(node) {
+    const state = ensureMaskState(node);
+    const stroke = state.strokes.pop();
+    if (stroke) state.redo.push(stroke);
+    syncMaskData(node);
+    renderMaskDomCanvas(node);
+}
+
+function maskRedo(node) {
+    const state = ensureMaskState(node);
+    const stroke = state.redo.pop();
+    if (stroke) state.strokes.push(stroke);
+    syncMaskData(node);
+    renderMaskDomCanvas(node);
+}
+
 function getActiveLoadImageNode() {
     const selected = app.canvas?.selected_nodes;
     if (!selected) return null;
@@ -1442,6 +1514,34 @@ function installArrowKeyNavigation() {
         if (node._stepImageByDelta(dir)) {
             event.preventDefault();
             event.stopPropagation();
+        }
+    }, true);
+
+    // Mask editing shortcuts: only when Mask is On and a single Load Image node is
+    // selected. [ / ] resize the brush, Space toggles the eraser, Ctrl+Z undo and
+    // Ctrl+Shift+Z (or Ctrl+Y) redo.
+    window.addEventListener("keydown", (event) => {
+        if (event.defaultPrevented) return;
+        if (isTypingTarget(event.target)) return;
+
+        const node = getActiveLoadImageNode();
+        if (!node) return;
+        const state = ensureMaskState(node);
+        if (!state.enabled) return;
+
+        const key = event.key;
+        if (key === "[" || key === "]") {
+            const step = Math.max(1, Math.round(state.brushSize * 0.15));
+            maskSetBrushSize(node, state.brushSize + (key === "]" ? step : -step));
+            event.preventDefault();
+            event.stopPropagation();
+            return;
+        }
+        if (key === " " || key === "Spacebar") {
+            maskToggleErase(node);
+            event.preventDefault();
+            event.stopPropagation();
+            return;
         }
     }, true);
 }
@@ -1846,6 +1946,7 @@ app.registerExtension({
                             updateMaskDomImage(node);
                         }
                         setMaskDomVisible(node, state.enabled);
+                        syncMaskData(node);
                         maskButton.name = state.enabled ? "Mask: On" : "Mask";
                         node.setDirtyCanvas(true, true);
                         app.graph?.setDirtyCanvas(true, true);

@@ -692,10 +692,36 @@ def _smooth_stroke_points(points):
     return smoothed
 
 
+def _mask_tensor_from_png_data_url(mask_data, width, height, batch_size=1):
+    """Decode a PNG data URL (as saved by the mask editor) into a
+    ComfyUI mask tensor using the image's alpha channel. This is WYSIWYG: it is the
+    exact raster the user drew, so there is no client/server rendering mismatch."""
+    try:
+        base64_data = mask_data.split(",", 1)[1] if "," in mask_data else mask_data
+        drawn_img = Image.open(io.BytesIO(base64.b64decode(base64_data))).convert("RGBA")
+        if drawn_img.size != (int(width), int(height)):
+            drawn_img = drawn_img.resize((int(width), int(height)), Image.BILINEAR)
+        alpha = np.array(drawn_img.getchannel("A")).astype(np.float32) / 255.0
+        mask_tensor = torch.from_numpy(alpha).unsqueeze(0)
+        if batch_size > 1:
+            mask_tensor = mask_tensor.repeat(batch_size, 1, 1)
+        return mask_tensor
+    except Exception as e:
+        print(f"[FBnodes] Error decoding LoadImagePlus PNG mask: {e}")
+        return None
+
+
 def render_stroke_mask(mask_data, width, height, batch_size=1):
-    """Render normalized stroke data from the frontend into a ComfyUI mask tensor."""
+    """Turn the frontend mask_data into a ComfyUI mask tensor.
+
+    Preferred format is a rasterized PNG data URL (the exact canvas the user drew;
+    its alpha channel is the mask). Legacy JSON stroke data is still supported for
+    backward compatibility with older saved workflows."""
     if not mask_data or not isinstance(mask_data, str):
         return None
+
+    if mask_data.startswith("data:image"):
+        return _mask_tensor_from_png_data_url(mask_data, width, height, batch_size)
 
     try:
         data = json.loads(mask_data)
