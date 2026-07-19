@@ -302,7 +302,7 @@ function drawButton(ctx, rect, text, active) {
     ctx.save();
     ctx.beginPath();
     addRoundedRectPath(ctx, rect.x, rect.y, rect.w, rect.h, 8);
-    ctx.fillStyle = active ? "rgba(49, 92, 130, 0.98)" : "rgba(45, 51, 63, 0.98)";
+    ctx.fillStyle = active ? "rgba(49, 92, 130, 0.98)" : "rgba(34, 39, 48, 0.98)";
     ctx.strokeStyle = active ? "rgba(66, 153, 225, 0.95)" : "rgba(86, 103, 122, 0.6)";
     ctx.lineWidth = 1;
     ctx.fill();
@@ -418,7 +418,7 @@ function drawSelectionRows(ctx, node, state, topY, width) {
     ctx.save();
     ctx.beginPath();
     addRoundedRectPath(ctx, panelX, panelY, panelW, totalH, 10);
-    ctx.fillStyle = "rgba(42, 46, 54, 0.94)";
+    ctx.fillStyle = "rgba(34, 39, 48, 0.98)";
     ctx.strokeStyle = "rgba(66, 72, 84, 0.95)";
     ctx.lineWidth = 1;
     ctx.fill();
@@ -505,7 +505,7 @@ function drawSelectionRows(ctx, node, state, topY, width) {
 
             ctx.beginPath();
             addRoundedRectPath(ctx, boxX, boxY, cbSize, cbSize, 3);
-            ctx.fillStyle = checked ? "rgba(49, 92, 130, 0.98)" : "rgba(45, 51, 63, 0.98)";
+            ctx.fillStyle = checked ? "rgba(49, 92, 130, 0.98)" : "rgba(34, 39, 48, 0.98)";
             ctx.strokeStyle = checked ? "rgba(66, 153, 225, 0.95)" : "rgba(86, 103, 122, 0.7)";
             ctx.lineWidth = 1;
             ctx.fill();
@@ -569,7 +569,7 @@ function drawImageGrid(ctx, state, node, rect) {
         const cellRect = { x: cx, y: cy, w: cellW, h: cellH };
 
         ctx.save();
-        ctx.fillStyle = "rgba(28, 32, 40, 0.92)";
+        ctx.fillStyle = "rgba(34, 39, 48, 0.98)";
         ctx.fillRect(cx, cy, cellW, cellH);
         const url = imageInfoToUrl(items[i]);
         const img = getCachedImage(state, url, node);
@@ -692,7 +692,7 @@ function drawCompareCanvas(ctx, node) {
     ctx.save();
     ctx.beginPath();
     addRoundedRectPath(ctx, footerX, footerY, footerW, footerH, 8);
-    ctx.fillStyle = "rgba(42, 46, 54, 0.94)";
+    ctx.fillStyle = "rgba(34, 39, 48, 0.98)";
     ctx.strokeStyle = "rgba(66, 72, 84, 0.95)";
     ctx.lineWidth = 1;
     ctx.fill();

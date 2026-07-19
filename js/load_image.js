@@ -1259,7 +1259,7 @@ function createMaskDomUI(node) {
         position: absolute; left: ${MASK_PANEL_INSET}px; right: ${MASK_PANEL_INSET}px;
         bottom: 8px; height: ${MASK_FOOTER_HEIGHT}px; display: none;
         border-radius: 8px; border: 1px solid rgba(66, 72, 84, 0.95);
-        background: rgba(42, 46, 54, 0.94); box-sizing: border-box;
+        background: rgba(34, 39, 48, 0.98); box-sizing: border-box;
         color: rgba(192, 206, 222, 0.95); font: 600 10px "Segoe UI";
         line-height: ${MASK_FOOTER_HEIGHT}px; text-align: center;
         pointer-events: none;
