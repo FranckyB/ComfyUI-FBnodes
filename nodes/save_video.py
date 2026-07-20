@@ -626,14 +626,19 @@ class SaveVideoPlus:
                         output.mux(packet)
 
                     if src_audio is not None and out_audio is not None:
-                        for frame in source.decode(audio=0):
-                            converted = resampler.resample(frame) if resampler is not None else frame
-                            frames = converted if isinstance(converted, list) else [converted]
-                            for audio_frame in frames:
-                                if audio_frame is None:
-                                    continue
-                                for packet in out_audio.encode(audio_frame):
-                                    output.mux(packet)
+                        # Re-open source for audio decode so we don't depend on decoder state
+                        # after the video pass has already consumed the first handle.
+                        with av.open(source_path) as audio_source:
+                            audio_stream = next((s for s in audio_source.streams if s.type == 'audio'), None)
+                            if audio_stream is not None:
+                                for frame in audio_source.decode(audio_stream):
+                                    converted = resampler.resample(frame) if resampler is not None else frame
+                                    frames = converted if isinstance(converted, list) else [converted]
+                                    for audio_frame in frames:
+                                        if audio_frame is None:
+                                            continue
+                                        for packet in out_audio.encode(audio_frame):
+                                            output.mux(packet)
 
                         if resampler is not None:
                             try:
@@ -650,6 +655,52 @@ class SaveVideoPlus:
 
                         for packet in out_audio.encode(None):
                             output.mux(packet)
+
+            def _transcode_preview_with_ffmpeg(source_path: str, target_path: str, selected_codec_name: str, selected_is_nvidia: bool) -> bool:
+                method = "nvidia" if selected_is_nvidia else "cpu"
+                cmd = [
+                    "ffmpeg",
+                    "-y",
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-i",
+                    source_path,
+                    "-map",
+                    "0:v:0",
+                    "-map",
+                    "0:a?",
+                    "-movflags",
+                    "use_metadata_tags",
+                    "-map_metadata",
+                    "0",
+                    "-pix_fmt",
+                    "yuv420p",
+                    "-c:v",
+                    selected_codec_name,
+                ]
+
+                if selected_is_nvidia:
+                    cmd.extend(["-rc", "vbr", "-cq", "23"])
+                else:
+                    cmd.extend(["-crf", "23", "-preset", "fast"])
+
+                cmd.extend(["-c:a", "aac", target_path])
+                _log(
+                    f"Transcoding preview from encoded file (ffmpeg): method={method}, encoder={selected_codec_name}, "
+                    f"source={source_path}, target={target_path}"
+                )
+
+                try:
+                    result = subprocess.run(cmd, capture_output=True, text=True)
+                    if result.returncode == 0 and os.path.exists(target_path):
+                        return True
+                    if result.stderr:
+                        _log(f"ffmpeg preview transcode failed: {result.stderr.strip()}")
+                except Exception as e:
+                    _log(f"ffmpeg preview transcode exception: {e}")
+
+                return False
 
             def _encode_preview_to_path(target_path: str, selected_codec_name: str, selected_is_nvidia: bool):
                 method = "nvidia" if selected_is_nvidia else "cpu"
@@ -702,12 +753,14 @@ class SaveVideoPlus:
                             preview_output.mux(packet)
 
             try:
-                _transcode_preview_from_file(file_path, preview_path, preview_codec, preview_is_nvidia)
+                if not _transcode_preview_with_ffmpeg(file_path, preview_path, preview_codec, preview_is_nvidia):
+                    _transcode_preview_from_file(file_path, preview_path, preview_codec, preview_is_nvidia)
             except Exception as e:
                 if preview_is_nvidia:
                     print(f"[SaveVideoPlus] NVIDIA preview transcode failed ({e}). Falling back to libx264.")
                     try:
-                        _transcode_preview_from_file(file_path, preview_path, 'libx264', False)
+                        if not _transcode_preview_with_ffmpeg(file_path, preview_path, 'libx264', False):
+                            _transcode_preview_from_file(file_path, preview_path, 'libx264', False)
                     except Exception as e2:
                         print(f"[SaveVideoPlus] libx264 preview transcode failed ({e2}). Falling back to tensor encode.")
                         _encode_preview_to_path(preview_path, 'libx264', False)
