@@ -1,6 +1,6 @@
 """
 Save Image+ Node
-Save IMAGE tensors as PNG or JPG with date-token path expansion.
+Save IMAGE tensors as PNG with date-token path expansion.
 """
 
 from __future__ import annotations
@@ -41,8 +41,6 @@ def _tensor_to_pil(image_tensor):
 
 
 class SaveImagePlus:
-    FORMATS = ["png", "jpg"]
-
     @classmethod
     def INPUT_TYPES(cls):
         return {
@@ -53,17 +51,6 @@ class SaveImagePlus:
                     {
                         "default": "Pics/%date:yy-MM-dd%/img_%date:HH_mm_ss%",
                         "tooltip": "Output path prefix. Supports %date:format% patterns.",
-                    },
-                ),
-                "format": (cls.FORMATS, {"default": "png"}),
-                "jpg_quality": (
-                    "INT",
-                    {
-                        "default": 95,
-                        "min": 1,
-                        "max": 100,
-                        "step": 1,
-                        "tooltip": "JPEG quality. Ignored for PNG.",
                     },
                 ),
                 "save": (
@@ -88,14 +75,14 @@ class SaveImagePlus:
     FUNCTION = "save_images"
     OUTPUT_NODE = True
     CATEGORY = "FBnodes"
-    DESCRIPTION = "Save images as PNG or JPG with date-token filename support."
+    DESCRIPTION = "Save images as PNG with date-token filename support."
 
-    def save_images(self, images, filename_prefix, format, jpg_quality, save=True, Compare=None, prompt=None, extra_pnginfo=None):
+    def save_images(self, images, filename_prefix, save=True, Compare=None, prompt=None, extra_pnginfo=None):
         if images is None or len(images) == 0:
             return ("",)
 
         filename_prefix = _expand_date_format(filename_prefix)
-        ext = "jpg" if format == "jpg" else "png"
+        ext = "png"
 
         first = images[0]
         height = first.shape[0]
@@ -152,19 +139,15 @@ class SaveImagePlus:
                 file_name = f"{filename}_{counter:05}.{ext}"
             file_path = os.path.join(full_output_folder, file_name)
 
-            if ext == "png":
-                pnginfo = None
-                if not args.disable_metadata:
-                    pnginfo = PngInfo()
-                    if prompt is not None:
-                        pnginfo.add_text("prompt", json.dumps(prompt))
-                    if extra_pnginfo is not None:
-                        for k, v in extra_pnginfo.items():
-                            pnginfo.add_text(k, json.dumps(v))
-                pil_image.save(file_path, pnginfo=pnginfo, compress_level=4)
-            else:
-                pil_image = pil_image.convert("RGB")
-                pil_image.save(file_path, quality=int(jpg_quality), optimize=True)
+            pnginfo = None
+            if not args.disable_metadata:
+                pnginfo = PngInfo()
+                if prompt is not None:
+                    pnginfo.add_text("prompt", json.dumps(prompt))
+                if extra_pnginfo is not None:
+                    for k, v in extra_pnginfo.items():
+                        pnginfo.add_text(k, json.dumps(v))
+            pil_image.save(file_path, pnginfo=pnginfo, compress_level=4)
 
             ui_images.append({
                 "filename": file_name,
