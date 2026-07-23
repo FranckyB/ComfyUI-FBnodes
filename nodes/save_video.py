@@ -579,6 +579,9 @@ class SaveVideoPlus:
             preview_codec, preview_is_nvidia = _detect_nvidia_encoder("h264")
 
             def _transcode_preview_from_file(source_path: str, target_path: str, selected_codec_name: str, selected_is_nvidia: bool):
+                target_dir = os.path.dirname(target_path)
+                if target_dir:
+                    os.makedirs(target_dir, exist_ok=True)
                 method = "nvidia" if selected_is_nvidia else "cpu"
                 _log(
                     f"Transcoding preview from encoded file (PyAV): method={method}, encoder={selected_codec_name}, "
@@ -657,6 +660,9 @@ class SaveVideoPlus:
                             output.mux(packet)
 
             def _transcode_preview_with_ffmpeg(source_path: str, target_path: str, selected_codec_name: str, selected_is_nvidia: bool) -> bool:
+                target_dir = os.path.dirname(target_path)
+                if target_dir:
+                    os.makedirs(target_dir, exist_ok=True)
                 method = "nvidia" if selected_is_nvidia else "cpu"
                 cmd = [
                     "ffmpeg",
@@ -703,6 +709,9 @@ class SaveVideoPlus:
                 return False
 
             def _encode_preview_to_path(target_path: str, selected_codec_name: str, selected_is_nvidia: bool):
+                target_dir = os.path.dirname(target_path)
+                if target_dir:
+                    os.makedirs(target_dir, exist_ok=True)
                 method = "nvidia" if selected_is_nvidia else "cpu"
                 _log(f"Encoding preview: method={method}, encoder={selected_codec_name}, path={target_path}")
                 with av.open(target_path, mode='w', format='mp4') as preview_output:
