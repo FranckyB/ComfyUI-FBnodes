@@ -213,6 +213,7 @@ def _build_temp_preview_path() -> str:
     Match SaveVideo+ preview naming behavior (save=False) with default prefix.
     """
     temp_dir = folder_paths.get_temp_directory()
+    os.makedirs(temp_dir, exist_ok=True)
     base_filename = os.path.basename(_expand_date_format(_SAVE_VIDEO_PREVIEW_PREFIX))
     if not base_filename:
         base_filename = "vid_preview"
@@ -452,6 +453,7 @@ def _path_to_view_entry(abs_path: str) -> dict:
 
     # For out-of-tree paths, copy to temp so /view can load it reliably.
     temp_dir = folder_paths.get_temp_directory()
+    os.makedirs(temp_dir, exist_ok=True)
     base_name = os.path.basename(abs_real)
     stem, ext = os.path.splitext(base_name)
     if not ext:
