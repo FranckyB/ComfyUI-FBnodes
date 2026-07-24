@@ -15,6 +15,8 @@ import server
 
 
 CATEGORY_FOLDERS = {
+    "checkpoints": ["checkpoints"],
+    "diffusion_models": ["diffusion_models", "unet"],
     "checkpoints_unet": ["checkpoints", "diffusion_models", "unet"],
     "latent_upscale": ["latent_upscale_models"],
     "loras": ["loras"],
@@ -54,6 +56,13 @@ def _normalize_rel_path(path):
 
 def _normalize_lookup_key(filename):
     return str(filename or "").strip().lower()
+
+
+def _stem_lookup_key(filename):
+    """Normalize basename without extension for extension-agnostic matching."""
+    value = _normalize_lookup_key(filename)
+    stem, _ext = os.path.splitext(value)
+    return stem or value
 
 
 def _to_os_relative_path(path):
@@ -233,6 +242,14 @@ def _infer_category(widget_name, node_type, value=None, value_field=None):
     value_base = os.path.basename(value_l)
     value_field_l = str(value_field or "").strip().lower()
 
+    # FBnodes Load Models+ nodes have explicit buckets.
+    if node_type_l == "loadcheckpointplus" and widget_key == "ckpt_name":
+        return "checkpoints"
+    if node_type_l == "loaddiffusionmodelplus" and widget_key == "unet_name":
+        return "diffusion_models"
+    if node_type_l == "loadloraplus" and widget_key == "lora_name":
+        return "loras"
+
     is_latent_upscale_node = (
         ("latent" in node_type_l and "upscale" in node_type_l)
         or "loadlatentupscalemodel" in node_type_compact
@@ -368,6 +385,7 @@ def remap_missing_assets(nodes_payload):
 
             basename = os.path.basename(rel_value)
             basename_key = _normalize_lookup_key(basename)
+            stem_key = _stem_lookup_key(basename)
             category_index = indexes.get(category, {})
             matches = category_index.get(basename_key, [])
             match_reason = "exact_basename"
@@ -386,6 +404,20 @@ def remap_missing_assets(nodes_payload):
                 if len(matches) > 0:
                     match_reason = "version_variant_equivalent"
                     ambiguous_reason = "duplicate_or_multiple_version_variants"
+
+            # Stem fallback for extension-less values (e.g. Load Models+ subgraph names).
+            if len(matches) == 0 and stem_key:
+                stem_matches = []
+                for candidate_paths in category_index.values():
+                    for candidate_rel in candidate_paths:
+                        candidate_base = os.path.basename(candidate_rel)
+                        if _stem_lookup_key(candidate_base) == stem_key:
+                            stem_matches.append(candidate_rel)
+
+                if len(stem_matches) > 0:
+                    matches = sorted(set(stem_matches))
+                    match_reason = "exact_stem"
+                    ambiguous_reason = "duplicate_exact_stem"
 
             if len(matches) == 1:
                 new_value = matches[0]
