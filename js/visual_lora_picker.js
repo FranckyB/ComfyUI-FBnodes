@@ -48,21 +48,20 @@ function isTypingTarget(target) {
 let _fbVlpHoveredNode = null;
 let _fbVlpArrowListenerInstalled = false;
 
+function isVlpNodeInGraph(node) {
+    if (!node || !app.graph?._nodes) return false;
+    return app.graph._nodes.includes(node);
+}
+
 function getActiveVisualLoraPickerNode() {
-    // Prefer the node currently under the cursor, then fall back to a single selected node.
-    if (_fbVlpHoveredNode && !_fbVlpHoveredNode.flags?.collapsed) {
+    // Hover-only: only react when the cursor is actually over a live node.
+    if (_fbVlpHoveredNode && !_fbVlpHoveredNode.flags?.collapsed && isVlpNodeInGraph(_fbVlpHoveredNode)) {
         return _fbVlpHoveredNode;
     }
-
-    const selected = app.canvas?.selected_nodes;
-    if (!selected) return null;
-
-    const nodes = Object.values(selected).filter((n) => {
-        const cls = n?.comfyClass || n?.type;
-        return cls === "VisualLoraPicker" && !n.flags?.collapsed;
-    });
-
-    return nodes.length === 1 ? nodes[0] : null;
+    if (_fbVlpHoveredNode && !isVlpNodeInGraph(_fbVlpHoveredNode)) {
+        _fbVlpHoveredNode = null;
+    }
+    return null;
 }
 
 function installVlpArrowNavigation() {
@@ -78,11 +77,11 @@ function installVlpArrowNavigation() {
         const node = getActiveVisualLoraPickerNode();
         if (!node || typeof node._vlpStepImageByDelta !== "function") return;
 
+        const dir = event.key === "ArrowRight" ? 1 : -1;
+        const handled = await node._vlpStepImageByDelta(dir);
+        if (!handled) return;
         event.preventDefault();
         event.stopPropagation();
-
-        const dir = event.key === "ArrowRight" ? 1 : -1;
-        node._vlpStepImageByDelta(dir);
     }, true);
 }
 
@@ -482,6 +481,12 @@ app.registerExtension({
             }
 
             // Track hover the same way SaveImagePlus does: via node mouse events.
+            const onMouseMove = node.onMouseMove;
+            node.onMouseMove = function (event, localPos, canvas) {
+                _fbVlpHoveredNode = this;
+                return onMouseMove?.apply(this, arguments);
+            };
+
             // Also wire the DOM preview overlay so it reports hover reliably.
             const onMouseEnter = node.onMouseEnter;
             node.onMouseEnter = function () {

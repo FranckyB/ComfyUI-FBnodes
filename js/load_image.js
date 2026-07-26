@@ -1607,21 +1607,20 @@ function maskRedo(node) {
 
 let _fbLoadImageHoveredNode = null;
 
+function isLoadImageNodeInGraph(node) {
+    if (!node || !app.graph?._nodes) return false;
+    return app.graph._nodes.includes(node);
+}
+
 function getActiveLoadImageNode() {
-    // Prefer the node currently under the cursor, then fall back to a single selected node.
-    if (_fbLoadImageHoveredNode && !_fbLoadImageHoveredNode.flags?.collapsed) {
+    // Hover-only: only react when the cursor is actually over a live node.
+    if (_fbLoadImageHoveredNode && !_fbLoadImageHoveredNode.flags?.collapsed && isLoadImageNodeInGraph(_fbLoadImageHoveredNode)) {
         return _fbLoadImageHoveredNode;
     }
-
-    const selected = app.canvas?.selected_nodes;
-    if (!selected) return null;
-
-    const nodes = Object.values(selected).filter((n) => {
-        const cls = n?.comfyClass || n?.type;
-        return (cls === "LoadImagePlus" || cls === "BetterImageLoader") && !n.flags?.collapsed;
-    });
-
-    return nodes.length === 1 ? nodes[0] : null;
+    if (_fbLoadImageHoveredNode && !isLoadImageNodeInGraph(_fbLoadImageHoveredNode)) {
+        _fbLoadImageHoveredNode = null;
+    }
+    return null;
 }
 
 function isTypingTarget(target) {
@@ -1644,10 +1643,9 @@ function installArrowKeyNavigation() {
         if (!node || typeof node._stepImageByDelta !== "function") return;
 
         const dir = event.key === "ArrowRight" ? 1 : -1;
-        if (node._stepImageByDelta(dir)) {
-            event.preventDefault();
-            event.stopPropagation();
-        }
+        if (!node._stepImageByDelta(dir)) return;
+        event.preventDefault();
+        event.stopPropagation();
     }, true);
 
     // Mask editing shortcuts: only when Mask is On and a single Load Image node is
@@ -2364,6 +2362,7 @@ app.registerExtension({
 
             const onMouseMove = node.onMouseMove;
             node.onMouseMove = function(e, localPos, canvas) {
+                _fbLoadImageHoveredNode = this;
                 // Mask drawing is handled entirely by the DOM canvas (over the
                 // image only). The node body must NOT start strokes, otherwise it
                 // captures clicks in the corners/margins and blocks resizing.

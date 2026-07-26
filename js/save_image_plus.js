@@ -1002,18 +1002,18 @@ function stepSelectedImage(node, dir) {
 let _fbHoveredSaveImageNode = null;
 let _fbKeyListenerInstalled = false;
 
+function isSaveImageNodeInGraph(node) {
+    if (!node || !app.graph?._nodes) return false;
+    return app.graph._nodes.includes(node);
+}
+
 function getActiveSaveImageNode(nodeType) {
-    // Prefer the node under the cursor, fall back to a single selected node.
-    if (_fbHoveredSaveImageNode && !_fbHoveredSaveImageNode.flags?.collapsed) {
+    // Hover-only: only react when the cursor is actually over this node.
+    if (_fbHoveredSaveImageNode && !_fbHoveredSaveImageNode.flags?.collapsed && isSaveImageNodeInGraph(_fbHoveredSaveImageNode)) {
         return _fbHoveredSaveImageNode;
     }
-
-    const selected = app.canvas?.selected_nodes;
-    if (selected) {
-        const nodes = Object.values(selected).filter((n) => n?.comfyClass === "SaveImagePlus" && !n.flags?.collapsed);
-        if (nodes.length === 1) {
-            return nodes[0];
-        }
+    if (_fbHoveredSaveImageNode && !isSaveImageNodeInGraph(_fbHoveredSaveImageNode)) {
+        _fbHoveredSaveImageNode = null;
     }
     return null;
 }
