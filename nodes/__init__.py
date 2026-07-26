@@ -6,6 +6,7 @@ from .switch_any import SwitchAny, SwitchAnyBool
 from .apply_lora import ApplyLoraPlus, ApplyLTXLoraPlus
 from .latent_preview import install_latent_preview_hook
 from .load_image import LoadImagePlus
+from .visual_lora_picker import VisualLoraPicker
 from .load_audio import LoadAudioPlus
 from .load_video import LoadVideoPlus
 from .load_models_plus import LoadCheckpointPlus, LoadDiffusionModelPlus, LoadLoraPlus
