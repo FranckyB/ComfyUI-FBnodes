@@ -187,6 +187,16 @@ app.registerExtension({
             );
             numericStrengthWidget.serialize = false;
 
+            // Persist the visible strength value to the hidden serialized widget on every
+            // widget value serialization so tab switches never lose it.
+            const originalSerialize = node.serialize;
+            node.serialize = function () {
+                if (strengthWidget && numericStrengthWidget) {
+                    strengthWidget.value = Number(numericStrengthWidget.value);
+                }
+                return originalSerialize ? originalSerialize.apply(this, arguments) : undefined;
+            };
+
             const syncNumericStrength = () => {
                 const v = Number(strengthWidget?.value);
                 if (Number.isFinite(v) && numericStrengthWidget) {
@@ -384,6 +394,18 @@ app.registerExtension({
                     node.properties._vlpImageDir = dirnameForPath(restoredImage);
                 }
 
+                // Strength can become null/undefined after tab switch if widgets_values
+                // deserializes before onConfigure runs. Restore from the serialized
+                // widgets_values array when the hidden widget hasn't been set yet.
+                if (info && info.widgets_values && strengthWidget) {
+                    const idx = this.widgets.findIndex((w) => w.name === "strength_model");
+                    if (idx >= 0 && info.widgets_values[idx] !== undefined && info.widgets_values[idx] !== null) {
+                        strengthWidget.value = Number(info.widgets_values[idx]);
+                    }
+                }
+                if (strengthWidget && (strengthWidget.value == null || !Number.isFinite(Number(strengthWidget.value)))) {
+                    strengthWidget.value = 1.0;
+                }
                 syncNumericStrength();
 
                 const dir = node.properties?._vlpImageDir || dirnameForPath(restoredImage);
