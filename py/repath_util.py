@@ -419,7 +419,9 @@ def remap_missing_assets(nodes_payload):
                     match_reason = "exact_stem"
                     ambiguous_reason = "duplicate_exact_stem"
 
-            if len(matches) == 1:
+            if len(matches) >= 1:
+                # When multiple files share the same basename, deterministically pick
+                # the first sorted candidate instead of leaving the widget unresolved.
                 new_value = matches[0]
                 stats["remapped"] += 1
                 updates.append({
@@ -432,20 +434,10 @@ def remap_missing_assets(nodes_payload):
                     "old_value": old_value,
                     "new_value": _to_os_relative_path(new_value),
                     "reason": match_reason,
+                    "note": "first_match_from_duplicates" if len(matches) > 1 else None,
                 })
-            elif len(matches) > 1:
-                stats["ambiguous"] += 1
-                updates.append({
-                    "node_id": node_id,
-                    "node_type": node_type,
-                    "widget_name": widget_name,
-                    "value_field": value_field,
-                    "category": category,
-                    "status": "ambiguous",
-                    "old_value": old_value,
-                    "matches": matches,
-                    "reason": ambiguous_reason,
-                })
+                if len(matches) > 1:
+                    stats["ambiguous"] += 1
             else:
                 stats["unresolved"] += 1
                 updates.append({
@@ -458,6 +450,13 @@ def remap_missing_assets(nodes_payload):
                     "old_value": old_value,
                     "reason": "basename_not_found",
                 })
+
+    # Recompute stats since we collapsed the single/many cases above. Ensure counts
+    # stay mutually exclusive: ambiguous now counts duplicates that were remapped.
+    stats["remapped"] = sum(1 for u in updates if u.get("status") == "remapped")
+    stats["ambiguous"] = sum(1 for u in updates if u.get("note") == "first_match_from_duplicates")
+    stats["unresolved"] = sum(1 for u in updates if u.get("status") == "unresolved")
+    stats["unchanged"] = sum(1 for u in updates if u.get("status") == "unchanged")
 
     return {
         "success": True,

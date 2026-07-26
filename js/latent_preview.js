@@ -319,8 +319,8 @@ app.registerExtension({
         {
             id: "FBnodes.LatentPreview",
             category: ["FBnodes", "1. Video Sampling", "1. Animated Latent Preview"],
-            name: "Display animated previews when sampling",
-            tooltip: "Enable animated preview during video model sampling (KSampler). Will be disabled if VideoHelperSuite provides this feature.",
+            name: "Display animated or subgraph previews when sampling",
+            tooltip: "Enable animated preview as well as subgraph previews during ksampling.\nWill be ignored if VideoHelperSuite provides this feature.",
             type: "boolean",
             defaultValue: false,
             onChange(value) {
@@ -342,7 +342,7 @@ app.registerExtension({
             id: "FBnodes.LatentPreviewRate",
             category: ["FBnodes", "1. Video Sampling", "2. Playback Rate Override"],
             name: "Playback rate override",
-            tooltip: "Force a specific frame rate for latent preview playback. Set to 0 for auto-detect based on video model. This is the preview FPS, not the output video FPS.",
+            tooltip: "Force a specific frame rate for latent preview playback.\nSet to 0 for auto-detect based on video model.",
             type: "number",
             attrs: {
                 min: 0,
