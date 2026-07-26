@@ -2033,11 +2033,6 @@ app.registerExtension({
                                 enableNavigation: true,
                                 initialPath: initial,
                                 selectedAbsPath,
-                                viewMode: node.properties?._fileBrowserViewMode || "medium",
-                                onViewModeChange: (mode) => {
-                                    if (!node.properties) node.properties = {};
-                                    node.properties._fileBrowserViewMode = mode;
-                                },
                                 navKind: "media",
                                 allowedTypes: ["image", "video"],
                             }

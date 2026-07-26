@@ -79,7 +79,26 @@ let currentSourceFolder = 'input';
 let currentListMode = 'media';
 let currentListKind = 'media';
 let currentAllowedTypes = null;
-let currentViewMode = 'medium';
+let currentViewMode = 'grid';
+const FB_VIEW_MODE_STORAGE_KEY = 'FBnodes.FileBrowser.ViewMode';
+const VALID_VIEW_MODES = ['grid', 'icon', 'list'];
+
+function getStoredViewMode() {
+    try {
+        const stored = localStorage.getItem(FB_VIEW_MODE_STORAGE_KEY);
+        if (stored && VALID_VIEW_MODES.includes(stored)) return stored;
+    } catch (e) {}
+    return 'grid';
+}
+
+function saveViewMode(mode) {
+    try {
+        if (VALID_VIEW_MODES.includes(mode)) {
+            localStorage.setItem(FB_VIEW_MODE_STORAGE_KEY, mode);
+        }
+    } catch (e) {}
+}
+
 let currentDetailSortKey = 'name';
 let currentDetailSortDir = 'asc';
 // Track active audio preview in modal
@@ -132,10 +151,10 @@ function normalizeFilterTypeOptions(types, fallback) {
 
 function normalizeViewMode(mode) {
     const m = String(mode || '').toLowerCase();
-    if (m === 'large' || m === 'detail' || m === 'medium') {
-        return m;
-    }
-    return 'medium';
+    if (m === 'grid' || m === 'large') return 'grid';
+    if (m === 'icon' || m === 'medium') return 'icon';
+    if (m === 'list' || m === 'detail') return 'list';
+    return 'grid';
 }
 
 function normalizeFileEntry(entry) {
@@ -197,7 +216,9 @@ function formatDuration(raw) {
 }
 
 function getCardPreviewHeight() {
-    return currentViewMode === 'large' ? 250 : 150;
+    if (currentViewMode === 'grid') return 250;
+    if (currentViewMode === 'icon') return 150;
+    return 150;
 }
 
 function detailSortIndicator(key) {
@@ -277,7 +298,7 @@ function toggleDetailSort(key) {
 }
 
 function createDetailHeader(container, currentFile, onFileSelect, overlay, breadcrumbElement) {
-    if (currentViewMode !== 'detail') return;
+    if (currentViewMode !== 'list') return;
 
     const header = document.createElement('div');
     header.className = 'detail-header-row';
@@ -397,14 +418,14 @@ function createDetailFolderRow(name, typeLabel, iconText) {
 
 function applyViewLayout(container) {
     if (!container) return;
-    if (currentViewMode === 'detail') {
+    if (currentViewMode === 'list') {
         container.style.display = 'block';
         container.style.gridTemplateColumns = '';
         container.style.gap = '0';
         return;
     }
 
-    const minW = currentViewMode === 'large' ? 300 : 180;
+    const minW = currentViewMode === 'grid' ? 300 : 180;
     container.style.display = 'grid';
     container.style.gridTemplateColumns = `repeat(auto-fill, minmax(${minW}px, 1fr))`;
     container.style.gap = '15px';
@@ -462,7 +483,7 @@ function closeBrowserModal(overlay) {
 function setThumbnailSelected(item, selected) {
     if (!item) return;
     item.dataset.selected = selected ? '1' : '0';
-    const isDetail = item.dataset.viewMode === 'detail';
+    const isDetail = item.dataset.viewMode === 'list';
     if (isDetail) {
         item.style.background = selected ? 'rgba(50, 112, 163, 0.28)' : 'transparent';
     } else {
@@ -534,7 +555,7 @@ function moveThumbnailSelection(container, key) {
     const currentView = selected.dataset.viewMode || currentViewMode;
     const index = items.indexOf(selected);
 
-    if (currentView === 'detail') {
+    if (currentView === 'list') {
         if (key === 'ArrowUp' && index > 0) {
             selectThumbnailItem(container, items[index - 1], true);
             return true;
@@ -743,7 +764,7 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder, 
     currentSourceFolder = sourceFolder || 'input';
     setListMode(opts.listKind || 'media');
     currentAllowedTypes = normalizeAllowedTypes(opts.allowedTypes);
-    currentViewMode = normalizeViewMode(opts.viewMode || 'medium');
+    currentViewMode = normalizeViewMode(opts.viewMode || getStoredViewMode());
 
     // Arbitrary-path navigation mode ("browse anywhere").
     currentNavMode = opts.enableNavigation ? 'abs' : 'legacy';
@@ -872,7 +893,7 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder, 
         const regenerateCacheBtn = document.createElement('button');
         regenerateCacheBtn.className = 'regenerate-cache-btn';
         regenerateCacheBtn.textContent = '\u267B\uFE0F Regenerate Cache';
-        regenerateCacheBtn.style.cssText = 'background:#333;border:1px solid #555;border-radius:6px;color:#ccc;padding:5px 12px;cursor:pointer;font-size:12px;';
+        regenerateCacheBtn.style.cssText = 'background:#222a33;border:1px solid rgba(255,255,255,0.2);border-radius:6px;color:#ccc;padding:5px 12px;cursor:pointer;font-size:12px;';
 
         const inputPreset = mkBtn('Input');
         const outputPreset = mkBtn('Output');
@@ -1001,17 +1022,16 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder, 
         ">
             ${typeFilterOptions}
         </select>
-        <select class="view-mode" style="
+        <button class="view-mode" style="
             padding: 8px 12px;
             background: rgba(45, 55, 72, 0.7);
             border: 1px solid rgba(226, 232, 240, 0.2);
             border-radius: 6px;
             color: #ccc;
-        ">
-            <option value="large">Large</option>
-            <option value="medium">Medium</option>
-            <option value="detail">Detail</option>
-        </select>
+            cursor: pointer;
+            font-size: 13px;
+            white-space: nowrap;
+        ">⊞ Grid</button>
     `;
 
     // Create thumbnail grid container
@@ -1206,7 +1226,7 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder, 
     // Setup search/filter
     const searchInput = filterBar.querySelector('.search-input');
     const filterType = filterBar.querySelector('.filter-type');
-    const viewMode = filterBar.querySelector('.view-mode');
+    const viewModeBtn = filterBar.querySelector('.view-mode');
     const siblingPrevBtn = filterBar.querySelector('.sibling-prev');
     const siblingNextBtn = filterBar.querySelector('.sibling-next');
 
@@ -1236,8 +1256,23 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder, 
     if (showListKindSelector) {
         setListMode(filterType.value || 'all');
     }
-    viewMode.value = currentViewMode;
-    
+
+    const updateViewModeBtn = () => {
+        const labels = {
+            grid: '⊞ Grid',
+            icon: '⊞ Icon',
+            list: '☰ List',
+        };
+        const titles = {
+            grid: 'Large thumbnail grid',
+            icon: 'Small icon grid',
+            list: 'Compact list view',
+        };
+        viewModeBtn.textContent = labels[currentViewMode] || labels.grid;
+        viewModeBtn.title = titles[currentViewMode] || titles.grid;
+    };
+    updateViewModeBtn();
+
     searchInput.oninput = () => filterThumbnails(gridContainer, searchInput.value, filterType.value);
     filterType.onchange = () => {
         if (showListKindSelector) {
@@ -1250,11 +1285,28 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder, 
         filterThumbnails(gridContainer, searchInput.value, filterType.value);
     };
 
-    viewMode.onchange = () => {
-        currentViewMode = normalizeViewMode(viewMode.value);
+    viewModeBtn.onmouseenter = () => {
+        viewModeBtn.style.background = 'rgba(50, 112, 163, 0.5)';
+        viewModeBtn.style.borderColor = 'rgba(66, 153, 225, 0.9)';
+    };
+    viewModeBtn.onmouseleave = () => {
+        viewModeBtn.style.background = 'rgba(45, 55, 72, 0.7)';
+        viewModeBtn.style.borderColor = 'rgba(226, 232, 240, 0.2)';
+    };
+
+    viewModeBtn.onclick = () => {
+        if (currentViewMode === 'grid') {
+            currentViewMode = 'icon';
+        } else if (currentViewMode === 'icon') {
+            currentViewMode = 'list';
+        } else {
+            currentViewMode = 'grid';
+        }
+        saveViewMode(currentViewMode);
         if (onViewModeChange) {
             onViewModeChange(currentViewMode);
         }
+        updateViewModeBtn();
         applyViewLayout(gridContainer);
         loadFileThumbnails(gridContainer, currentFile, onFileSelect, overlay, breadcrumb).then(() => {
             filterThumbnails(gridContainer, searchInput.value, filterType.value);
@@ -1480,7 +1532,7 @@ async function loadFileThumbnailsAbs(container, currentFile, onFileSelect, overl
 }
 
 function createAbsFolderItem(name, absPath, container, currentFile, onFileSelect, overlay, breadcrumbElement) {
-    if (currentViewMode === 'detail') {
+    if (currentViewMode === 'list') {
         const row = createDetailFolderRow(name, 'Folder', '📁');
         row.onclick = () => {
             currentAbsFocusName = '';
@@ -1552,7 +1604,7 @@ function createAbsFolderItem(name, absPath, container, currentFile, onFileSelect
 }
 
 function createBackItem(container, currentFile, onFileSelect, overlay, breadcrumbElement) {
-    if (currentViewMode === 'detail') {
+    if (currentViewMode === 'list') {
         const row = createDetailFolderRow('..', 'Parent Folder', '←');
         row.onclick = () => {
             const parts = currentSubfolder.split('/');
@@ -1624,7 +1676,7 @@ function createBackItem(container, currentFile, onFileSelect, overlay, breadcrum
 }
 
 function createFolderItem(folderName, container, currentFile, onFileSelect, overlay, breadcrumbElement) {
-    if (currentViewMode === 'detail') {
+    if (currentViewMode === 'list') {
         const row = createDetailFolderRow(folderName, 'Folder', '📁');
         row.onclick = () => {
             currentSubfolder = currentSubfolder ? `${currentSubfolder}/${folderName}` : folderName;
@@ -1712,7 +1764,7 @@ function createThumbnailItem(fileEntryInput, currentFile, onFileSelect, overlay,
     
     const isSelected = !!isFileSelected(filename);
     
-    if (currentViewMode === 'detail') {
+    if (currentViewMode === 'list') {
         item.style.cssText = `
             display: flex;
             align-items: center;
@@ -1739,7 +1791,7 @@ function createThumbnailItem(fileEntryInput, currentFile, onFileSelect, overlay,
 
     // Thumbnail preview
     const preview = document.createElement('div');
-    preview.style.cssText = currentViewMode === 'detail'
+    preview.style.cssText = currentViewMode === 'list'
         ? `
             width: 20px;
             height: 20px;
@@ -1823,7 +1875,7 @@ function createThumbnailItem(fileEntryInput, currentFile, onFileSelect, overlay,
 
     item.appendChild(preview);
 
-    if (currentViewMode === 'detail') {
+    if (currentViewMode === 'list') {
         const nameCol = document.createElement('div');
         nameCol.style.cssText = `
             flex: 1;
@@ -1912,7 +1964,7 @@ function createThumbnailItem(fileEntryInput, currentFile, onFileSelect, overlay,
     // Hover effect
     item.onmouseenter = () => {
         if (item.dataset.selected !== '1') {
-            if (currentViewMode === 'detail') {
+            if (currentViewMode === 'list') {
                 item.style.background = 'rgba(50, 112, 163, 0.28)';
             } else {
                 item.style.borderColor = 'rgba(66, 153, 225, 0.9)';
@@ -1923,7 +1975,7 @@ function createThumbnailItem(fileEntryInput, currentFile, onFileSelect, overlay,
     };
     item.onmouseleave = () => {
         if (item.dataset.selected !== '1') {
-            if (currentViewMode === 'detail') {
+            if (currentViewMode === 'list') {
                 item.style.background = 'transparent';
             } else {
                 item.style.borderColor = 'rgba(226, 232, 240, 0.2)';

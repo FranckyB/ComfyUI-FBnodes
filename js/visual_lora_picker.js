@@ -322,10 +322,6 @@ app.registerExtension({
                             selectedAbsPath: current,
                             navKind: "image",
                             allowedTypes: ["image"],
-                            viewMode: node.properties?._vlpBrowserViewMode || "medium",
-                            onViewModeChange: (mode) => {
-                                node.properties._vlpBrowserViewMode = mode;
-                            },
                         }
                     );
                 },
