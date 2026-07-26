@@ -86,6 +86,15 @@ LoRA loader/applier with the same searchable grouped dropdown UX as the other Lo
 - **Real path output**: Node still resolves and uses the real Comfy LoRA path internally when applying
 - **Outputs**: `model`, `lora_name` (COMBO)
 
+### Visual LoRA Picker+
+Pick LoRAs by thumbnail image instead of scrolling through filenames.
+
+- **Image browser**: Opens a thumbnail file browser pointing at your LoRA folder; shows matching images (`webp`, `jpg`, `png`) that share the same path/name as the LoRA
+- **LoRA resolution**: Selecting an image resolves the corresponding `.safetensors` LoRA automatically
+- **Stack friendly**: Accepts an incoming `LORA_STACK` and appends the picked LoRA, or returns a single-entry stack
+- **Numeric strength**: Quick numeric input sets both model and clip strength
+- **Outputs**: `LORA_STACK` containing the picked `(path, model_strength, clip_strength)` tuple
+
 ### Crop Image+
 Interactive crop node with draggable crop box, optional aspect-ratio lock, and live preview.
 
