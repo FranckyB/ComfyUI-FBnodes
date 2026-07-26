@@ -1480,6 +1480,17 @@ function createMaskDomUI(node) {
         widget.element.style.pointerEvents = "auto";
         widget.element.style.background = "transparent";
         widget.element.style.overflow = "hidden";
+
+        // The DOM preview overlay can block LiteGraph's node mouse tracking,
+        // so mirror hover state explicitly from the DOM element.
+        widget.element.addEventListener("mouseenter", () => {
+            _fbLoadImageHoveredNode = node;
+        });
+        widget.element.addEventListener("mouseleave", () => {
+            if (_fbLoadImageHoveredNode === node) {
+                _fbLoadImageHoveredNode = null;
+            }
+        });
     }
     // Force the DOM panel to match the node width (inset on both sides like the
     // save image node). Its height is the image-aspect panel height (width-based,
@@ -1594,13 +1605,20 @@ function maskRedo(node) {
     renderMaskDomCanvas(node);
 }
 
+let _fbLoadImageHoveredNode = null;
+
 function getActiveLoadImageNode() {
+    // Prefer the node currently under the cursor, then fall back to a single selected node.
+    if (_fbLoadImageHoveredNode && !_fbLoadImageHoveredNode.flags?.collapsed) {
+        return _fbLoadImageHoveredNode;
+    }
+
     const selected = app.canvas?.selected_nodes;
     if (!selected) return null;
 
     const nodes = Object.values(selected).filter((n) => {
         const cls = n?.comfyClass || n?.type;
-        return cls === "LoadImagePlus" || cls === "BetterImageLoader";
+        return (cls === "LoadImagePlus" || cls === "BetterImageLoader") && !n.flags?.collapsed;
     });
 
     return nodes.length === 1 ? nodes[0] : null;
@@ -1697,6 +1715,20 @@ app.registerExtension({
             const node = this;
 
             installArrowKeyNavigation();
+
+            const onMouseEnter = node.onMouseEnter;
+            node.onMouseEnter = function () {
+                _fbLoadImageHoveredNode = this;
+                return onMouseEnter?.apply(this, arguments);
+            };
+
+            const onMouseLeave = node.onMouseLeave;
+            node.onMouseLeave = function () {
+                if (_fbLoadImageHoveredNode === this) {
+                    _fbLoadImageHoveredNode = null;
+                }
+                return onMouseLeave?.apply(this, arguments);
+            };
 
             const coerceFramePosition = (value) => {
                 const n = Number(value);

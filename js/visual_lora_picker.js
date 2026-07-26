@@ -39,6 +39,53 @@ function hideWidget(widget) {
     if (widget.inputEl) widget.inputEl.style.display = "none";
 }
 
+function isTypingTarget(target) {
+    if (!target) return false;
+    const tag = String(target.tagName || "").toUpperCase();
+    return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || !!target.isContentEditable;
+}
+
+let _fbVlpHoveredNode = null;
+let _fbVlpArrowListenerInstalled = false;
+
+function getActiveVisualLoraPickerNode() {
+    // Prefer the node currently under the cursor, then fall back to a single selected node.
+    if (_fbVlpHoveredNode && !_fbVlpHoveredNode.flags?.collapsed) {
+        return _fbVlpHoveredNode;
+    }
+
+    const selected = app.canvas?.selected_nodes;
+    if (!selected) return null;
+
+    const nodes = Object.values(selected).filter((n) => {
+        const cls = n?.comfyClass || n?.type;
+        return cls === "VisualLoraPicker" && !n.flags?.collapsed;
+    });
+
+    return nodes.length === 1 ? nodes[0] : null;
+}
+
+function installVlpArrowNavigation() {
+    if (_fbVlpArrowListenerInstalled) return;
+    _fbVlpArrowListenerInstalled = true;
+
+    window.addEventListener("keydown", async (event) => {
+        if (event.defaultPrevented) return;
+        if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+        if (event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return;
+        if (isTypingTarget(event.target)) return;
+
+        const node = getActiveVisualLoraPickerNode();
+        if (!node || typeof node._vlpStepImageByDelta !== "function") return;
+
+        event.preventDefault();
+        event.stopPropagation();
+
+        const dir = event.key === "ArrowRight" ? 1 : -1;
+        node._vlpStepImageByDelta(dir);
+    }, true);
+}
+
 function stripAnnotation(filename) {
     if (!filename) return filename;
     const match = String(filename).match(/^(.+)\s+\[(input|output|temp)\]$/);
@@ -159,6 +206,48 @@ app.registerExtension({
 
             previewBox.appendChild(img);
             previewBox.appendChild(emptyLabel);
+
+            // Click catcher overlay: transparent, captures clicks to open the browser.
+            const clickCatcher = document.createElement("div");
+            clickCatcher.style.cssText = `
+                position: absolute;
+                inset: 0;
+                cursor: pointer;
+                background: transparent;
+            `;
+            clickCatcher.addEventListener("click", async (e) => {
+                e.stopPropagation();
+                if (browseButton && typeof browseButton.callback === "function") {
+                    try {
+                        await browseButton.callback();
+                    } catch (err) {
+                        console.error("[VisualLoraPicker] Error opening browser from image:", err);
+                    }
+                }
+            });
+            previewBox.appendChild(clickCatcher);
+
+            // Forward wheel events from the preview area to the canvas so ComfyUI zoom works.
+            previewBox.addEventListener("wheel", (e) => {
+                const canvas = app.canvas?.canvas || document.querySelector("canvas.lgraphcanvas");
+                if (!canvas) return;
+                const newEvent = new WheelEvent("wheel", {
+                    bubbles: true,
+                    cancelable: true,
+                    clientX: e.clientX,
+                    clientY: e.clientY,
+                    deltaX: e.deltaX,
+                    deltaY: e.deltaY,
+                    deltaZ: e.deltaZ,
+                    deltaMode: e.deltaMode,
+                    ctrlKey: e.ctrlKey,
+                    shiftKey: e.shiftKey,
+                    altKey: e.altKey,
+                    metaKey: e.metaKey,
+                });
+                canvas.dispatchEvent(newEvent);
+            }, { passive: true });
+
             panel.appendChild(previewBox);
 
             const domWidget = node.addDOMWidget("vlp_preview", "div", panel, {
@@ -226,6 +315,44 @@ app.registerExtension({
             // Hide native widgets; their serialized values are still used by the backend.
             if (imageWidget) hideWidget(imageWidget);
             if (strengthWidget) hideWidget(strengthWidget);
+
+            // Build an ordered list of absolute image paths currently known in the picker.
+            const listImagePaths = () => {
+                const out = [];
+                const add = (value) => {
+                    if (!value || value === "(none)") return;
+                    const cleaned = stripAnnotation(value);
+                    if (!out.includes(cleaned)) out.push(cleaned);
+                };
+                const map = node._vlpImageMap || {};
+                for (const value of Object.values(map)) add(value);
+                return out;
+            };
+
+            node._vlpStepImageByDelta = async (delta) => {
+                const paths = listImagePaths();
+                if (paths.length <= 1) return false;
+
+                const dir = delta >= 0 ? 1 : -1;
+                const current = stripAnnotation(imageWidget?.value);
+                const currentIndex = paths.indexOf(current);
+
+                let nextIndex;
+                if (currentIndex < 0) {
+                    nextIndex = dir > 0 ? 0 : paths.length - 1;
+                } else {
+                    nextIndex = (currentIndex + dir + paths.length) % paths.length;
+                }
+
+                const nextPath = paths[nextIndex];
+                const nextDir = dirnameForPath(nextPath);
+                node.properties._vlpImageDir = nextDir;
+                setImagePath(nextPath);
+                await refreshPickerOptions(nextDir, nextPath);
+                return true;
+            };
+
+            installVlpArrowNavigation();
 
             // Flat file picker populated with images from the selected folder.
             let filePickerWidget = node.addWidget(
@@ -352,6 +479,33 @@ app.registerExtension({
                     node.widgets.splice(buttonIndex, 1);
                     node.widgets.splice(imageWidgetIndex + 2, 0, browseButton);
                 }
+            }
+
+            // Track hover the same way SaveImagePlus does: via node mouse events.
+            // Also wire the DOM preview overlay so it reports hover reliably.
+            const onMouseEnter = node.onMouseEnter;
+            node.onMouseEnter = function () {
+                _fbVlpHoveredNode = this;
+                return onMouseEnter?.apply(this, arguments);
+            };
+
+            const onMouseLeave = node.onMouseLeave;
+            node.onMouseLeave = function () {
+                if (_fbVlpHoveredNode === this) {
+                    _fbVlpHoveredNode = null;
+                }
+                return onMouseLeave?.apply(this, arguments);
+            };
+
+            if (previewBox) {
+                previewBox.addEventListener("mouseenter", () => {
+                    _fbVlpHoveredNode = node;
+                });
+                previewBox.addEventListener("mouseleave", () => {
+                    if (_fbVlpHoveredNode === node) {
+                        _fbVlpHoveredNode = null;
+                    }
+                });
             }
 
             // Size / resize handling
