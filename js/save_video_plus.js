@@ -326,32 +326,66 @@ function setWidgetCollapsed(widget, collapsed) {
     if (widget.inputEl) widget.inputEl.style.display = collapsed ? "none" : "";
 }
 
-function applyControlsCollapsedState(node) {
+function getControlsStackHeight(node) {
+    let total = 0;
+    for (const widget of getCollapsibleWidgets(node)) {
+        let h = Number(LiteGraph?.NODE_WIDGET_HEIGHT || 24);
+        if (typeof widget?.computeSize === "function") {
+            try {
+                const size = widget.computeSize(Number(node.size?.[0] || 320));
+                if (Array.isArray(size) && Number.isFinite(size[1])) {
+                    h = Number(size[1]);
+                }
+            } catch {
+                // fall back to default widget height
+            }
+        }
+        total += h + 4;
+    }
+    return total;
+}
+
+function applyControlsCollapsedState(node, { skipSize = false } = {}) {
     const collapsed = !getControlsExpanded(node);
     for (const widget of getCollapsibleWidgets(node)) {
         setWidgetCollapsed(widget, collapsed);
     }
     updateControlsToggleLabel(node);
 
-    // Recompute node height after widget visibility changes so controls are not clipped.
-    try {
-        const nextH = node.computeSize?.()[1];
-        if (Number.isFinite(nextH)) {
-            const nextW = node.size?.[0] || 320;
-            node.setSize?.([nextW, nextH]);
-        }
-    } catch {
-        // Ignore size recompute failures and still refresh canvas.
-    }
+    if (!skipSize) {
+        const curW = Number(node.size?.[0] || 0);
+        const curH = Number(node.size?.[1] || 0);
+        const controlsHeight = getControlsStackHeight(node);
 
-    // Restore the exact pre-expand footprint when collapsing controls.
-    if (collapsed) {
-        const saved = node.properties?.[CONTROLS_COLLAPSED_SIZE_PROP];
-        if (Array.isArray(saved) && saved.length >= 2) {
-            const savedW = Number(saved[0]);
-            const savedH = Number(saved[1]);
-            if (Number.isFinite(savedW) && Number.isFinite(savedH) && savedW > 0 && savedH > 0) {
-                node.setSize?.([savedW, savedH]);
+        if (collapsed) {
+            // Remember the preview-area footprint (without the controls stack) so a later
+            // expand can restore the same preview height plus the controls.
+            const savedH = Math.max(1, curH - controlsHeight);
+            node.properties[CONTROLS_COLLAPSED_SIZE_PROP] = [curW, savedH];
+
+            const saved = node.properties?.[CONTROLS_COLLAPSED_SIZE_PROP];
+            if (Array.isArray(saved) && saved.length >= 2) {
+                const savedW = Number(saved[0]);
+                const savedH2 = Number(saved[1]);
+                if (Number.isFinite(savedW) && Number.isFinite(savedH2) && savedW > 0 && savedH2 > 0) {
+                    node.setSize?.([savedW, savedH2]);
+                }
+            }
+        } else {
+            // Expand the node by adding the controls stack height on top of the
+            // collapsed/preview footprint, instead of recomputing a smaller size.
+            const saved = node.properties?.[CONTROLS_COLLAPSED_SIZE_PROP];
+            let baseW = curW > 0 ? curW : 320;
+            let baseH = curH > 0 ? curH : 240;
+            if (Array.isArray(saved) && saved.length >= 2) {
+                const savedW = Number(saved[0]);
+                const savedH = Number(saved[1]);
+                if (Number.isFinite(savedW) && savedW > 0) baseW = savedW;
+                if (Number.isFinite(savedH) && savedH > 0) baseH = savedH;
+            }
+            const nextH = Math.max(curH, baseH + controlsHeight);
+            if (Number.isFinite(nextH) && nextH > 0) {
+                node.setSize?.([baseW, nextH]);
             }
         }
     }
@@ -359,7 +393,7 @@ function applyControlsCollapsedState(node) {
     node.setDirtyCanvas?.(true, true);
 }
 
-function ensureControlsToggleWidget(node) {
+function ensureControlsToggleWidget(node, { skipSize = false } = {}) {
     if (!node.properties) node.properties = {};
 
     let toggle = node.widgets?.find((w) => isControlsToggleWidget(w));
@@ -389,7 +423,7 @@ function ensureControlsToggleWidget(node) {
         node.properties[CONTROLS_EXPANDED_PROP] = false;
     }
 
-    applyControlsCollapsedState(node);
+    applyControlsCollapsedState(node, { skipSize });
 }
 
 function applyWarningOverlay(node) {
@@ -580,7 +614,8 @@ app.registerExtension({
         const onConfigure = nodeType.prototype.onConfigure;
         nodeType.prototype.onConfigure = function () {
             const result = onConfigure?.apply(this, arguments);
-            ensureControlsToggleWidget(this);
+            // Restore widget visibility without overwriting the size ComfyUI just loaded from the workflow.
+            ensureControlsToggleWidget(this, { skipSize: true });
             ensurePreviewContainer(this);
             updateDisplayState(this);
             restoreFromExecutedCache(this);
