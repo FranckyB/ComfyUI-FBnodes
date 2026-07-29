@@ -32,9 +32,9 @@ from .nodes import (
     SwitchAnyBool,
     VACEStitcher,
     VACEStitcher_Options,
-    install_latent_preview_hook,
 )
 from .py import repath_util
+from .py.latent_preview import install_latent_preview_hook
 
 # Initialize latent preview hook (with VHS conflict detection)
 install_latent_preview_hook()

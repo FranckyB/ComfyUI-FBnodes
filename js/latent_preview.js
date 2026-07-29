@@ -318,11 +318,11 @@ app.registerExtension({
     settings: [
         {
             id: "FBnodes.LatentPreview",
-            category: ["FBnodes", "1. Video Sampling", "1. Animated Latent Preview"],
+            category: ["FBnodes", "3. Video Sampling", "Animated Latent Preview"],
             name: "Display animated or subgraph previews when sampling",
             tooltip: "Enable animated preview as well as subgraph previews during ksampling.\nWill be ignored if VideoHelperSuite provides this feature.",
             type: "boolean",
-            defaultValue: false,
+            defaultValue: true,
             onChange(value) {
                 if (!value) {
                     // Remove any preview widgets when disabled
@@ -337,19 +337,6 @@ app.registerExtension({
                     latentPreviewNodes = new Set();
                 }
             },
-        },
-        {
-            id: "FBnodes.LatentPreviewRate",
-            category: ["FBnodes", "1. Video Sampling", "2. Playback Rate Override"],
-            name: "Playback rate override",
-            tooltip: "Force a specific frame rate for latent preview playback.\nSet to 0 for auto-detect based on video model.",
-            type: "number",
-            attrs: {
-                min: 0,
-                step: 1,
-                max: 60,
-            },
-            defaultValue: 0,
         },
     ],
     
@@ -366,7 +353,6 @@ app.registerExtension({
             if (!vhsActive) {
                 // Add our settings to the workflow extra data
                 res.workflow.extra['PM_latentpreview'] = app.ui.settings.getSettingValue("FBnodes.LatentPreview");
-                res.workflow.extra['PM_latentpreviewrate'] = app.ui.settings.getSettingValue("FBnodes.LatentPreviewRate");
             }
             
             return res;

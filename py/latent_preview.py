@@ -312,11 +312,6 @@ def install_latent_preview_hook():
             try:
                 extra_info = next(serv.prompt_queue.currently_running.values().__iter__())[3]['extra_pnginfo']['workflow']['extra']
                 prev_setting = extra_info.get('PM_latentpreview', False)
-
-                if extra_info.get('PM_latentpreviewrate', 0) != 0:
-                    rate_setting = extra_info['PM_latentpreviewrate']
-                else:
-                    rate_setting = RATES_TABLE.get(latent_format.__class__.__name__, 8)
             except:
                 # For safety since there's lots of keys, any of which can fail
                 prev_setting = False
@@ -325,6 +320,7 @@ def install_latent_preview_hook():
                 return previewer
 
             model_name = latent_format.__class__.__name__
+            rate_setting = RATES_TABLE.get(model_name, 8)
             return WrappedPreviewer(previewer, rate_setting, serv, model_name)
 
         _hook_installed = True

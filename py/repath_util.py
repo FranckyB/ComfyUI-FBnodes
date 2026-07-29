@@ -49,6 +49,21 @@ DIRECT_WIDGET_CATEGORY = {
 
 PRECISION_TOKENS = ("fp8", "fp16", "bf16")
 
+# Known model-like file extensions.  Used to prevent non-model files
+# (images, text files, etc.) from being picked up by directory scans and
+# accepted as valid model paths.
+MODEL_EXTENSIONS = (
+    ".safetensors",
+    ".gguf",
+    ".vae"
+)
+
+
+def _has_model_extension(filename):
+    """Return True if filename ends with a known model file extension."""
+    name = str(filename or "").lower()
+    return any(name.endswith(ext) for ext in MODEL_EXTENSIONS)
+
 
 def _normalize_rel_path(path):
     return str(path or "").strip().replace("\\", "/")
@@ -169,6 +184,9 @@ def _is_unsafe_path(value):
 
 
 def _is_resolvable(folder_types, rel_value):
+    if not _has_model_extension(rel_value):
+        return False
+
     for folder_type in folder_types:
         try:
             full = folder_paths.get_full_path(folder_type, rel_value)
@@ -191,6 +209,8 @@ def _build_category_index(folder_types):
         if not rel_norm:
             return
         basename = os.path.basename(rel_norm)
+        if not _has_model_extension(basename):
+            return
         key = _normalize_lookup_key(basename)
         if not key:
             return
