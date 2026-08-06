@@ -1107,21 +1107,17 @@ function appendImageContextMenuOptions(node, options, canvas) {
         return;
     }
 
-    const imageName = String(imageInfo.filename || "").split(/[\\/]/).pop() || imageInfo.filename;
-    options.push(null);
-    options.push({
-        content: `Image: ${imageName}`,
-        disabled: true,
-    });
-    options.push({
-        content: "Open Image",
-        callback: () => openImageInNewTab(imageInfo),
-    });
-    options.push({
+    // Keep node-level actions, but pin them near the top of Comfy's menu.
+    options.unshift(null);
+    options.unshift({
         content: "Copy Image",
         callback: () => {
             copyImageToClipboard(imageInfo);
         },
+    });
+    options.unshift({
+        content: "Open Image",
+        callback: () => openImageInNewTab(imageInfo),
     });
 }
 
