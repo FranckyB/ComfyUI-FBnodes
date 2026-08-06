@@ -20,7 +20,7 @@ RATES_TABLE = {
     'HunyuanVideo': 24 // 4,
     'Cosmos1CV8x8x8': 24 // 8,
     'Wan21': 16 // 4,
-    'Wan22': 24 // 4
+    'Wan22': 16 // 4
 }
 
 # Global flag to track if we've hooked the previewer

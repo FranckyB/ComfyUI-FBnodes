@@ -250,3 +250,39 @@ async def path_browser_file(request):
         return server.web.FileResponse(real_path, headers=headers)
     except Exception as e:
         return server.web.json_response({"ok": False, "error": str(e)}, status=500)
+
+
+@server.PromptServer.instance.routes.post("/fbnodes/path-browser/delete")
+async def path_browser_delete(request):
+    """Delete a single media file by absolute path (extension-guarded)."""
+    try:
+        data = await request.json()
+        path = data.get("path", "").strip()
+        if not path:
+            return server.web.json_response(
+                {"ok": False, "error": "Missing path"}, status=400
+            )
+
+        real_path = os.path.realpath(_safe_abspath(path))
+
+        if not os.path.isfile(real_path):
+            return server.web.json_response(
+                {"ok": False, "error": "File not found"}, status=404
+            )
+
+        ext = os.path.splitext(real_path)[1].lower()
+        if ext not in ALL_MEDIA_EXTS:
+            return server.web.json_response(
+                {"ok": False, "error": "Unsupported file type"}, status=403
+            )
+
+        try:
+            os.remove(real_path)
+        except PermissionError:
+            return server.web.json_response(
+                {"ok": False, "error": "Permission denied"}, status=403
+            )
+
+        return server.web.json_response({"ok": True})
+    except Exception as e:
+        return server.web.json_response({"ok": False, "error": str(e)}, status=500)

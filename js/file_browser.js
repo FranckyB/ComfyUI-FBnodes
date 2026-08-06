@@ -898,6 +898,10 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder, 
         const inputPreset = mkBtn('Input');
         const outputPreset = mkBtn('Output');
         const customPreset = mkBtn('Custom');
+        const customPath = getCustomPresetPath();
+        if (!customPath) {
+            customPreset.title = 'Set Custom Path in Preferences to use';
+        }
 
         const goUp = () => {
             if (!currentAbsParent) return;
@@ -925,9 +929,9 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder, 
         };
         customPreset.onclick = () => {
             const p = getCustomPresetPath();
-            if (p) { currentAbsDir = p; loadFileThumbnails(gridContainer, currentFile, onFileSelect, overlay, breadcrumb); }
+            currentAbsDir = p || currentAbsRoots.output;
+            loadFileThumbnails(gridContainer, currentFile, onFileSelect, overlay, breadcrumb);
         };
-        if (!getCustomPresetPath()) customPreset.style.display = 'none';
 
         navRow.appendChild(upBtn);
         navRow.appendChild(refreshBtn);

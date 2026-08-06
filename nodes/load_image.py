@@ -824,7 +824,7 @@ class LoadImagePlus:
     @classmethod
     def INPUT_TYPES(cls):
         input_dir = folder_paths.get_input_directory()
-        files = ["(none)"]
+        files = ["(none)", "(blank)"]
         supported_extensions = ['.png', '.jpg', '.jpeg', '.webp', '.mp4', '.webm', '.mov', '.avi']
 
         if os.path.exists(input_dir):
@@ -837,9 +837,9 @@ class LoadImagePlus:
                         rel_path = rel_path.replace('\\', '/')
                         files.append(rel_path)
 
-        files_to_sort = files[1:]
+        files_to_sort = files[2:]
         files_to_sort.sort()
-        files = ["(none)"] + files_to_sort
+        files = ["(none)", "(blank)"] + files_to_sort
 
         return {
             "required": {
@@ -873,12 +873,17 @@ class LoadImagePlus:
         if frame_position is None:
             frame_position = 0.0
 
-        image_tensor = None
-
         if image is None:
             image = ""
+
         if image == "(none)":
+            return {"ui": {"images": []}, "result": (None, None)}
+
+        is_blank = (image == "(blank)")
+        if is_blank:
             image = ""
+
+        image_tensor = None
 
         resolved_path = None
         file_path = ""
@@ -959,6 +964,9 @@ class LoadImagePlus:
             rendered_mask = render_stroke_mask(mask_data, width, height, image_tensor.shape[0])
             if rendered_mask is not None:
                 mask_tensor = rendered_mask
+
+        if is_blank and not preview_images:
+            preview_images = self._save_preview_images(image_tensor, mask_tensor)
 
         return {
             "ui": {"images": preview_images},
@@ -1063,6 +1071,11 @@ class LoadImagePlus:
 
     @classmethod
     def IS_CHANGED(cls, image, source_folder="input", frame_position=0.0, mask_data="", **kwargs):
+        if image == "(none)":
+            return ("no_file", source_folder, frame_position, mask_data)
+        if image == "(blank)":
+            return ("blank", source_folder, frame_position, mask_data)
+
         mtime = "no_file"
         if image:
             file_path = _strip_source_annotation(image.strip())

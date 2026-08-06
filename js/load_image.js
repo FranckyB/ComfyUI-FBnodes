@@ -99,10 +99,25 @@ function isVideoFile(filename) {
 }
 
 /**
+ * Check if a string looks like an absolute file path and points to an image.
+ */
+function isImageFilePath(value) {
+    if (!value || typeof value !== "string") return false;
+    const trimmed = value.trim();
+    if (!trimmed) return false;
+    const ext = trimmed.split('.').pop().toLowerCase();
+    const imageExtensions = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'];
+    const hasDrive = /^[a-zA-Z]:[\\/]/.test(trimmed);
+    const isUnc = /^\\\\/.test(trimmed);
+    const isUnix = /^\//.test(trimmed);
+    return (hasDrive || isUnc || isUnix) && imageExtensions.includes(ext);
+}
+
+/**
  * Check if filename is a previewable file (image or video)
  */
 function isPreviewableFile(filename) {
-    if (!filename || filename === '(none)') return false;
+    if (!filename || filename === '(none)' || filename === '(blank)') return false;
     const ext = filename.split('.').pop().toLowerCase();
     const imageExtensions = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'];
     const videoExtensions = ['mp4', 'webm', 'mov', 'avi', 'mkv', 'm4v', 'wmv'];
@@ -365,6 +380,10 @@ async function loadAndDisplayImage(node, filename) {
         showEmptyPreview(node);
         return;
     }
+    if (filename === '(blank)') {
+        showBlankPreview(node);
+        return;
+    }
     filename = stripAnnotation(filename);
     const framePositionWidget = node.widgets?.find(w => w.name === "frame_position");
     const framePosition = framePositionWidget ? framePositionWidget.value : 0.0;
@@ -416,6 +435,36 @@ function showEmptyPreview(node, requestId = null) {
 
     node.setDirtyCanvas(true, true);
     app.graph?.setDirtyCanvas(true, true);
+}
+
+/**
+ * Show a 64x64 black preview for the (blank) sentinel.
+ */
+function showBlankPreview(node, requestId = null) {
+    if (requestId != null && node._previewRequestId !== requestId) {
+        return;
+    }
+    if (!node.properties) node.properties = {};
+    node.properties._loadedImageFilename = "(blank)";
+    node.properties._loadedFramePosition = null;
+
+    const canvas = document.createElement('canvas');
+    canvas.width = 64;
+    canvas.height = 64;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(0, 0, 64, 64);
+
+    const img = new Image();
+    img.onload = () => {
+        node.imgs = [img];
+        node.imageIndex = 0;
+        updateMaskDomImage(node);
+
+        node.setDirtyCanvas(true, true);
+        app.graph?.setDirtyCanvas(true, true);
+    };
+    img.src = canvas.toDataURL('image/png');
 }
 
 /**
@@ -1131,6 +1180,73 @@ function setMaskDomVisible(node, editing) {
     app.graph?.setDirtyCanvas(true, true);
 }
 
+function createImageContextMenu(x, y, items) {
+    const existing = document.getElementById("fb-load-image-context-menu");
+    if (existing) existing.remove();
+
+    const menu = document.createElement("div");
+    menu.id = "fb-load-image-context-menu";
+    menu.style.cssText = `
+        position: fixed; left: ${x}px; top: ${y}px;
+        background: rgba(34, 39, 48, 0.98);
+        border: 1px solid rgba(78, 90, 108, 0.72);
+        border-radius: 6px;
+        padding: 4px 0;
+        z-index: 10001;
+        font-family: "Segoe UI", sans-serif;
+        font-size: 13px;
+        color: #c0cede;
+        box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+        min-width: 140px;
+        user-select: none;
+    `;
+
+    for (const item of items) {
+        const row = document.createElement("div");
+        row.textContent = item.label;
+        row.style.cssText = `
+            padding: 6px 14px;
+            cursor: ${item.disabled ? "default" : "pointer"};
+            opacity: ${item.disabled ? 0.45 : 1};
+            transition: background 0.12s;
+        `;
+        if (!item.disabled) {
+            row.addEventListener("mouseenter", () => row.style.background = "rgba(65, 167, 216, 0.25)");
+            row.addEventListener("mouseleave", () => row.style.background = "transparent");
+            row.addEventListener("click", () => {
+                item.action();
+                menu.remove();
+            });
+        }
+        menu.appendChild(row);
+    }
+
+    document.body.appendChild(menu);
+
+    const closeMenu = (e) => {
+        if (!menu.contains(e.target)) {
+            menu.remove();
+            document.removeEventListener("click", closeMenu);
+            document.removeEventListener("contextmenu", closeMenu);
+        }
+    };
+    setTimeout(() => {
+        document.addEventListener("click", closeMenu);
+        document.addEventListener("contextmenu", closeMenu);
+    }, 0);
+
+    // Keep menu inside viewport
+    const rect = menu.getBoundingClientRect();
+    if (rect.right > window.innerWidth) {
+        menu.style.left = `${Math.max(0, x - rect.width)}px`;
+    }
+    if (rect.bottom > window.innerHeight) {
+        menu.style.top = `${Math.max(0, y - rect.height)}px`;
+    }
+
+    return menu;
+}
+
 function getMaskControlBottom(node) {
     const titleHeight = LiteGraph.NODE_TITLE_HEIGHT || 30;
     const widgetHeight = LiteGraph.NODE_WIDGET_HEIGHT || 20;
@@ -1143,7 +1259,7 @@ function getMaskControlBottom(node) {
     return bottom + 6;
 }
 
-function createMaskDomUI(node) {
+function createMaskDomUI(node, imageWidget, refreshImageOptionsForSource) {
     if (node._maskDom || typeof node.addDOMWidget !== "function") return node._maskDom || null;
 
     const stop = (event) => {
@@ -1288,6 +1404,126 @@ function createMaskDomUI(node) {
     cursor.innerHTML = `<div style="position:absolute;left:50%;top:50%;width:2px;height:2px;border-radius:50%;background:white;transform:translate(-50%,-50%);box-shadow:0 0 1px black;"></div>`;
 
     imgWrap.append(img, canvas, cursor);
+
+    preview.addEventListener("contextmenu", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const hasImage = !!getCurrentPreviewImage(node);
+        createImageContextMenu(event.clientX, event.clientY, [
+            {
+                label: "Open Image",
+                disabled: !hasImage,
+                action: () => {
+                    const previewImg = getCurrentPreviewImage(node);
+                    if (previewImg?.src) window.open(previewImg.src, "_blank");
+                }
+            },
+            {
+                label: "Copy Image",
+                disabled: !hasImage,
+                action: async () => {
+                    const previewImg = getCurrentPreviewImage(node);
+                    if (!previewImg) return;
+                    try {
+                        const copyCanvas = document.createElement("canvas");
+                        copyCanvas.width = previewImg.naturalWidth || previewImg.width || 64;
+                        copyCanvas.height = previewImg.naturalHeight || previewImg.height || 64;
+                        const copyCtx = copyCanvas.getContext("2d");
+                        copyCtx.drawImage(previewImg, 0, 0);
+                        const blob = await new Promise((resolve) => copyCanvas.toBlob(resolve, "image/png"));
+                        if (blob) {
+                            await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+                        }
+                    } catch (err) {
+                        console.error("[LoadImagePlus] Failed to copy image:", err);
+                    }
+                }
+            },
+            {
+                label: "Paste Image",
+                action: async () => {
+                    try {
+                        const items = await navigator.clipboard.read();
+
+                        // First, try pasting a plain text file path.
+                        for (const item of items) {
+                            if (item.types.includes("text/plain")) {
+                                const textBlob = await item.getType("text/plain");
+                                const text = (await textBlob.text()).trim();
+                                if (isImageFilePath(text)) {
+                                    const filename = text.split(/[\\/]/).pop();
+                                    const ext = filename.split('.').pop().toLowerCase();
+                                    const mime = ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : "image/jpeg";
+                                    const fileResponse = await api.fetchApi(`/fbnodes/path-browser/file?path=${encodeURIComponent(text)}`);
+                                    if (!fileResponse.ok) throw new Error("Read file failed");
+                                    const fileBlob = await fileResponse.blob();
+                                    const file = new File([fileBlob], filename, { type: mime });
+                                    const formData = new FormData();
+                                    formData.append("image", file);
+                                    formData.append("subfolder", "");
+                                    formData.append("type", "input");
+
+                                    const response = await api.fetchApi("/upload/image", { method: "POST", body: formData });
+                                    if (!response.ok) throw new Error("Upload failed");
+                                    const data = await response.json();
+
+                                    const sourceFolderWidget = node.widgets?.find(w => w.name === "source_folder");
+                                    if (sourceFolderWidget) {
+                                        sourceFolderWidget.value = "input";
+                                        node._sourceFolder = "input";
+                                    }
+                                    if (imageWidget) {
+                                        imageWidget.value = data.name;
+                                        if (typeof refreshImageOptionsForSource === "function") {
+                                            refreshImageOptionsForSource("input", { preferredValue: data.name });
+                                        }
+                                        if (imageWidget.callback) imageWidget.callback(data.name);
+                                    }
+                                    return;
+                                }
+                            }
+                        }
+
+                        // Otherwise, fall back to a raw image in the clipboard.
+                        for (const item of items) {
+                            for (const type of item.types) {
+                                if (!type.startsWith("image/")) continue;
+                                const blob = await item.getType(type);
+                                const ext = type === "image/png" ? "png" : type === "image/jpeg" ? "jpg" : type === "image/webp" ? "webp" : "png";
+                                const filename = `pasted_${Date.now()}.${ext}`;
+                                const file = new File([blob], filename, { type });
+                                const formData = new FormData();
+                                formData.append("image", file);
+                                formData.append("subfolder", "");
+                                formData.append("type", "input");
+
+                                const response = await api.fetchApi("/upload/image", { method: "POST", body: formData });
+                                if (!response.ok) throw new Error("Upload failed");
+                                const data = await response.json();
+
+                                const sourceFolderWidget = node.widgets?.find(w => w.name === "source_folder");
+                                if (sourceFolderWidget) {
+                                    sourceFolderWidget.value = "input";
+                                    node._sourceFolder = "input";
+                                }
+                                if (imageWidget) {
+                                    imageWidget.value = data.name;
+                                    if (typeof refreshImageOptionsForSource === "function") {
+                                        refreshImageOptionsForSource("input", { preferredValue: data.name });
+                                    }
+                                    if (imageWidget.callback) imageWidget.callback(data.name);
+                                }
+                                return;
+                            }
+                        }
+                    } catch (err) {
+                        console.error("[LoadImagePlus] Failed to paste image:", err);
+                    }
+                }
+            }
+        ]);
+    });
+
     preview.append(imgWrap);
     previewFrame.append(preview);
     root.append(toolbarFrame, previewFrame, footer);
@@ -1751,14 +1987,14 @@ app.registerExtension({
             }
             let imageWidget = null;
             let imagePickerWidget = null;
-            node._imagePickerMap = { "(none)": "(none)" };
+            node._imagePickerMap = { "(none)": "(none)", "(blank)": "(blank)" };
 
             const updateImagePickerOptions = (values, preferredValue = null) => {
                 if (!imagePickerWidget) return;
 
-                const labels = ["(none)"];
-                const map = { "(none)": "(none)" };
-                const usedLabels = new Set(["(none)"]);
+                const labels = ["(none)", "(blank)"];
+                const map = { "(none)": "(none)", "(blank)": "(blank)" };
+                const usedLabels = new Set(["(none)", "(blank)"]);
 
                 for (const fullValue of values || []) {
                     const base = basenameForDisplay(fullValue) || fullValue;
@@ -1794,7 +2030,7 @@ app.registerExtension({
 
                     const result = await listResponse.json();
                     const files = Array.isArray(result?.files) ? result.files : [];
-                    imageWidget.options.values = ["(none)", ...files];
+                    imageWidget.options.values = ["(none)", "(blank)", ...files];
                     updateImagePickerOptions(files, preferredValue);
 
                     if (resetSelection) {
@@ -1845,7 +2081,7 @@ app.registerExtension({
 
                     const desiredRaw = preferredValue != null ? preferredValue : imageWidget.value;
                     const desired = stripAnnotation(desiredRaw);
-                    imageWidget.options.values = ["(none)", ...mapped];
+                    imageWidget.options.values = ["(none)", "(blank)", ...mapped];
                     updateImagePickerOptions(mapped, desired);
                     if (desired && desired !== "(none)") imageWidget.value = desired;
                     return true;
@@ -1910,7 +2146,7 @@ app.registerExtension({
                 const add = (v) => {
                     if (typeof v !== "string") return;
                     const value = stripAnnotation(v);
-                    if (!value || value === "(none)" || seen.has(value)) return;
+                    if (!value || value === "(none)" || value === "(blank)" || seen.has(value)) return;
                     seen.add(value);
                     out.push(value);
                 };
@@ -1993,7 +2229,7 @@ app.registerExtension({
                         const selected = node._imagePickerMap?.[label] || "(none)";
                         setImageFilename(selected);
                     },
-                    { values: ["(none)"] }
+                    { values: ["(none)", "(blank)"] }
                 );
                 imagePickerWidget.serialize = false;
 
@@ -2082,7 +2318,7 @@ app.registerExtension({
                         state.enabled = !state.enabled;
                         if (state.enabled) {
                             ensureMaskNodeWidth(node);
-                            createMaskDomUI(node);
+                            createMaskDomUI(node, imageWidget, refreshImageOptionsForSource);
                             updateMaskDomImage(node);
                         }
                         setMaskDomVisible(node, state.enabled);
@@ -2095,7 +2331,7 @@ app.registerExtension({
                 };
                 this.widgets.splice(imageWidgetIndex + 3, 0, maskButton);
                 Object.defineProperty(maskButton, "node", { value: node });
-                createMaskDomUI(node);
+                createMaskDomUI(node, imageWidget, refreshImageOptionsForSource);
 
                 // Start at a comfortable default size (only for brand-new nodes;
                 // configured nodes get their saved size restored in onConfigure).
@@ -2278,22 +2514,22 @@ app.registerExtension({
                     if (response.ok) {
                         const data = await response.json();
                         if (imageWidget) {
-                            if (sourceFolderWidget && node._sourceFolder !== 'input') {
+                            if (sourceFolderWidget) {
                                 sourceFolderWidget.value = 'input';
+                                node._sourceFolder = 'input';
                                 if (typeof sourceFolderWidget.callback === 'function') {
-                                    await sourceFolderWidget.callback('input');
-                                } else {
-                                    node._sourceFolder = 'input';
+                                    try {
+                                        await sourceFolderWidget.callback('input');
+                                    } catch (err) {}
                                 }
+                            } else {
+                                node._sourceFolder = 'input';
                             }
 
-                            try {
-                                const listResponse = await api.fetchApi(`/fbnodes/list-files?source=input`);
-                                if (listResponse.ok) {
-                                    const result = await listResponse.json();
-                                    imageWidget.options.values = ["(none)", ...(result.files || [])];
-                                }
-                            } catch (err) {}
+                            if (typeof refreshImageOptionsForSource === "function") {
+                                await refreshImageOptionsForSource('input', { preferredValue: data.name });
+                            }
+
                             imageWidget.value = data.name;
                             if (imageWidget.callback) imageWidget.callback(data.name);
                         }
