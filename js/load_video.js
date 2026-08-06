@@ -50,6 +50,83 @@ function hideWidget(widget) {
     widget.hidden = true;
     widget.computeSize = () => [0, -4];
     if (widget.inputEl) widget.inputEl.style.display = "none";
+    if (widget.element && widget.element.style) {
+        widget.element.style.display = "none";
+        widget.element.style.height = "0px";
+        widget.element.style.overflow = "hidden";
+    }
+}
+
+function suppressNativeVideoWidget(node, videoWidget) {
+    // Keep ComfyUI's native video_upload widget from rendering its own player.
+    // We provide all preview rendering through our own DOM widget.
+    if (!videoWidget) return;
+
+    // Hide and neuter the native widget element.
+    if (videoWidget.element) {
+        videoWidget.element.style.display = "none";
+        videoWidget.element.style.height = "0px";
+        videoWidget.element.style.overflow = "hidden";
+        videoWidget.element.innerHTML = "";
+    }
+
+    // Prevent the native callback from creating a player.
+    // We handle all preview rendering ourselves.
+    if (!videoWidget._fbNativeCallbackSuppressed) {
+        videoWidget._fbNativeCallbackSuppressed = true;
+        videoWidget.callback = function(value) {
+            videoWidget.value = value;
+            // Do not call the original handler — it injects the native player.
+        };
+    }
+
+    if (node._nativeVideoSuppressor) return;
+
+    // Observe both our preview container and the node's root element so any
+    // native video element that leaks in (e.g. after tab-switch) is removed.
+    const targets = [getPreviewContainer(node), node.element].filter(Boolean);
+    if (targets.length === 0) return;
+
+    const scrubNativeVideos = () => {
+        const scope = node.element || document;
+        for (const vid of scope.querySelectorAll('video')) {
+            if (vid.closest('.fbnodes-video-media-host')) continue;
+            vid.remove();
+        }
+        if (videoWidget.element) {
+            videoWidget.element.style.display = 'none';
+            videoWidget.element.style.height = '0px';
+            videoWidget.element.style.overflow = 'hidden';
+            videoWidget.element.innerHTML = '';
+        }
+    };
+
+    scrubNativeVideos();
+
+    node._nativeVideoSuppressor = new MutationObserver((mutations) => {
+        let hasNativeVideo = false;
+        for (const mutation of mutations) {
+            for (const added of mutation.addedNodes) {
+                if (added.nodeType !== Node.ELEMENT_NODE) continue;
+                const videos = added.matches?.('video') ? [added] : added.querySelectorAll?.('video') || [];
+                if (videos.length > 0) hasNativeVideo = true;
+                for (const vid of videos) {
+                    if (vid.closest('.fbnodes-video-media-host')) continue;
+                    vid.remove();
+                }
+            }
+        }
+        if (hasNativeVideo) {
+            const clean = stripAnnotation(videoWidget?.value);
+            if (!clean || clean === '(none)') showEmptyVideoPreview(node);
+            else if (clean === '(blank)') showPlaceholderVideoPreview(node);
+            else createVideoPreview(node, `/view?filename=${encodeURIComponent(clean)}&type=${node._sourceFolder || 'input'}`);
+        }
+    });
+
+    for (const target of targets) {
+        node._nativeVideoSuppressor.observe(target, { childList: true, subtree: true });
+    }
 }
 
 function getWidgetHeight(node, widget) {
@@ -122,8 +199,35 @@ function clearVideoPreview(node) {
     node.setDirtyCanvas?.(true, true);
 }
 
+function showEmptyVideoPreview(node) {
+    let container = getPreviewContainer(node);
+    if (!container || !container.classList?.contains('comfy-img-preview')) {
+        container = document.createElement('div');
+        container.classList.add('comfy-img-preview');
+        node.videoContainer = container;
+
+        if (!node.widgets?.some(w => w.name === 'video-preview')) {
+            const w = node.addDOMWidget('video-preview', 'video', container, {
+                canvasOnly: true,
+                hideOnZoom: false
+            });
+            w.serialize = false;
+            w.computeLayoutSize = () => ({
+                minHeight: 256,
+                minWidth: 256
+            });
+        }
+    }
+
+    createPreviewMediaHost(container);
+    node._needsPlayabilityWarning = false;
+    syncWarningOverlay(node);
+    node.setDirtyCanvas?.(true, true);
+}
+
 function showPlaceholderVideoPreview(node) {
     createImagePreview(node, PLACEHOLDER_IMAGE_PATH);
+    setVideoPreviewFooter(getPreviewContainer(node), '\u2014');
     node._needsPlayabilityWarning = false;
     syncWarningOverlay(node);
     node.setDirtyCanvas?.(true, true);
@@ -212,6 +316,50 @@ function syncWarningOverlay(node, attempts = 0) {
     }
 }
 
+function createPreviewMediaHost(container) {
+    container.innerHTML = '';
+    container.style.position = 'relative';
+    container.style.width = '100%';
+    container.style.height = '100%';
+
+    const frame = document.createElement('div');
+    frame.style.cssText = `
+        position: absolute; left: 8px; top: 8px; right: 8px; bottom: 34px;
+        overflow: hidden; background: rgba(34, 39, 48, 0.98);
+        border: 1px solid rgba(78, 90, 108, 0.72); border-radius: 10px;
+        box-sizing: border-box;
+    `;
+
+    const mediaHost = document.createElement('div');
+    mediaHost.style.cssText = `
+        position: absolute; left: 1px; top: 1px; right: 1px; bottom: 1px;
+        overflow: hidden; background: transparent;
+    `;
+
+    const footer = document.createElement('div');
+    footer.className = 'fbnodes-video-preview-footer';
+    footer.style.cssText = `
+        position: absolute; left: 8px; right: 8px; bottom: 8px; height: 22px;
+        border-radius: 8px; border: 1px solid rgba(66, 72, 84, 0.95);
+        background: rgba(34, 39, 48, 0.98); box-sizing: border-box;
+        color: rgba(192, 206, 222, 0.95); font: 600 10px "Segoe UI", sans-serif;
+        line-height: 20px; text-align: center; pointer-events: none;
+    `;
+    footer.textContent = '\u2014';
+
+    frame.appendChild(mediaHost);
+    container.appendChild(frame);
+    container.appendChild(footer);
+    container._previewFooter = footer;
+    return mediaHost;
+}
+
+function setVideoPreviewFooter(container, text) {
+    if (container?._previewFooter) {
+        container._previewFooter.textContent = text || '\u2014';
+    }
+}
+
 function createImagePreview(node, imageUrl) {
     let container = getPreviewContainer(node);
     if (!container || !container.classList?.contains('comfy-img-preview')) {
@@ -232,13 +380,19 @@ function createImagePreview(node, imageUrl) {
         }
     }
 
-    // Remove existing dynamic media nodes and show a stable image preview.
-    container.innerHTML = '';
+    const isPlaceholder = imageUrl === PLACEHOLDER_IMAGE_PATH;
+    const mediaHost = createPreviewMediaHost(container);
     const img = document.createElement('img');
     img.src = imageUrl;
     img.style.cssText = 'width:100%;height:100%;object-fit:contain;display:block;';
     img.alt = 'Video frame preview';
-    container.appendChild(img);
+    img.onload = () => {
+        if (isPlaceholder) return;
+        const w = img.naturalWidth || img.width || 0;
+        const h = img.naturalHeight || img.height || 0;
+        if (w && h) setVideoPreviewFooter(container, `${w} \u00d7 ${h}`);
+    };
+    mediaHost.appendChild(img);
 
     syncWarningOverlay(node);
     node.setDirtyCanvas?.(true, true);
@@ -382,46 +536,70 @@ async function loadServerPreviewClip(node, filename, sourceFolder) {
  * initialised (e.g. first selection is an H265 clip the browser can't decode).
  */
 function createVideoPreview(node, clipViewUrl, posterUrl = null) {
-    // Don't duplicate if one was created in the meantime
-    if (node.videoContainer?.querySelector('video')) {
-        const vid = node.videoContainer.querySelector('video');
-        vid.src = clipViewUrl;
-        vid.load();
+    let container = getPreviewContainer(node);
+    if (!container || !container.classList?.contains('comfy-img-preview')) {
+        container = document.createElement('div');
+        container.classList.add('comfy-img-preview');
+        node.videoContainer = container;
+
+        if (!node.widgets?.some(w => w.name === 'video-preview')) {
+            const w = node.addDOMWidget('video-preview', 'video', container, {
+                canvasOnly: true,
+                hideOnZoom: false
+            });
+            w.serialize = false;
+            w.computeLayoutSize = () => ({
+                minHeight: 256,
+                minWidth: 256
+            });
+        }
+    }
+
+    const onVideoError = () => {
+        node._needsPlayabilityWarning = true;
+        syncWarningOverlay(node);
+        node.setDirtyCanvas?.(true, true);
+    };
+
+    // Reuse existing video element if the frame is already set up.
+    const existingVid = container.querySelector('video');
+    if (existingVid && existingVid.parentElement?.classList?.contains('fbnodes-video-media-host')) {
+        existingVid.onerror = onVideoError;
+        existingVid.src = clipViewUrl;
+        if (posterUrl) {
+            existingVid.poster = posterUrl;
+            existingVid.preload = 'metadata';
+        }
+        existingVid.load();
+        syncWarningOverlay(node);
+        node.setDirtyCanvas?.(true, true);
         return;
     }
 
-    const container = document.createElement('div');
-    container.classList.add('comfy-img-preview');
+    const mediaHost = createPreviewMediaHost(container);
+    mediaHost.classList.add('fbnodes-video-media-host');
 
     const vid = document.createElement('video');
     vid.playsInline = true;
     vid.controls = true;
     vid.loop = true;
     vid.muted = true;
-    vid.style.cssText = 'width:100%;height:100%;object-fit:contain;';
+    vid.style.cssText = 'width:100%;height:100%;object-fit:contain;display:block;';
     if (posterUrl) {
         vid.poster = posterUrl;
         vid.preload = 'metadata';
     }
     vid.src = clipViewUrl;
-    container.appendChild(vid);
+    vid.onerror = onVideoError;
+    vid.onloadedmetadata = () => {
+        const w = vid.videoWidth || 0;
+        const h = vid.videoHeight || 0;
+        if (w && h) setVideoPreviewFooter(container, `${w} \u00d7 ${h}`);
+    };
+    mediaHost.appendChild(vid);
 
-    node.videoContainer = container;
-
-    // Only add the widget if one doesn't already exist
-    if (!node.widgets?.some(w => w.name === 'video-preview')) {
-        const w = node.addDOMWidget('video-preview', 'video', container, {
-            canvasOnly: true,
-            hideOnZoom: false
-        });
-        w.serialize = false;
-        w.computeLayoutSize = () => ({
-            minHeight: 256,
-            minWidth: 256
-        });
-    }
-
-    node.setDirtyCanvas(true, true);
+    syncWarningOverlay(node);
+    node.setDirtyCanvas?.(true, true);
 }
 
 async function getCurrentVideoPath(node) {
@@ -704,6 +882,9 @@ app.registerExtension({
                     }
                 }
                 videoWidget.value = value;
+                if (!node.properties) node.properties = {};
+                node.properties._videoFileSelection = value;
+
                 if (videoWidget.callback) videoWidget.callback(value);
 
                 const map = node._videoPickerMap || { '(none)': '(none)', '(blank)': '(blank)' };
@@ -752,16 +933,25 @@ app.registerExtension({
 
             // Video widget
             const videoWidget = this.widgets?.find(w => w.name === "video");
+            let videoWidgetIndex = -1;
             if (videoWidget) {
                 hideWidget(videoWidget);
-                const videoWidgetIndex = this.widgets.indexOf(videoWidget);
+                suppressNativeVideoWidget(node, videoWidget);
+                videoWidgetIndex = this.widgets.indexOf(videoWidget);
 
                 // Hook into video widget callback to detect H265 and show server-extracted frame
                 const origVideoCallback = videoWidget.callback;
                 videoWidget.callback = function(value) {
                     const clean = stripAnnotation(value);
 
-                    if (!clean || clean === '(none)' || clean === '(blank)') {
+                    if (!clean || clean === '(none)') {
+                        node._playabilityCheckToken++;
+                        setPlayabilityWarning(false);
+                        showEmptyVideoPreview(node);
+                        return;
+                    }
+
+                    if (clean === '(blank)') {
                         node._playabilityCheckToken++;
                         setPlayabilityWarning(false);
                         showPlaceholderVideoPreview(node);
@@ -770,23 +960,13 @@ app.registerExtension({
 
                     if (clean && clean !== '(none)' && clean !== '(blank)') {
                         const applyNativePreview = () => {
-                            // Files outside input/output are absolute paths the native
-                            // player can't fetch via /view; render through raw-file URL.
+                            // Render all previews through our framed video host.
+                            // Out-of-tree absolute paths use the raw-file route.
                             if (isAbsolutePath(value)) {
-                                if (origVideoCallback) origVideoCallback.apply(this, arguments);
-                                videoWidget.value = clean;
                                 createVideoPreview(node, mediaFileUrl(clean));
-                                return;
+                            } else {
+                                createVideoPreview(node, `/view?filename=${encodeURIComponent(clean)}&type=${node._sourceFolder || 'input'}`);
                             }
-
-                            // The native player reads widget.value to build the video URL.
-                            // Temporarily set value with [output] so it resolves correctly,
-                            // then restore the clean name for display.
-                            if (node._sourceFolder === 'output') {
-                                videoWidget.value = clean + ' [output]';
-                            }
-                            if (origVideoCallback) origVideoCallback.apply(this, arguments);
-                            if (clean) videoWidget.value = clean;
                         };
 
                         // Compatibility is resolved first. Incompatible clips never go through native playback.
@@ -876,12 +1056,16 @@ app.registerExtension({
                 Object.defineProperty(browseButton, "node", { value: node });
             }
 
-            // Show placeholder video on initial node creation when (blank) is selected
-            if (videoWidget && videoWidget.value === '(blank)') {
-                setTimeout(() => showPlaceholderVideoPreview(node), 100);
+            // Initial preview: empty canvas for (none), placeholder for (blank)
+            if (videoWidget) {
+                if (videoWidget.value === '(blank)') {
+                    setTimeout(() => showPlaceholderVideoPreview(node), 100);
+                } else if (!videoWidget.value || videoWidget.value === '(none)') {
+                    setTimeout(() => showEmptyVideoPreview(node), 100);
+                }
             }
 
-            // Restore on workflow load
+            // Restore on workflow load / tab switch
             const onConfigure = node.onConfigure;
             node._initialConfigDone = false;
             node.onConfigure = function(info) {
@@ -892,6 +1076,26 @@ app.registerExtension({
 
                 const sfWidget = this.widgets?.find(w => w.name === "source_folder");
                 if (sfWidget) node._sourceFolder = sfWidget.value || 'input';
+
+                // Restore sentinel selection from properties; ComfyUI may reset the
+                // hidden video widget to (none) on tab switch.
+                const persistedSelection = node.properties?._videoFileSelection;
+                if (persistedSelection && videoWidget && videoWidget.value !== persistedSelection) {
+                    const allowed = Array.isArray(videoWidget.options?.values)
+                        ? videoWidget.options.values
+                        : Object.values(videoWidget.options?.values || {});
+                    if (allowed.includes(persistedSelection) || persistedSelection === '(none)' || persistedSelection === '(blank)') {
+                        videoWidget.value = persistedSelection;
+                    }
+                }
+
+                if (videoPickerWidget && videoWidget) {
+                    const map = node._videoPickerMap || { '(none)': '(none)', '(blank)': '(blank)' };
+                    const label = Object.keys(map).find((k) => map[k] === videoWidget.value) || '(none)';
+                    if (videoPickerWidget.options?.values?.includes(label)) {
+                        videoPickerWidget.value = label;
+                    }
+                }
 
                 const hasBrowsePath = Boolean(node.properties?._browsePath);
 
@@ -929,28 +1133,27 @@ app.registerExtension({
                 // Server check is fast and the preview clip is cached in temp/.
                 if (videoWidget) {
                     const filename = stripAnnotation(videoWidget.value);
-                    if (isAbsolutePath(filename)) {
+                    if (!filename || filename === '(none)') {
+                        node._playabilityCheckToken++;
+                        setPlayabilityWarning(false);
+                        setTimeout(() => showEmptyVideoPreview(node), 100);
+                    } else if (filename === '(blank)') {
+                        node._playabilityCheckToken++;
+                        setPlayabilityWarning(false);
+                        setTimeout(() => showPlaceholderVideoPreview(node), 100);
+                    } else if (isAbsolutePath(filename)) {
                         // Out-of-tree absolute path: render via our raw-file route,
                         // then detect H265/yuv444 and swap in a server preview clip.
                         setTimeout(() => {
                             createVideoPreview(node, mediaFileUrl(filename));
                             runPlayabilityCheck(filename);
                         }, 200);
-                    } else if (filename && filename !== '(none)') {
-                        // Ensure native player can resolve output files
-                        if (node._sourceFolder === 'output') {
-                            videoWidget.value = filename + ' [output]';
-                            setTimeout(() => { videoWidget.value = filename; }, 200);
-                        }
-                        setTimeout(() => runPlayabilityCheck(filename), 500);
-                    } else if (filename === '(blank)') {
-                        node._playabilityCheckToken++;
-                        setPlayabilityWarning(false);
-                        setTimeout(() => showPlaceholderVideoPreview(node), 100);
                     } else {
-                        node._playabilityCheckToken++;
-                        setPlayabilityWarning(false);
-                        setTimeout(() => showPlaceholderVideoPreview(node), 100);
+                        // Render through our framed video host.
+                        setTimeout(() => {
+                            createVideoPreview(node, `/view?filename=${encodeURIComponent(filename)}&type=${node._sourceFolder || 'input'}`);
+                            runPlayabilityCheck(filename);
+                        }, 200);
                     }
                 }
 

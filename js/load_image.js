@@ -440,6 +440,7 @@ function showEmptyPreview(node, requestId = null) {
 /**
  * Show placeholder.png preview for the (blank) sentinel.
  * The backend still returns a 64x64 black image; this is only the UI preview.
+ * The footer stays as "\u2014" to match (none).
  */
 function showBlankPreview(node, requestId = null) {
     if (requestId != null && node._previewRequestId !== requestId) {
@@ -453,7 +454,20 @@ function showBlankPreview(node, requestId = null) {
     img.onload = () => {
         node.imgs = [img];
         node.imageIndex = 0;
-        updateMaskDomImage(node);
+        if (node._maskDom) {
+            const dom = node._maskDom;
+            dom.hasImage = true;
+            node._maskDomSourceImg = img;
+            dom.img.src = img.src;
+            dom.img.draggable = false;
+            dom.imgWrap.style.display = "block";
+            dom.toolbarFrame.style.display = "none";
+            dom.toolbar.style.display = "none";
+            dom.previewFrame.style.top = `${MASK_TOP_INSET_OFF}px`;
+            dom.previewFrame.style.display = "block";
+            dom.footer.style.display = "block";
+            dom.footerText.textContent = "\u2014";
+        }
 
         node.setDirtyCanvas(true, true);
         app.graph?.setDirtyCanvas(true, true);
@@ -1119,15 +1133,19 @@ function updateMaskDomImage(node) {
         : `${MASK_TOP_INSET_OFF}px`;
     dom.previewFrame.style.display = "block";
     dom.footer.style.display = "block";
-    updateMaskFooter(dom);
+    updateMaskFooter(dom, node);
     if (changed) resizeMaskNodeToFit(node);
 }
 
-function updateMaskFooter(dom) {
+function updateMaskFooter(dom, node) {
     if (!dom?.footerText) return;
+    if (node?.properties?._loadedImageFilename === "(blank)") {
+        dom.footerText.textContent = "\u2014";
+        return;
+    }
     const width = Number(dom.img?.naturalWidth || 0);
     const height = Number(dom.img?.naturalHeight || 0);
-    dom.footerText.textContent = width > 0 && height > 0 ? `${width} × ${height}` : "—";
+    dom.footerText.textContent = width > 0 && height > 0 ? `${width} × ${height}` : "\u2014";
 }
 
 function resizeMaskNodeToFit(node) {
@@ -1549,7 +1567,7 @@ function createMaskDomUI(node, imageWidget, refreshImageOptionsForSource) {
         canvas.style.height = `${height}px`;
         canvas.width = Math.max(1, naturalW);
         canvas.height = Math.max(1, naturalH);
-        updateMaskFooter(node._maskDom);
+        updateMaskFooter(node._maskDom, node);
         renderMaskDomCanvas(node);
         updateMaskCursor(node);
     };

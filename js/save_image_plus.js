@@ -681,6 +681,9 @@ function drawCompareCanvas(ctx, node) {
         }
     }
 
+    // Store the frame rectangle so context-menu code can map clicks to images.
+    state.frameRect = { x: frameX, y: frameY, w: frameW, h: frameH };
+
     // Footer: image size box. Shows the displayed image's size, or the first
     // image's size in grid mode (one size for the whole batch).
     const footerImg = state.gridMode
@@ -1018,6 +1021,110 @@ function getActiveSaveImageNode(nodeType) {
     return null;
 }
 
+function findImageAtPosition(node, localPos) {
+    const state = ensureCompareState(node);
+    if (!state.savedItems.length || !state.frameRect) {
+        return null;
+    }
+
+    const frame = state.frameRect;
+    if (localPos[0] < frame.x || localPos[0] > frame.x + frame.w ||
+        localPos[1] < frame.y || localPos[1] > frame.y + frame.h) {
+        return null;
+    }
+
+    // Grid mode: pick the cell under the cursor.
+    if (state.gridMode && state.savedItems.length > 1) {
+        for (const zone of state.gridZones || []) {
+            if (localPos[0] >= zone.x && localPos[0] <= zone.x + zone.w &&
+                localPos[1] >= zone.y && localPos[1] <= zone.y + zone.h) {
+                return state.savedItems[zone.index] || null;
+            }
+        }
+        return null;
+    }
+
+    // Compare split view: left half = compare image (A), right half = saved (B)
+    // when hovering and a compare image exists. Otherwise use selected saved image.
+    const hasCompare = state.compareItems.length > 0;
+    const pairedView = state.paired && !state.unpaired;
+    const compareIndex = pairedView ? clampIndex(state.selectedSaved, state.compareItems.length) : state.selectedCompare;
+
+    if (hasCompare && state.previewRect && state.hovering) {
+        const splitX = state.previewRect.x + clamp(state.split, 0, 1) * state.previewRect.w;
+        if (localPos[0] < splitX && state.compareItems[compareIndex]) {
+            return state.compareItems[compareIndex];
+        }
+    }
+
+    return state.savedItems[state.selectedSaved] || null;
+}
+
+function openImageInNewTab(imageInfo) {
+    const url = imageInfoToUrl(imageInfo);
+    if (url) window.open(url, "_blank");
+}
+
+async function copyImageToClipboard(imageInfo) {
+    const url = imageInfoToUrl(imageInfo);
+    if (!url) return;
+
+    try {
+        if (typeof ClipboardItem === "undefined" || !navigator.clipboard?.write) {
+            throw new Error("Clipboard image write is not supported in this browser context");
+        }
+        const response = await fetch(url);
+        if (!response.ok) throw new Error(`Fetch failed: ${response.status}`);
+        const blob = await response.blob();
+        const mimeType = blob.type || "image/png";
+        await navigator.clipboard.write([new ClipboardItem({ [mimeType]: blob })]);
+    } catch (error) {
+        console.error("[SaveImagePlus] Failed to copy image:", error);
+    }
+}
+
+function getHoveredImageForContextMenu(node, canvas) {
+    if (!node || !canvas) {
+        return null;
+    }
+
+    const graphPos = canvas.graph_mouse;
+    if (!Array.isArray(graphPos) || graphPos.length < 2) {
+        return null;
+    }
+
+    const nodePos = [graphPos[0] - node.pos[0], graphPos[1] - node.pos[1]];
+    return findImageAtPosition(node, nodePos);
+}
+
+function appendImageContextMenuOptions(node, options, canvas) {
+    if (!node || !Array.isArray(options) || node.flags?.collapsed) {
+        return;
+    }
+
+    const imageInfo = getHoveredImageForContextMenu(node, canvas);
+    if (!imageInfo) {
+        return;
+    }
+
+    const imageName = String(imageInfo.filename || "").split(/[\\/]/).pop() || imageInfo.filename;
+    options.push(null);
+    options.push({
+        content: `Image: ${imageName}`,
+        disabled: true,
+    });
+    options.push({
+        content: "Open Image",
+        callback: () => openImageInNewTab(imageInfo),
+    });
+    options.push({
+        content: "Copy Image",
+        callback: () => {
+            copyImageToClipboard(imageInfo);
+        },
+    });
+}
+
 function installKeyNavigation() {
     if (_fbKeyListenerInstalled) {
         return;
@@ -1087,6 +1194,13 @@ app.registerExtension({
             installExecutedSync();
             restoreFromExecutedCache(this);
             ensureMinDisplaySize(this);
+            return result;
+        };
+
+        const getExtraMenuOptions = nodeType.prototype.getExtraMenuOptions;
+        nodeType.prototype.getExtraMenuOptions = function (canvas, options) {
+            const result = getExtraMenuOptions?.apply(this, arguments);
+            appendImageContextMenuOptions(this, options, canvas);
             return result;
         };
 
