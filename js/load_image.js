@@ -438,7 +438,8 @@ function showEmptyPreview(node, requestId = null) {
 }
 
 /**
- * Show a 64x64 black preview for the (blank) sentinel.
+ * Show placeholder.png preview for the (blank) sentinel.
+ * The backend still returns a 64x64 black image; this is only the UI preview.
  */
 function showBlankPreview(node, requestId = null) {
     if (requestId != null && node._previewRequestId !== requestId) {
@@ -447,13 +448,6 @@ function showBlankPreview(node, requestId = null) {
     if (!node.properties) node.properties = {};
     node.properties._loadedImageFilename = "(blank)";
     node.properties._loadedFramePosition = null;
-
-    const canvas = document.createElement('canvas');
-    canvas.width = 64;
-    canvas.height = 64;
-    const ctx = canvas.getContext('2d');
-    ctx.fillStyle = '#000000';
-    ctx.fillRect(0, 0, 64, 64);
 
     const img = new Image();
     img.onload = () => {
@@ -464,7 +458,7 @@ function showBlankPreview(node, requestId = null) {
         node.setDirtyCanvas(true, true);
         app.graph?.setDirtyCanvas(true, true);
     };
-    img.src = canvas.toDataURL('image/png');
+    img.src = PLACEHOLDER_IMAGE_PATH;
 }
 
 /**

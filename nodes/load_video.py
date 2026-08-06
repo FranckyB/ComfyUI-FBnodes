@@ -10,6 +10,13 @@ from comfy_api.input_impl import VideoFromFile
 
 VIDEO_EXTENSIONS = ['.mp4', '.webm', '.mov', '.avi', '.mkv', '.m4v', '.wmv']
 
+# Small black H.264 placeholder clip shipped alongside the frontend.
+_PLACEHOLDER_VIDEO_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "js",
+    "placeholder.mp4",
+)
+
 
 class LoadVideoPlus:
     """
@@ -20,7 +27,7 @@ class LoadVideoPlus:
     @classmethod
     def INPUT_TYPES(cls):
         input_dir = folder_paths.get_input_directory()
-        files = ["(none)"]
+        files = ["(none)", "(blank)"]
 
         if os.path.exists(input_dir):
             for root, dirs, filenames in os.walk(input_dir):
@@ -32,9 +39,9 @@ class LoadVideoPlus:
                         rel_path = rel_path.replace('\\', '/')
                         files.append(rel_path)
 
-        files_to_sort = files[1:]
+        files_to_sort = files[2:]
         files_to_sort.sort()
-        files = ["(none)"] + files_to_sort
+        files = ["(none)", "(blank)"] + files_to_sort
 
         return {
             "required": {
@@ -72,6 +79,9 @@ class LoadVideoPlus:
         if not video or video == "(none)":
             return (None,)
 
+        if video == "(blank)":
+            return (VideoFromFile(_PLACEHOLDER_VIDEO_PATH),)
+
         file_path, annotated_type = self._parse_video_path(video)
         if annotated_type:
             source_folder = annotated_type
@@ -103,7 +113,9 @@ class LoadVideoPlus:
     @classmethod
     def IS_CHANGED(cls, video="", source_folder="input", **kwargs):
         if not video or video == "(none)":
-            return ""
+            return "none"
+        if video == "(blank)":
+            return "blank"
 
         import re
         match = re.match(r'^(.+?)\s*\[(input|output|temp)\]\s*$', video)

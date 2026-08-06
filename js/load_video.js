@@ -112,6 +112,23 @@ function getPreviewContainer(node) {
         || null;
 }
 
+function clearVideoPreview(node) {
+    const container = getPreviewContainer(node);
+    if (container) {
+        container.innerHTML = '';
+    }
+    node._needsPlayabilityWarning = false;
+    syncWarningOverlay(node);
+    node.setDirtyCanvas?.(true, true);
+}
+
+function showPlaceholderVideoPreview(node) {
+    createImagePreview(node, PLACEHOLDER_IMAGE_PATH);
+    node._needsPlayabilityWarning = false;
+    syncWarningOverlay(node);
+    node.setDirtyCanvas?.(true, true);
+}
+
 function isNodeBypassed(node) {
     return !!(node?.mode === 4 || node?.flags?.bypass || node?.flags?.bypassed);
 }
@@ -252,7 +269,7 @@ function setStaticFramePreview(node, frameUrl) {
  * Add [output] annotation to a path (only if source is not input)
  */
 function annotatePath(filename, sourceFolder) {
-    if (!filename || filename === '(none)') return filename;
+    if (!filename || filename === '(none)' || filename === '(blank)') return filename;
     const stripped = stripAnnotation(filename);
     if (sourceFolder === 'output') {
         return `${stripped} [output]`;
@@ -297,7 +314,7 @@ function fixVideoSrcFolder(node, filename, sourceFolder) {
  * If so, generate a 1-frame H264 preview clip and display that instead.
  */
 async function checkVideoPlayability(node, filename) {
-    if (!filename || filename === '(none)') return;
+    if (!filename || filename === '(none)' || filename === '(blank)') return;
 
     const sourceFolder = node._sourceFolder || 'input';
 
@@ -410,7 +427,7 @@ function createVideoPreview(node, clipViewUrl, posterUrl = null) {
 async function getCurrentVideoPath(node) {
     const videoWidget = node.widgets?.find((w) => w.name === "video");
     const current = stripAnnotation(videoWidget?.value);
-    if (!current || current === "(none)") return null;
+    if (!current || current === "(none)" || current === "(blank)") return null;
 
     if (isAbsolutePath(current)) {
         return current;
@@ -482,7 +499,7 @@ app.registerExtension({
                 const token = ++node._playabilityCheckToken;
                 const filename = stripAnnotation(cleanFilename);
 
-                if (!filename || filename === '(none)') {
+                if (!filename || filename === '(none)' || filename === '(blank)') {
                     if (token === node._playabilityCheckToken) {
                         setPlayabilityWarning(false);
                     }
@@ -617,14 +634,14 @@ app.registerExtension({
 
             node._sourceFolder = 'input';
             let videoPickerWidget = null;
-            node._videoPickerMap = { '(none)': '(none)' };
+            node._videoPickerMap = { '(none)': '(none)', '(blank)': '(blank)' };
 
             const updateVideoPickerOptions = (values, preferredValue = null) => {
                 if (!videoPickerWidget) return;
 
-                const labels = ['(none)'];
-                const map = { '(none)': '(none)' };
-                const usedLabels = new Set(['(none)']);
+                const labels = ['(none)', '(blank)'];
+                const map = { '(none)': '(none)', '(blank)': '(blank)' };
+                const usedLabels = new Set(['(none)', '(blank)']);
 
                 for (const fullValue of values || []) {
                     const base = basenameForDisplay(fullValue) || fullValue;
@@ -681,15 +698,15 @@ app.registerExtension({
                         videoWidget.options.values = { ...values, [label]: value };
                     }
                 } else {
-                    videoWidget.options.values = ["(none)"];
-                    if (value && value !== "(none)") {
+                    videoWidget.options.values = ["(none)", "(blank)"];
+                    if (value && value !== "(none)" && value !== "(blank)") {
                         videoWidget.options.values.push(value);
                     }
                 }
                 videoWidget.value = value;
                 if (videoWidget.callback) videoWidget.callback(value);
 
-                const map = node._videoPickerMap || { '(none)': '(none)' };
+                const map = node._videoPickerMap || { '(none)': '(none)', '(blank)': '(blank)' };
                 const currentLabel = Object.keys(map).find((k) => map[k] === value);
                 if (videoPickerWidget) {
                     videoPickerWidget.value = currentLabel || '(none)';
@@ -723,9 +740,9 @@ app.registerExtension({
                     }
 
                     const desired = stripAnnotation(preferredValue != null ? preferredValue : videoWidget.value);
-                    videoWidget.options.values = ['(none)', ...mapped];
+                    videoWidget.options.values = ['(none)', '(blank)', ...mapped];
                     updateVideoPickerOptions(mapped, desired);
-                    if (desired && desired !== '(none)') videoWidget.value = desired;
+                    if (desired && desired !== '(none)' && desired !== '(blank)') videoWidget.value = desired;
                     return true;
                 } catch (err) {
                     console.warn('[LoadVideoPlus] Could not refresh options for browse path:', err);
@@ -744,12 +761,14 @@ app.registerExtension({
                 videoWidget.callback = function(value) {
                     const clean = stripAnnotation(value);
 
-                    if (!clean || clean === '(none)') {
+                    if (!clean || clean === '(none)' || clean === '(blank)') {
                         node._playabilityCheckToken++;
                         setPlayabilityWarning(false);
+                        showPlaceholderVideoPreview(node);
+                        return;
                     }
 
-                    if (clean && clean !== '(none)') {
+                    if (clean && clean !== '(none)' && clean !== '(blank)') {
                         const applyNativePreview = () => {
                             // Files outside input/output are absolute paths the native
                             // player can't fetch via /view; render through raw-file URL.
@@ -772,24 +791,6 @@ app.registerExtension({
 
                         // Compatibility is resolved first. Incompatible clips never go through native playback.
                         runPlayabilityCheck(clean, applyNativePreview);
-                    } else {
-                        // Show placeholder video when nothing is selected
-                        setTimeout(() => {
-                            const vid = node.videoContainer?.querySelector('video')
-                                || node.widgets?.find(w => w.name === 'video-preview')?.element?.querySelector('video');
-                            if (vid) {
-                                const source = vid.querySelector('source');
-                                if (source) {
-                                    source.src = PLACEHOLDER_VIDEO_PATH;
-                                    source.removeAttribute('type');
-                                } else {
-                                    vid.src = PLACEHOLDER_VIDEO_PATH;
-                                }
-                                vid.load();
-                            } else {
-                                createVideoPreview(node, PLACEHOLDER_VIDEO_PATH);
-                            }
-                        }, 100);
                     }
                 };
 
@@ -801,7 +802,7 @@ app.registerExtension({
                         const selected = node._videoPickerMap?.[label] || '(none)';
                         setVideoFilename(selected);
                     },
-                    { values: ['(none)'] }
+                    { values: ['(none)', '(blank)'] }
                 );
                 videoPickerWidget.serialize = false;
 
@@ -826,7 +827,7 @@ app.registerExtension({
                         const sf = node.widgets?.find(w => w.name === "source_folder")?.value || "input";
                         const currentSelection = stripAnnotation(videoWidget.value);
                         let selectedAbsPath = "";
-                        if (currentSelection && currentSelection !== "(none)") {
+                        if (currentSelection && currentSelection !== "(none)" && currentSelection !== "(blank)") {
                             if (isAbsolutePath(currentSelection)) {
                                 selectedAbsPath = currentSelection;
                             } else {
@@ -875,9 +876,9 @@ app.registerExtension({
                 Object.defineProperty(browseButton, "node", { value: node });
             }
 
-            // Show placeholder video on initial node creation
-            if (videoWidget && (!videoWidget.value || videoWidget.value === '(none)')) {
-                setTimeout(() => createVideoPreview(node, PLACEHOLDER_VIDEO_PATH), 100);
+            // Show placeholder video on initial node creation when (blank) is selected
+            if (videoWidget && videoWidget.value === '(blank)') {
+                setTimeout(() => showPlaceholderVideoPreview(node), 100);
             }
 
             // Restore on workflow load
@@ -905,7 +906,7 @@ app.registerExtension({
                                 const ext = f.split('.').pop().toLowerCase();
                                 return VIDEO_EXTENSIONS.includes(ext);
                             });
-                            videoWidget.options.values = ["(none)", ...videoFiles];
+                            videoWidget.options.values = ["(none)", "(blank)", ...videoFiles];
                             updateVideoPickerOptions(videoFiles, savedStripped);
                             // Restore the saved value
                             if (savedStripped && videoFiles.includes(savedStripped)) {
@@ -942,26 +943,14 @@ app.registerExtension({
                             setTimeout(() => { videoWidget.value = filename; }, 200);
                         }
                         setTimeout(() => runPlayabilityCheck(filename), 500);
+                    } else if (filename === '(blank)') {
+                        node._playabilityCheckToken++;
+                        setPlayabilityWarning(false);
+                        setTimeout(() => showPlaceholderVideoPreview(node), 100);
                     } else {
                         node._playabilityCheckToken++;
                         setPlayabilityWarning(false);
-                        // Show placeholder when no video is selected
-                        setTimeout(() => {
-                            const vid = node.videoContainer?.querySelector('video')
-                                || node.widgets?.find(w => w.name === 'video-preview')?.element?.querySelector('video');
-                            if (vid) {
-                                const source = vid.querySelector('source');
-                                if (source) {
-                                    source.src = PLACEHOLDER_VIDEO_PATH;
-                                    source.removeAttribute('type');
-                                } else {
-                                    vid.src = PLACEHOLDER_VIDEO_PATH;
-                                }
-                                vid.load();
-                            } else {
-                                createVideoPreview(node, PLACEHOLDER_VIDEO_PATH);
-                            }
-                        }, 100);
+                        setTimeout(() => showPlaceholderVideoPreview(node), 100);
                     }
                 }
 
@@ -1016,7 +1005,7 @@ app.registerExtension({
                                         const ext2 = f.split('.').pop().toLowerCase();
                                         return VIDEO_EXTENSIONS.includes(ext2);
                                     });
-                                    videoWidget.options.values = ["(none)", ...videoFiles];
+                                    videoWidget.options.values = ["(none)", "(blank)", ...videoFiles];
                                 }
                             } catch (err) {
                                 console.warn('[LoadVideoPlus] Could not refresh file list:', err);

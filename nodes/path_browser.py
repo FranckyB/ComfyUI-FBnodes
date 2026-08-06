@@ -254,35 +254,46 @@ async def path_browser_file(request):
 
 @server.PromptServer.instance.routes.post("/fbnodes/path-browser/delete")
 async def path_browser_delete(request):
-    """Delete a single media file by absolute path (extension-guarded)."""
+    """Delete a single media file by absolute path or source + relative filename."""
     try:
         data = await request.json()
-        path = data.get("path", "").strip()
-        if not path:
+        source = (data.get("source") or "").strip().lower()
+        filename = (data.get("filename") or "").strip()
+        path = (data.get("path") or "").strip()
+
+        if source in ("input", "output") and filename:
+            base_dir = (
+                folder_paths.get_output_directory()
+                if source == "output"
+                else folder_paths.get_input_directory()
+            )
+            file_path = os.path.realpath(
+                os.path.join(base_dir, filename.replace("/", os.sep))
+            )
+            real_base = os.path.realpath(base_dir)
+            if not file_path.startswith(real_base):
+                return server.web.json_response(
+                    {"ok": False, "error": "Invalid path"}, status=403
+                )
+        elif path:
+            file_path = os.path.realpath(_safe_abspath(path))
+        else:
             return server.web.json_response(
                 {"ok": False, "error": "Missing path"}, status=400
             )
 
-        real_path = os.path.realpath(_safe_abspath(path))
-
-        if not os.path.isfile(real_path):
+        if not os.path.isfile(file_path):
             return server.web.json_response(
                 {"ok": False, "error": "File not found"}, status=404
             )
 
-        ext = os.path.splitext(real_path)[1].lower()
+        ext = os.path.splitext(file_path)[1].lower()
         if ext not in ALL_MEDIA_EXTS:
             return server.web.json_response(
                 {"ok": False, "error": "Unsupported file type"}, status=403
             )
 
-        try:
-            os.remove(real_path)
-        except PermissionError:
-            return server.web.json_response(
-                {"ok": False, "error": "Permission denied"}, status=403
-            )
-
+        os.remove(file_path)
         return server.web.json_response({"ok": True})
     except Exception as e:
         return server.web.json_response({"ok": False, "error": str(e)}, status=500)

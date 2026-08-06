@@ -808,6 +808,7 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder, 
         z-index: 10000;
     `;
     overlay._initialAbsLoadPending = currentNavMode === 'abs';
+    overlay._onFileSelect = onFileSelect;
 
     // Create modal container (match PromptManagerAdvanced styling)
     const modal = document.createElement('div');
@@ -1324,6 +1325,10 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder, 
 }
 
 async function loadFileThumbnails(container, currentFile, onFileSelect, overlay, breadcrumbElement) {
+    if (overlay) {
+        overlay._thumbnailContainer = container;
+        overlay._thumbnailBreadcrumb = breadcrumbElement;
+    }
     if (currentNavMode === 'abs') {
         return loadFileThumbnailsAbs(container, currentFile, onFileSelect, overlay, breadcrumbElement);
     }
@@ -1424,6 +1429,10 @@ async function loadFileThumbnails(container, currentFile, onFileSelect, overlay,
 }
 
 async function loadFileThumbnailsAbs(container, currentFile, onFileSelect, overlay, breadcrumbElement) {
+    if (overlay) {
+        overlay._thumbnailContainer = container;
+        overlay._thumbnailBreadcrumb = breadcrumbElement;
+    }
     container.innerHTML = '<div style="text-align: center; padding: 40px; color: #888;">Loading...</div>';
     try {
         let data = await fetchAbsListing(currentAbsDir, currentNavKind);
@@ -2048,15 +2057,13 @@ function createThumbnailItem(fileEntryInput, currentFile, onFileSelect, overlay,
         };
     }
 
-    // Right-click context menu - only for video thumbnails
-    if (videoExts.includes(ext)) {
-        item.oncontextmenu = (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            showThumbnailContextMenu(e, filename, preview);
-            return false;
-        };
-    }
+    // Right-click context menu for all files
+    item.oncontextmenu = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        showThumbnailContextMenu(e, filename, preview, item);
+        return false;
+    };
 
     return item;
 }
@@ -2075,9 +2082,60 @@ function getFileType(filename) {
 }
 
 /**
- * Show context menu for thumbnail with refresh option
+ * Show a simple confirm dialog. Returns a Promise resolving to true/false.
  */
-function showThumbnailContextMenu(event, filename, previewElement) {
+function showConfirm(title, message, confirmText = "Delete", confirmColor = "#c44") {
+    return new Promise((resolve) => {
+        const overlay = document.createElement("div");
+        overlay.style.cssText = `
+            position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.7); z-index: 99999;
+        `;
+
+        const dialog = document.createElement("div");
+        dialog.style.cssText = `
+            position: fixed; top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            background: hsl(216 11% 15%);
+            border: 1px solid hsl(216 20% 65% / 0.24);
+            border-radius: 8px;
+            padding: 20px;
+            z-index: 100000;
+            min-width: 300px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+            color: hsl(0 0% 87%);
+        `;
+        dialog.innerHTML = `
+            <div style="margin-bottom: 15px; font-size: 16px; font-weight: bold; color: hsl(0 0% 87%);">${title}</div>
+            <div style="margin-bottom: 20px; color: hsl(0 0% 67%); line-height: 1.4;">${message}</div>
+            <div style="display: flex; gap: 10px; justify-content: flex-end;">
+                <button class="cancel-btn" style="padding: 8px 16px; background: hsl(219 16% 18%); color: hsl(0 0% 87%); border: 1px solid hsl(218 10% 41%); border-radius: 4px; cursor: pointer;">Cancel</button>
+                <button class="ok-btn" style="padding: 8px 16px; background: ${confirmColor}; color: #fff; border: 1px solid transparent; border-radius: 4px; cursor: pointer;">${confirmText}</button>
+            </div>
+        `;
+
+        const okBtn = dialog.querySelector(".ok-btn");
+        const cancelBtn = dialog.querySelector(".cancel-btn");
+
+        const cleanup = () => {
+            if (overlay.parentNode) document.body.removeChild(overlay);
+            if (dialog.parentNode) document.body.removeChild(dialog);
+        };
+
+        okBtn.onclick = () => { resolve(true); cleanup(); };
+        cancelBtn.onclick = () => { resolve(false); cleanup(); };
+        overlay.onclick = () => { resolve(false); cleanup(); };
+
+        document.body.appendChild(overlay);
+        document.body.appendChild(dialog);
+        okBtn.focus();
+    });
+}
+
+/**
+ * Show context menu for thumbnail with refresh and delete options
+ */
+function showThumbnailContextMenu(event, filename, previewElement, item) {
     // Remove any existing context menu
     const existingMenu = document.querySelector('.thumbnail-context-menu');
     if (existingMenu) {
@@ -2100,29 +2158,84 @@ function showThumbnailContextMenu(event, filename, previewElement) {
         min-width: 160px;
     `;
 
-    // Refresh option
-    const refreshBtn = document.createElement('div');
-    refreshBtn.textContent = '🔄 Refresh Thumbnail';
-    refreshBtn.style.cssText = `
-        padding: 8px 12px;
-        color: #ccc;
-        cursor: pointer;
-        border-radius: 4px;
-        font-size: 13px;
-        transition: background 0.15s ease;
-    `;
-    refreshBtn.onmouseenter = () => {
-        refreshBtn.style.background = 'rgba(66, 153, 225, 0.3)';
-    };
-    refreshBtn.onmouseleave = () => {
-        refreshBtn.style.background = 'transparent';
-    };
-    refreshBtn.onclick = () => {
-        refreshIndividualThumbnail(filename, previewElement);
-        menu.remove();
+    const makeItem = (text, onClick, color = '#ccc') => {
+        const el = document.createElement('div');
+        el.textContent = text;
+        el.style.cssText = `
+            padding: 8px 12px;
+            color: ${color};
+            cursor: pointer;
+            border-radius: 4px;
+            font-size: 13px;
+            transition: background 0.15s ease;
+        `;
+        el.onmouseenter = () => { el.style.background = 'rgba(66, 153, 225, 0.3)'; };
+        el.onmouseleave = () => { el.style.background = 'transparent'; };
+        el.onclick = () => { onClick(); menu.remove(); };
+        return el;
     };
 
-    menu.appendChild(refreshBtn);
+    const makeDivider = () => {
+        const el = document.createElement('div');
+        el.style.cssText = 'height: 1px; background: rgba(255,255,255,0.15); margin: 4px 0;';
+        return el;
+    };
+
+    const ext = filename.split('.').pop().toLowerCase();
+    const videoExts = ['mp4', 'webm', 'mov', 'avi'];
+
+    // Refresh option (only for videos)
+    if (videoExts.includes(ext)) {
+        menu.appendChild(makeItem('🔄 Refresh Thumbnail', () => {
+            refreshIndividualThumbnail(filename, previewElement);
+        }));
+        menu.appendChild(makeDivider());
+    }
+
+    // Delete option
+    menu.appendChild(makeItem('🗑️ Delete File', async () => {
+        const basename = browserBasename(filename);
+        const confirmed = await showConfirm(
+            'Delete File',
+            `Are you sure you want to delete "${basename}"? This cannot be undone.`
+        );
+        if (!confirmed) return;
+
+        try {
+            const payload = currentNavMode === 'abs'
+                ? { path: filename }
+                : { source: currentSourceFolder, filename: filename };
+            const response = await fetch('/fbnodes/path-browser/delete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            const data = await response.json();
+            if (data.ok) {
+                if (item && item.parentNode) {
+                    item.remove();
+                }
+                // Refresh the browser to keep the listing in sync.
+                const overlay = item?.closest?.('.prompt-extractor-browser-overlay');
+                if (overlay && overlay._thumbnailContainer) {
+                    loadFileThumbnails(
+                        overlay._thumbnailContainer,
+                        null,
+                        overlay._onFileSelect,
+                        overlay,
+                        overlay._thumbnailBreadcrumb
+                    );
+                }
+            } else {
+                console.error('[FileBrowser] Delete failed:', data.error);
+                alert(`Failed to delete file: ${data.error || 'Unknown error'}`);
+            }
+        } catch (err) {
+            console.error('[FileBrowser] Error deleting file:', err);
+            alert(`Error deleting file: ${err.message}`);
+        }
+    }, '#ff6b6b'));
+
     document.body.appendChild(menu);
 
     // Close menu when clicking outside
