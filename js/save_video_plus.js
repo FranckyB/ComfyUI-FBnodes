@@ -107,7 +107,8 @@ function setResultData(node, message) {
 
     updateDisplayState(node);
     ensureMinWarningDisplaySize(node);
-    syncSaveVideoPreview(node);
+    syncWarningOverlay(node);
+    node.setDirtyCanvas?.(true, true);
     return true;
 }
 
@@ -211,61 +212,11 @@ function getPreviewContainer(node) {
         || null;
 }
 
-function buildPreviewFrame(container) {
-    container.innerHTML = '';
-    container.style.position = 'relative';
-    container.style.width = '100%';
-    container.style.height = '100%';
-
-    const frame = document.createElement('div');
-    frame.className = 'fbnodes-save-video-frame';
-    frame.style.cssText = `
-        position: absolute; left: 8px; top: 8px; right: 8px; bottom: 34px;
-        overflow: hidden; background: rgba(34, 39, 48, 0.98);
-        border: 1px solid rgba(78, 90, 108, 0.72); border-radius: 10px;
-        box-sizing: border-box;
-    `;
-
-    const mediaHost = document.createElement('div');
-    mediaHost.className = 'fbnodes-save-video-media-host';
-    mediaHost.style.cssText = `
-        position: absolute; left: 1px; top: 1px; right: 1px; bottom: 1px;
-        overflow: hidden; background: transparent;
-    `;
-
-    const footer = document.createElement('div');
-    footer.className = 'fbnodes-save-video-footer';
-    footer.style.cssText = `
-        position: absolute; left: 8px; right: 8px; bottom: 8px; height: 22px;
-        border-radius: 8px; border: 1px solid rgba(66, 72, 84, 0.95);
-        background: rgba(34, 39, 48, 0.98); box-sizing: border-box;
-        color: rgba(192, 206, 222, 0.95); font: 600 10px "Segoe UI", sans-serif;
-        line-height: 20px; text-align: center; pointer-events: none;
-    `;
-    footer.textContent = '\u2014';
-
-    frame.appendChild(mediaHost);
-    container.appendChild(frame);
-    container.appendChild(footer);
-    container._previewFooter = footer;
-    container._previewMediaHost = mediaHost;
-    return { frame, mediaHost, footer };
-}
-
-function setSaveVideoFooter(container, text) {
-    if (container?._previewFooter) {
-        container._previewFooter.textContent = text || '\u2014';
-    }
-}
-
 function ensurePreviewContainer(node) {
     let container = getPreviewContainer(node);
     if (container) {
         if (!node.videoContainer) {
             node.videoContainer = container;
-        }
-        if (!container._previewMediaHost) {
-            buildPreviewFrame(container);
         }
         return container;
     }
@@ -273,7 +224,6 @@ function ensurePreviewContainer(node) {
     container = document.createElement("div");
     container.classList.add("comfy-img-preview");
     node.videoContainer = container;
-    buildPreviewFrame(container);
 
     if (!node.widgets?.some((w) => w.name === "video-preview")) {
         const w = node.addDOMWidget("video-preview", "video", container, {
@@ -303,10 +253,19 @@ function getFramePreviewLayer(host) {
     frameImg = document.createElement("img");
     frameImg.className = "fbnodes-save-video-frame-preview";
     frameImg.alt = "Video frame preview";
-    frameImg.style.cssText = `
-        position: absolute; left: 0; top: 0; width: 100%; height: 100%;
-        object-fit: contain; pointer-events: none; display: none; z-index: 9;
-    `;
+    frameImg.style.position = "absolute";
+    frameImg.style.left = "8px";
+    frameImg.style.right = "8px";
+    frameImg.style.top = "12px";
+    frameImg.style.bottom = "84px";
+    frameImg.style.width = "calc(100% - 16px)";
+    frameImg.style.height = "calc(100% - 96px)";
+    frameImg.style.objectFit = "contain";
+    frameImg.style.background = "rgba(0, 0, 0, 0.28)";
+    frameImg.style.borderRadius = "4px";
+    frameImg.style.pointerEvents = "none";
+    frameImg.style.display = "none";
+    frameImg.style.zIndex = "9";
     host.appendChild(frameImg);
     return frameImg;
 }
@@ -334,126 +293,6 @@ function syncFramePreviewLayer(node, host) {
     }
 
     frameImg.style.display = "block";
-}
-
-function clearSaveVideoMedia(host) {
-    if (!host) return;
-    const videos = host.querySelectorAll('video');
-    videos.forEach((v) => v.remove());
-    const frameImg = host.querySelector('.fbnodes-save-video-frame-preview');
-    if (frameImg) frameImg.style.display = 'none';
-    const overlay = host.querySelector('.fbnodes-save-video-warning');
-    if (overlay) overlay.style.display = 'none';
-    const loadError = host.querySelector('.fbnodes-save-video-load-error');
-    if (loadError) loadError.style.display = 'none';
-}
-
-function showSaveVideoLoadError(host) {
-    if (!host) return;
-    let loadError = host.querySelector('.fbnodes-save-video-load-error');
-    if (!loadError) {
-        loadError = document.createElement('div');
-        loadError.className = 'fbnodes-save-video-load-error';
-        loadError.style.cssText = `
-            position: absolute; left: 0; top: 0; right: 0; bottom: 0; z-index: 12;
-            display: none; flex-direction: column; align-items: center; justify-content: center;
-            text-align: center; pointer-events: none; color: rgba(255, 235, 235, 0.92);
-        `;
-
-        const icon = document.createElement('div');
-        icon.textContent = '\u25B6';
-        icon.style.cssText = `
-            width: 44px; height: 44px; border-radius: 50%;
-            background: rgba(255, 255, 255, 0.12);
-            display: flex; align-items: center; justify-content: center;
-            font: 600 18px sans-serif; margin-bottom: 12px;
-        `;
-
-        const line1 = document.createElement('div');
-        line1.textContent = 'Video preview unavailable';
-        line1.style.font = '600 15px sans-serif';
-
-        const line2 = document.createElement('div');
-        line2.textContent = 'Use \u25B6 at the top to open in System Player';
-        line2.style.marginTop = '6px';
-        line2.style.font = '600 13px sans-serif';
-        line2.style.color = 'rgba(246, 210, 122, 0.95)';
-
-        loadError.appendChild(icon);
-        loadError.appendChild(line1);
-        loadError.appendChild(line2);
-        host.appendChild(loadError);
-    }
-    loadError.style.display = 'flex';
-}
-
-function showSaveVideoEmptyPreview(node) {
-    const container = ensurePreviewContainer(node);
-    if (container._saveVideoHasPreview) {
-        buildPreviewFrame(container);
-        container._saveVideoHasPreview = false;
-    }
-    clearSaveVideoMedia(container._previewMediaHost);
-    setSaveVideoFooter(container, '\u2014');
-    syncWarningOverlay(node);
-    node.setDirtyCanvas?.(true, true);
-}
-
-function showSaveVideoPreview(node, savedPath) {
-    const container = ensurePreviewContainer(node);
-    const needsExternal = !!node.properties?._needsExternalPlayer;
-
-    if (!container._saveVideoHasPreview || !container._previewMediaHost?.querySelector('video')) {
-        buildPreviewFrame(container);
-        container._saveVideoHasPreview = true;
-    }
-
-    const host = container._previewMediaHost;
-    clearSaveVideoMedia(host);
-
-    if (needsExternal) {
-        syncWarningOverlay(node);
-        setSaveVideoFooter(container, '\u2014');
-        node.setDirtyCanvas?.(true, true);
-        return;
-    }
-
-    const filename = savedPath.split(/[\\/]/).pop();
-    const subfolder = savedPath.substring(0, savedPath.length - filename.length - 1).split(/[\\/]/).pop() || '';
-    const actualPath = filename;
-    let videoUrl = `/view?filename=${encodeURIComponent(actualPath)}&type=output`;
-    if (subfolder) videoUrl += `&subfolder=${encodeURIComponent(subfolder)}`;
-
-    const vid = document.createElement('video');
-    vid.playsInline = true;
-    vid.controls = true;
-    vid.loop = true;
-    vid.muted = true;
-    vid.style.cssText = 'width:100%;height:100%;object-fit:contain;display:block;';
-    vid.src = videoUrl;
-    vid.onloadedmetadata = () => {
-        const w = vid.videoWidth || 0;
-        const h = vid.videoHeight || 0;
-        if (w && h) setSaveVideoFooter(container, `${w} \u00d7 ${h}`);
-    };
-    vid.onerror = () => {
-        vid.style.display = 'none';
-        setSaveVideoFooter(container, '\u2014');
-        showSaveVideoLoadError(host);
-    };
-    host.appendChild(vid);
-
-    syncWarningOverlay(node);
-    node.setDirtyCanvas?.(true, true);
-}
-
-function syncSaveVideoPreview(node) {
-    const savedPath = node.properties?._lastSavedVideoPath;
-    if (!savedPath) {
-        showSaveVideoEmptyPreview(node);
-    } else {
-        showSaveVideoPreview(node, savedPath);
-    }
 }
 
 function isControlsToggleWidget(widget) {
@@ -587,32 +426,36 @@ function ensureControlsToggleWidget(node, { skipSize = false } = {}) {
     applyControlsCollapsedState(node, { skipSize });
 }
 
-function getWarningOverlay(host) {
-    let overlay = host?.querySelector(".fbnodes-save-video-warning");
-    if (overlay) return overlay;
-
-    overlay = document.createElement("div");
-    overlay.className = "fbnodes-save-video-warning";
-    overlay.style.cssText = `
-        position: absolute; left: 0; top: 0; right: 0; bottom: 0; z-index: 11;
-        pointer-events: none; display: none; flex-direction: column;
-        align-items: center; justify-content: center; text-align: center;
-        line-height: 1.25;
-    `;
-    host.appendChild(overlay);
-    return overlay;
-}
-
 function applyWarningOverlay(node) {
-    const container = ensurePreviewContainer(node);
-    if (!container) return false;
-
-    const host = container._previewMediaHost;
+    const host = ensurePreviewContainer(node);
     if (!host) return false;
+
+    if (!host.style.position) {
+        host.style.position = "relative";
+    }
 
     syncFramePreviewLayer(node, host);
 
-    const overlay = getWarningOverlay(host);
+    let overlay = host.querySelector(".fbnodes-save-video-warning");
+    if (!overlay) {
+        overlay = document.createElement("div");
+        overlay.className = "fbnodes-save-video-warning";
+        overlay.style.position = "absolute";
+        overlay.style.left = "8px";
+        overlay.style.right = "8px";
+        // Keep warning away from the native control strip and slightly higher.
+        overlay.style.top = "12px";
+        overlay.style.bottom = "84px";
+        overlay.style.zIndex = "11";
+        overlay.style.pointerEvents = "none";
+        overlay.style.display = "none";
+        overlay.style.flexDirection = "column";
+        overlay.style.alignItems = "center";
+        overlay.style.justifyContent = "center";
+        overlay.style.textAlign = "center";
+        overlay.style.lineHeight = "1.25";
+        host.appendChild(overlay);
+    }
 
     if (node._saveVideoShowCompatWarning) {
         overlay.innerHTML = "";
@@ -644,36 +487,6 @@ function syncWarningOverlay(node, attempts = 0) {
     if (!applied && attempts < 10) {
         setTimeout(() => syncWarningOverlay(node, attempts + 1), 80);
     }
-}
-
-function installNativeVideoInterceptor(node) {
-    if (node._saveVideoNativeObserver) return;
-    const container = getPreviewContainer(node);
-    if (!container) return;
-
-    node._saveVideoNativeObserver = new MutationObserver((mutations) => {
-        let needsSync = false;
-        for (const mutation of mutations) {
-            for (const added of mutation.addedNodes) {
-                if (added.nodeType !== Node.ELEMENT_NODE) continue;
-                if (added.tagName === 'VIDEO' && !added.classList.contains('fbnodes-save-video-player')) {
-                    added.classList.add('fbnodes-save-video-player');
-                    const host = container._previewMediaHost;
-                    if (host && added.parentElement !== host) {
-                        clearSaveVideoMedia(host);
-                        host.appendChild(added);
-                        added.style.cssText = 'width:100%;height:100%;object-fit:contain;display:block;';
-                        needsSync = true;
-                    }
-                }
-            }
-        }
-        if (needsSync) {
-            syncWarningOverlay(node);
-        }
-    });
-
-    node._saveVideoNativeObserver.observe(container, { childList: true, subtree: true });
 }
 
 function drawTitlePlayIcon(node, ctx) {
@@ -757,8 +570,7 @@ app.registerExtension({
             updateDisplayState(node);
             restoreFromExecutedCache(node);
             ensureMinWarningDisplaySize(node);
-            syncSaveVideoPreview(node);
-            installNativeVideoInterceptor(node);
+            syncWarningOverlay(node);
 
             const onDrawForeground = node.onDrawForeground;
             node.onDrawForeground = function (ctx) {
@@ -808,8 +620,7 @@ app.registerExtension({
             updateDisplayState(this);
             restoreFromExecutedCache(this);
             ensureMinWarningDisplaySize(this);
-            syncSaveVideoPreview(this);
-            installNativeVideoInterceptor(this);
+            syncWarningOverlay(this);
             this.setDirtyCanvas?.(true, true);
             return result;
         };

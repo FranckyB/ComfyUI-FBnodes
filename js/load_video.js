@@ -24,6 +24,8 @@ const PLACEHOLDER_IMAGE_PATH = new URL("./placeholder.png", import.meta.url).hre
 const PLACEHOLDER_VIDEO_PATH = new URL("./placeholder.mp4", import.meta.url).href;
 const UNPLAYABLE_WARNING_LINE1 = "Video not compatible with browser";
 const UNPLAYABLE_WARNING_LINE2 = "Use \u25B6 at the top to open in System Player";
+const LOAD_VIDEO_MIN_WIDTH = 300;
+const LOAD_VIDEO_MIN_HEIGHT = 320;
 
 /**
  * Strip [input]/[output]/[temp] annotation from a path
@@ -43,6 +45,68 @@ function basenameForDisplay(value) {
     const normalized = s.replace(/\\/g, "/");
     const i = normalized.lastIndexOf("/");
     return i >= 0 ? normalized.substring(i + 1) : normalized;
+}
+
+function buildVideoPreviewUrl(filename, sourceFolder) {
+    const clean = stripAnnotation(filename);
+    if (!clean || clean === '(none)' || clean === '(blank)') return '';
+
+    if (isAbsolutePath(clean)) {
+        return mediaFileUrl(clean);
+    }
+
+    let actualFilename = clean;
+    let subfolder = '';
+    const normalized = clean.replace(/\\/g, '/');
+    const lastSlash = normalized.lastIndexOf('/');
+    if (lastSlash >= 0) {
+        subfolder = normalized.substring(0, lastSlash);
+        actualFilename = normalized.substring(lastSlash + 1);
+    }
+
+    let url = `/view?filename=${encodeURIComponent(actualFilename)}&type=${encodeURIComponent(sourceFolder || 'input')}`;
+    if (subfolder) {
+        url += `&subfolder=${encodeURIComponent(subfolder)}`;
+    }
+    return url;
+}
+
+function probeBrowserPlayback(url, timeoutMs = 1500) {
+    return new Promise((resolve) => {
+        if (!url) {
+            resolve(false);
+            return;
+        }
+
+        const video = document.createElement('video');
+        video.muted = true;
+        video.playsInline = true;
+        video.preload = 'metadata';
+        video.style.cssText = 'position:fixed;top:-9999px;left:-9999px;width:1px;height:1px;opacity:0;pointer-events:none;';
+
+        let done = false;
+        const finish = (ok) => {
+            if (done) return;
+            done = true;
+            clearTimeout(timer);
+            video.onloadedmetadata = null;
+            video.oncanplay = null;
+            video.onerror = null;
+            try { video.pause(); } catch {}
+            video.removeAttribute('src');
+            try { video.load(); } catch {}
+            if (video.parentNode) video.parentNode.removeChild(video);
+            resolve(ok);
+        };
+
+        const timer = setTimeout(() => finish(false), timeoutMs);
+        video.onloadedmetadata = () => finish(true);
+        video.oncanplay = () => finish(true);
+        video.onerror = () => finish(false);
+
+        document.body.appendChild(video);
+        video.src = `${url}${url.includes('?') ? '&' : '?'}t=${Date.now()}`;
+    });
 }
 
 function hideWidget(widget) {
@@ -120,7 +184,13 @@ function suppressNativeVideoWidget(node, videoWidget) {
             const clean = stripAnnotation(videoWidget?.value);
             if (!clean || clean === '(none)') showEmptyVideoPreview(node);
             else if (clean === '(blank)') showPlaceholderVideoPreview(node);
-            else createVideoPreview(node, `/view?filename=${encodeURIComponent(clean)}&type=${node._sourceFolder || 'input'}`);
+            else createVideoPreview(
+                node,
+                buildVideoPreviewUrl(clean, node._sourceFolder || 'input'),
+                null,
+                clean,
+                node._sourceFolder || 'input'
+            );
         }
     });
 
@@ -403,13 +473,12 @@ function setStaticFramePreview(node, frameUrl) {
     if (vid) {
         try {
             vid.pause();
-            vid.poster = frameUrl;
             const source = vid.querySelector('source');
-            if (source) source.removeAttribute('src');
+            if (source) source.remove();
             vid.removeAttribute('src');
-            vid.load();
-            syncWarningOverlay(node);
-            return true;
+            vid.removeAttribute('controls');
+            vid.style.display = 'none';
+            vid.remove();
         } catch {
             // fall through to image preview
         }
@@ -535,7 +604,7 @@ async function loadServerPreviewClip(node, filename, sourceFolder) {
  * native useNodeVideo adds one.  Used when the native player never
  * initialised (e.g. first selection is an H265 clip the browser can't decode).
  */
-function createVideoPreview(node, clipViewUrl, posterUrl = null) {
+function createVideoPreview(node, clipViewUrl, posterUrl = null, sourceFilename = null, sourceFolder = null) {
     let container = getPreviewContainer(node);
     if (!container || !container.classList?.contains('comfy-img-preview')) {
         container = document.createElement('div');
@@ -555,16 +624,29 @@ function createVideoPreview(node, clipViewUrl, posterUrl = null) {
         }
     }
 
-    const onVideoError = () => {
+    const onVideoError = (event) => {
+        const failedVideo = event?.currentTarget;
+        if (failedVideo && failedVideo.remove) {
+            failedVideo.removeAttribute('controls');
+            failedVideo.style.display = 'none';
+            failedVideo.remove();
+        }
+        if (sourceFilename) {
+            _nonBrowserDecodableVideos.add(sourceFilename);
+        }
         node._needsPlayabilityWarning = true;
         syncWarningOverlay(node);
         node.setDirtyCanvas?.(true, true);
+        if (sourceFilename) {
+            loadServerPreviewClip(node, sourceFilename, sourceFolder || node._sourceFolder || 'input');
+        }
     };
 
     // Reuse existing video element if the frame is already set up.
     const existingVid = container.querySelector('video');
     if (existingVid && existingVid.parentElement?.classList?.contains('fbnodes-video-media-host')) {
         existingVid.onerror = onVideoError;
+        existingVid.muted = false;
         existingVid.src = clipViewUrl;
         if (posterUrl) {
             existingVid.poster = posterUrl;
@@ -583,7 +665,7 @@ function createVideoPreview(node, clipViewUrl, posterUrl = null) {
     vid.playsInline = true;
     vid.controls = true;
     vid.loop = true;
-    vid.muted = true;
+    vid.muted = false;
     vid.style.cssText = 'width:100%;height:100%;object-fit:contain;display:block;';
     if (posterUrl) {
         vid.poster = posterUrl;
@@ -665,6 +747,7 @@ app.registerExtension({
             node._hoverOpenPlayIcon = false;
             node._needsPlayabilityWarning = false;
             node._playabilityCheckToken = 0;
+            node._configuredFromWorkflow = false;
 
             const setPlayabilityWarning = (enabled) => {
                 node._needsPlayabilityWarning = Boolean(enabled);
@@ -711,6 +794,18 @@ app.registerExtension({
                     if (token !== node._playabilityCheckToken) return;
 
                     if (info.needs_preview) {
+                        const probeUrl = buildVideoPreviewUrl(filename, sourceFolder);
+                        const browserCanPlay = await probeBrowserPlayback(probeUrl);
+                        if (token !== node._playabilityCheckToken) return;
+
+                        if (browserCanPlay) {
+                            setPlayabilityWarning(false);
+                            if (typeof onCompatible === 'function') {
+                                onCompatible();
+                            }
+                            return;
+                        }
+
                         _nonBrowserDecodableVideos.add(filename);
                         setPlayabilityWarning(true);
                         loadServerPreviewClip(node, filename, sourceFolder);
@@ -962,11 +1057,13 @@ app.registerExtension({
                         const applyNativePreview = () => {
                             // Render all previews through our framed video host.
                             // Out-of-tree absolute paths use the raw-file route.
-                            if (isAbsolutePath(value)) {
-                                createVideoPreview(node, mediaFileUrl(clean));
-                            } else {
-                                createVideoPreview(node, `/view?filename=${encodeURIComponent(clean)}&type=${node._sourceFolder || 'input'}`);
-                            }
+                            createVideoPreview(
+                                node,
+                                buildVideoPreviewUrl(clean, node._sourceFolder || 'input'),
+                                null,
+                                clean,
+                                node._sourceFolder || 'input'
+                            );
                         };
 
                         // Compatibility is resolved first. Incompatible clips never go through native playback.
@@ -1054,6 +1151,22 @@ app.registerExtension({
                 };
                 this.widgets.splice(videoWidgetIndex + 2, 0, browseButton);
                 Object.defineProperty(browseButton, "node", { value: node });
+
+                // Start at a comfortable default size (brand-new nodes).
+                if (!node._configuredFromWorkflow) {
+                    const cw = Math.max(node.size?.[0] || 0, LOAD_VIDEO_MIN_WIDTH + 40);
+                    const ch = Math.max(node.size?.[1] || 0, LOAD_VIDEO_MIN_HEIGHT + 140);
+                    node.setSize([cw, ch]);
+                }
+
+                const originalOnResize = node.onResize;
+                node.onResize = function(size) {
+                    if (size) {
+                        if (size[0] < LOAD_VIDEO_MIN_WIDTH) size[0] = LOAD_VIDEO_MIN_WIDTH;
+                        if (size[1] < LOAD_VIDEO_MIN_HEIGHT) size[1] = LOAD_VIDEO_MIN_HEIGHT;
+                    }
+                    return originalOnResize ? originalOnResize.apply(this, arguments) : undefined;
+                };
             }
 
             // Initial preview: empty canvas for (none), placeholder for (blank)
@@ -1071,6 +1184,7 @@ app.registerExtension({
             node.onConfigure = function(info) {
                 const isFirstConfigure = !node._initialConfigDone;
                 node._initialConfigDone = true;
+                node._configuredFromWorkflow = true;
 
                 const result = onConfigure ? onConfigure.apply(this, arguments) : undefined;
 
@@ -1145,13 +1259,25 @@ app.registerExtension({
                         // Out-of-tree absolute path: render via our raw-file route,
                         // then detect H265/yuv444 and swap in a server preview clip.
                         setTimeout(() => {
-                            createVideoPreview(node, mediaFileUrl(filename));
+                            createVideoPreview(
+                                node,
+                                buildVideoPreviewUrl(filename, node._sourceFolder || 'input'),
+                                null,
+                                filename,
+                                node._sourceFolder || 'input'
+                            );
                             runPlayabilityCheck(filename);
                         }, 200);
                     } else {
                         // Render through our framed video host.
                         setTimeout(() => {
-                            createVideoPreview(node, `/view?filename=${encodeURIComponent(filename)}&type=${node._sourceFolder || 'input'}`);
+                            createVideoPreview(
+                                node,
+                                buildVideoPreviewUrl(filename, node._sourceFolder || 'input'),
+                                null,
+                                filename,
+                                node._sourceFolder || 'input'
+                            );
                             runPlayabilityCheck(filename);
                         }, 200);
                     }
