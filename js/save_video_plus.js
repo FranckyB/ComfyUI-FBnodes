@@ -4,6 +4,9 @@ import { api } from "../../scripts/api.js";
 const CONTROLS_TOGGLE_WIDGET_KEY = "__fb_save_video_controls_toggle";
 const CONTROLS_EXPANDED_PROP = "_saveVideoControlsExpanded";
 const CONTROLS_COLLAPSED_SIZE_PROP = "_saveVideoCollapsedSize";
+// Same creation/minimum footprint as LoadVideoPlus.
+const SAVE_VIDEO_MIN_WIDTH = 300;
+const SAVE_VIDEO_MIN_HEIGHT = 320;
 
 function firstValue(value) {
     if (Array.isArray(value)) return value[0];
@@ -80,6 +83,13 @@ function openInSystemPlayer(node) {
 function updateDisplayState(node) {
     const needsExternal = !!node.properties?._needsExternalPlayer;
     node._saveVideoShowCompatWarning = !!needsExternal;
+}
+
+// Reads the Python node's auto_play BOOLEAN widget (default true, matching Python).
+function isAutoPlayEnabled(node) {
+    const widget = node.widgets?.find((w) => w?.name === "auto_play");
+    if (!widget) return true;
+    return normalizeBool(widget.value);
 }
 
 function payloadHasVideoResult(payload) {
@@ -212,12 +222,78 @@ function getPreviewContainer(node) {
         || null;
 }
 
+// Blue framed media area, mirroring LoadVideoPlus's preview host.
+// The footer lives outside the frame so the native video control strip
+// never overlaps it. Core wipes container children via replaceChildren()
+// when the native video loads, so this re-applies idempotently and
+// re-inserts the native video back inside the frame's media host.
+function ensurePreviewFrame(container) {
+    if (!container) return;
+
+    if (!container.style.position) container.style.position = "relative";
+
+    let frame = container._previewFrame;
+    if (!frame || frame.parentElement !== container) {
+        frame = document.createElement("div");
+        frame.className = "fbnodes-save-video-frame";
+        frame.style.cssText = `
+            position: absolute; left: 8px; top: 8px; right: 8px; bottom: 34px;
+            overflow: hidden; background: rgba(34, 39, 48, 0.98);
+            border: 1px solid rgba(78, 90, 108, 0.72); border-radius: 10px;
+            box-sizing: border-box;
+        `;
+
+        const mediaHost = document.createElement("div");
+        mediaHost.className = "fbnodes-save-video-media-host";
+        mediaHost.style.cssText = `
+            position: absolute; left: 1px; top: 1px; right: 1px; bottom: 1px;
+            overflow: hidden; background: transparent;
+        `;
+
+        frame.appendChild(mediaHost);
+        container.appendChild(frame);
+        container._previewFrame = frame;
+        container._previewMediaHost = mediaHost;
+    }
+
+    let footer = container._previewFooter;
+    if (!footer || footer.parentElement !== container) {
+        footer = document.createElement("div");
+        footer.className = "fbnodes-save-video-preview-footer";
+        footer.style.cssText = `
+            position: absolute; left: 8px; right: 8px; bottom: 8px; height: 22px;
+            border-radius: 8px; border: 1px solid rgba(66, 72, 84, 0.95);
+            background: rgba(34, 39, 48, 0.98); box-sizing: border-box;
+            color: rgba(192, 206, 222, 0.95); font: 600 10px "Segoe UI", sans-serif;
+            line-height: 20px; text-align: center; pointer-events: none;
+        `;
+        footer.textContent = "—";
+        container.appendChild(footer);
+        container._previewFooter = footer;
+    }
+
+    // Re-home the core-injected native video inside the frame if a
+    // replaceChildren() call dropped it alongside our frame elements.
+    const mediaHost = container._previewMediaHost;
+    const nativeVideo = container.querySelector(":scope > video");
+    if (nativeVideo && mediaHost && nativeVideo.parentElement !== mediaHost) {
+        mediaHost.appendChild(nativeVideo);
+    }
+}
+
+function setSavePreviewFooter(container, text) {
+    if (container?._previewFooter) {
+        container._previewFooter.textContent = text || "—";
+    }
+}
+
 function ensurePreviewContainer(node) {
     let container = getPreviewContainer(node);
     if (container) {
         if (!node.videoContainer) {
             node.videoContainer = container;
         }
+        ensurePreviewFrame(container);
         return container;
     }
 
@@ -237,6 +313,7 @@ function ensurePreviewContainer(node) {
         });
     }
 
+    ensurePreviewFrame(container);
     return container;
 }
 
@@ -261,7 +338,7 @@ function getFramePreviewLayer(host) {
     frameImg.style.width = "calc(100% - 16px)";
     frameImg.style.height = "calc(100% - 96px)";
     frameImg.style.objectFit = "contain";
-    frameImg.style.background = "rgba(0, 0, 0, 0.28)";
+    frameImg.style.background = "transparent";
     frameImg.style.borderRadius = "4px";
     frameImg.style.pointerEvents = "none";
     frameImg.style.display = "none";
@@ -289,6 +366,11 @@ function syncFramePreviewLayer(node, host) {
     const savedPath = node.properties?._lastSavedVideoPath || "";
     if (node._saveVideoFramePreviewForPath !== savedPath) {
         node._saveVideoFramePreviewForPath = savedPath;
+        frameImg.onload = () => {
+            const w = frameImg.naturalWidth || 0;
+            const h = frameImg.naturalHeight || 0;
+            setSavePreviewFooter(host, w && h ? `${w} × ${h}` : "—");
+        };
         frameImg.src = `${frameUrl}&t=${Date.now()}`;
     }
 
@@ -430,14 +512,16 @@ function applyWarningOverlay(node) {
     const host = ensurePreviewContainer(node);
     if (!host) return false;
 
-    if (!host.style.position) {
-        host.style.position = "relative";
-    }
+    ensurePreviewFrame(host);
 
-    syncFramePreviewLayer(node, host);
+    // Keep the warning overlay and frame preview layer anchored inside the
+    // blue frame area, above the footer.
+    const warningParent = host._previewFrame || host;
 
-    let overlay = host.querySelector(".fbnodes-save-video-warning");
-    if (!overlay) {
+    syncFramePreviewLayer(node, warningParent);
+
+    let overlay = host._warningOverlay;
+    if (!overlay || overlay.parentElement !== warningParent) {
         overlay = document.createElement("div");
         overlay.className = "fbnodes-save-video-warning";
         overlay.style.position = "absolute";
@@ -454,7 +538,8 @@ function applyWarningOverlay(node) {
         overlay.style.justifyContent = "center";
         overlay.style.textAlign = "center";
         overlay.style.lineHeight = "1.25";
-        host.appendChild(overlay);
+        warningParent.appendChild(overlay);
+        host._warningOverlay = overlay;
     }
 
     if (node._saveVideoShowCompatWarning) {
@@ -486,6 +571,62 @@ function syncWarningOverlay(node, attempts = 0) {
     const applied = applyWarningOverlay(node);
     if (!applied && attempts < 10) {
         setTimeout(() => syncWarningOverlay(node, attempts + 1), 80);
+    }
+}
+
+// Fill the resolution footer once the native video element reports its size.
+function syncPreviewFooterFromVideo(node) {
+    const container = getPreviewContainer(node);
+    if (!container) return;
+
+    const vid = container.querySelector("video");
+    if (!vid) return;
+
+    const update = () => {
+        const w = vid.videoWidth || 0;
+        const h = vid.videoHeight || 0;
+        if (w && h) setSavePreviewFooter(container, `${w} × ${h}`);
+    };
+
+    if (vid._fbSaveVideoFooterHooked) {
+        update();
+        return;
+    }
+    vid._fbSaveVideoFooterHooked = true;
+    vid.addEventListener("loadedmetadata", update);
+    update();
+}
+
+// Starts playback on the freshly injected video when auto_play is enabled.
+// Core replaces the <video> element on every run, so we only play an element
+// that is different from the one present when execution completed — this
+// avoids playing the stale clip in the window before core swaps the new one in.
+function syncAutoplay(node) {
+    if (!node._saveVideoPendingAutoplay) return;
+
+    const container = getPreviewContainer(node);
+    const vid = container?.querySelector("video") || null;
+    if (!vid) return;
+    if (node._saveVideoAutoplayPrevVideo && vid === node._saveVideoAutoplayPrevVideo) return;
+
+    node._saveVideoPendingAutoplay = false;
+    node._saveVideoAutoplayPrevVideo = null;
+
+    try {
+        const playPromise = vid.play?.();
+        if (playPromise && typeof playPromise.catch === "function") {
+            playPromise.catch(() => {
+                // Browser blocked unmuted autoplay — retry muted.
+                try {
+                    vid.muted = true;
+                    vid.play()?.catch?.(() => {});
+                } catch {
+                    // ignore
+                }
+            });
+        }
+    } catch {
+        // ignore
     }
 }
 
@@ -564,9 +705,32 @@ app.registerExtension({
             if (!node.properties) node.properties = {};
             node._saveVideoHoverPlayIcon = false;
             node._saveVideoPlayIconBounds = null;
+            node._configuredFromWorkflow = false;
 
             ensureControlsToggleWidget(node);
             ensurePreviewContainer(node);
+
+            // Match LoadVideoPlus creation size. Runs after the default
+            // controls-collapse (which shrinks the fresh node) so the visible
+            // node starts at the intended footprint.
+            if (!node._configuredFromWorkflow) {
+                const cw = Math.max(node.size?.[0] || 0, SAVE_VIDEO_MIN_WIDTH + 40);
+                const ch = Math.max(node.size?.[1] || 0, SAVE_VIDEO_MIN_HEIGHT + 140);
+                node.setSize?.([cw, ch]);
+                // Treat this as the collapsed preview footprint so a later
+                // expand grows the node instead of squeezing the preview.
+                node.properties[CONTROLS_COLLAPSED_SIZE_PROP] = [cw, ch];
+            }
+
+            const originalOnResize = node.onResize;
+            node.onResize = function (size) {
+                if (size) {
+                    if (size[0] < SAVE_VIDEO_MIN_WIDTH) size[0] = SAVE_VIDEO_MIN_WIDTH;
+                    if (size[1] < SAVE_VIDEO_MIN_HEIGHT) size[1] = SAVE_VIDEO_MIN_HEIGHT;
+                }
+                return originalOnResize ? originalOnResize.apply(this, arguments) : undefined;
+            };
+
             updateDisplayState(node);
             restoreFromExecutedCache(node);
             ensureMinWarningDisplaySize(node);
@@ -577,6 +741,8 @@ app.registerExtension({
                 const drawResult = onDrawForeground ? onDrawForeground.apply(this, arguments) : undefined;
                 drawTitlePlayIcon(node, ctx);
                 syncWarningOverlay(node);
+                syncPreviewFooterFromVideo(node);
+                syncAutoplay(node);
                 return drawResult;
             };
 
@@ -614,6 +780,9 @@ app.registerExtension({
         const onConfigure = nodeType.prototype.onConfigure;
         nodeType.prototype.onConfigure = function () {
             const result = onConfigure?.apply(this, arguments);
+            // ComfyUI has applied the workflow size; never let creation-time
+            // sizing override it (mirrors LoadVideoPlus).
+            this._configuredFromWorkflow = true;
             // Restore widget visibility without overwriting the size ComfyUI just loaded from the workflow.
             ensureControlsToggleWidget(this, { skipSize: true });
             ensurePreviewContainer(this);
@@ -633,6 +802,13 @@ app.registerExtension({
             setResultData(this, payload);
             if (this.id !== undefined && this.id !== null && payloadHasVideoResult(payload)) {
                 _fbSaveVideoExecutedCache.set(String(this.id), payload);
+            }
+
+            if (payloadHasVideoResult(payload) && isAutoPlayEnabled(this)) {
+                // Remember the currently displayed video so we only autoplay
+                // the new element core injects for this run.
+                this._saveVideoPendingAutoplay = true;
+                this._saveVideoAutoplayPrevVideo = getPreviewContainer(this)?.querySelector("video") || null;
             }
             return result;
         };

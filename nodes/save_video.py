@@ -299,6 +299,10 @@ class SaveVideoPlus:
                     "default": True,
                     "tooltip": "When ON, non-browser-compatible clips get an auto-generated H.264 preview for UI playback.\nWhen OFF, UI uses the original file and may not preview in browser."
                 }),
+                "auto_play": ("BOOLEAN", {
+                    "default": True,
+                    "tooltip": "UI preview behavior: when ON, the Save Video+ preview starts playback automatically when a new video is displayed."
+                }),
             },
             "optional": {
                 "latent": ("LATENT", {"tooltip": "Optional latent to save alongside the video (same filename with .latent extension)."}),
@@ -317,7 +321,7 @@ class SaveVideoPlus:
     CATEGORY = "FBnodes"
     DESCRIPTION = "Saves video with H.264 or H.265 codec and quality control. Includes audio and workflow metadata."
 
-    def save_video(self, video, filename_prefix, codec, chroma, crf, save, save_latent, browser_compat=True, latent=None, metadata=None, prompt=None, extra_pnginfo=None):
+    def save_video(self, video, filename_prefix, codec, chroma, crf, save, save_latent, browser_compat=True, auto_play=True, latent=None, metadata=None, prompt=None, extra_pnginfo=None):
         # Expand %date:format% patterns (e.g., %date:yy-MM-dd_hh-mm%)
         # This mimics ComfyUI's frontend JS date expansion
         def expand_date_format(text):
