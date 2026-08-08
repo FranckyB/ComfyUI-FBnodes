@@ -8,9 +8,41 @@ const CONTROLS_COLLAPSED_SIZE_PROP = "_saveVideoCollapsedSize";
 // restored after tab switches and workflow reloads (custom node.properties
 // keys are not persisted into workflow JSON by ComfyUI).
 const LAST_RESULT_WIDGET_NAME = "_fbSaveVideoLastResult";
+// Hidden widget the UI stamps with the Execute timestamp (unix seconds) at
+// queue time; Python reads it to expand %time% in filename_prefix.
+const EXEC_START_WIDGET_NAME = "exec_start";
 // Same creation/minimum footprint as LoadVideoPlus.
 const SAVE_VIDEO_MIN_WIDTH = 300;
 const SAVE_VIDEO_MIN_HEIGHT = 320;
+
+function hideExecStartWidget(node) {
+    const widget = node.widgets?.find((w) => w?.name === EXEC_START_WIDGET_NAME);
+    if (!widget) return;
+    widget.type = "converted-widget";
+    widget.hidden = true;
+    widget.computeSize = () => [0, -4];
+    if (widget.inputEl) widget.inputEl.style.display = "none";
+}
+
+// Stamp every SaveVideoPlus node with the current timestamp right before the
+// prompt is serialized (widget values are captured at queue time, so this must
+// wrap queuePrompt — the server's execution_start event arrives too late).
+let _execStartStampingInstalled = false;
+function installExecStartStamping() {
+    if (_execStartStampingInstalled) return;
+    _execStartStampingInstalled = true;
+    const originalQueuePrompt = app.queuePrompt;
+    if (typeof originalQueuePrompt !== "function") return;
+    app.queuePrompt = async function (...args) {
+        const nowSec = (Date.now() / 1000).toFixed(3);
+        for (const node of app.graph?._nodes || []) {
+            if (node?.type !== "SaveVideoPlus") continue;
+            const widget = node.widgets?.find((w) => w?.name === EXEC_START_WIDGET_NAME);
+            if (widget) widget.value = nowSec;
+        }
+        return originalQueuePrompt.apply(this, args);
+    };
+}
 
 function firstValue(value) {
     if (Array.isArray(value)) return value[0];
@@ -169,11 +201,25 @@ function restoreLastResultFromWidget(node) {
 }
 
 function ensureLastResultWidget(node) {
-    if (node.widgets?.some((w) => w?.name === LAST_RESULT_WIDGET_NAME)) return;
+    const existing = node.widgets?.find((w) => w?.name === LAST_RESULT_WIDGET_NAME);
+    if (existing) {
+        // Already present (e.g. restored from a saved workflow) — enforce that
+        // it stays hidden even if it was serialized while Controls was expanded.
+        existing.hidden = true;
+        existing.computeSize = () => [0, -4];
+        if (existing.inputEl) existing.inputEl.style.display = "none";
+        return;
+    }
     const widget = node.addWidget("text", LAST_RESULT_WIDGET_NAME, "", null, { serialize: true });
     widget.serialize = true;
+    // Fully hide: collapse layout height AND hide the DOM input element so it
+    // never renders as a visible row in the node.
     widget.hidden = true;
     widget.computeSize = () => [0, -4];
+    const hideInput = () => { if (widget.inputEl) widget.inputEl.style.display = "none"; };
+    // inputEl may not exist yet at creation time; hide it once it does.
+    if (widget.inputEl) hideInput();
+    else setTimeout(hideInput, 0);
 }
 
 // Builds the /view URL used to re-render the video element from the persisted
@@ -508,6 +554,12 @@ function isPreviewWidget(widget) {
     return widget?.name === "video-preview";
 }
 
+// The internal last-result widget is a persistence vehicle only — never shown,
+// never part of the collapsible Controls section.
+function isLastResultWidget(widget) {
+    return widget?.name === LAST_RESULT_WIDGET_NAME;
+}
+
 function getControlsExpanded(node) {
     if (typeof node.properties?.[CONTROLS_EXPANDED_PROP] !== "undefined") {
         return !!node.properties[CONTROLS_EXPANDED_PROP];
@@ -516,7 +568,7 @@ function getControlsExpanded(node) {
 }
 
 function getCollapsibleWidgets(node) {
-    return (node.widgets || []).filter((widget) => !isControlsToggleWidget(widget) && !isPreviewWidget(widget));
+    return (node.widgets || []).filter((widget) => !isControlsToggleWidget(widget) && !isPreviewWidget(widget) && !isLastResultWidget(widget));
 }
 
 function updateControlsToggleLabel(node) {
@@ -730,14 +782,33 @@ function syncAutoplay(node) {
     const container = getPreviewContainer(node);
     const vid = container?.querySelector("video") || null;
     if (!vid) return;
-    // Core's fresh inject, our freshly rebuilt player, and a still-playing
-    // restored element all count as valid targets; only the exact element
-    // snapshotted at execution time (the stale clip) is skipped.
-    const isOurs = !!(container?._previewMediaHost && vid.parentElement === container._previewMediaHost);
-    if (!isOurs && node._saveVideoAutoplayPrevVideo && vid === node._saveVideoAutoplayPrevVideo) return;
+
+    // Wait until core has injected the FRESH video element for this run.
+    // Core replaces the element after onExecuted, so the element snapshotted
+    // at execution time (_saveVideoAutoplayPrevVideo) is the stale one. Only
+    // proceed once a different element is present (or, for restored nodes where
+    // no snapshot exists, once any loaded video is present).
+    const isFresh = !node._saveVideoAutoplayPrevVideo || vid !== node._saveVideoAutoplayPrevVideo;
+    if (!isFresh) return;
+
+    // Fresh element found — wait until it has loaded enough data to play.
+    if (vid.readyState < 2) {
+        if (!vid._saveVideoAutoplayHooked) {
+            vid._saveVideoAutoplayHooked = true;
+            const onReady = () => {
+                vid._saveVideoAutoplayHooked = false;
+                // Re-run now that data is available.
+                syncAutoplay(node);
+            };
+            vid.addEventListener("loadeddata", onReady, { once: true });
+            vid.addEventListener("canplay", onReady, { once: true });
+        }
+        return;
+    }
 
     node._saveVideoPendingAutoplay = false;
     node._saveVideoAutoplayPrevVideo = null;
+    if (node.properties) node.properties._saveVideoPendingAutoplay = false;
 
     try {
         const playPromise = vid.play?.();
@@ -823,6 +894,7 @@ app.registerExtension({
         if (nodeData?.name !== "SaveVideoPlus") return;
 
         installExecutedSync();
+        installExecStartStamping();
 
         const onNodeCreated = nodeType.prototype.onNodeCreated;
         nodeType.prototype.onNodeCreated = function () {
@@ -837,6 +909,7 @@ app.registerExtension({
             ensureControlsToggleWidget(node);
             ensureLastResultWidget(node);
             ensurePreviewContainer(node);
+            hideExecStartWidget(node);
 
             // Match LoadVideoPlus creation size. Runs after the default
             // controls-collapse (which shrinks the fresh node) so the visible
@@ -926,6 +999,7 @@ app.registerExtension({
             ensureControlsToggleWidget(this, { skipSize: true });
             ensureLastResultWidget(this);
             ensurePreviewContainer(this);
+            hideExecStartWidget(this);
             // Widget values are applied during onConfigure — the serialized
             // last-result widget is the source of truth across save/load.
             restoreLastResultFromWidget(this);
@@ -951,9 +1025,13 @@ app.registerExtension({
             }
 
             if (payloadHasVideoResult(payload) && isAutoPlayEnabled(this)) {
-                // Remember the currently displayed video so we only autoplay
-                // the new element core injects for this run.
+                // Flag pending autoplay. Core injects the fresh <video> element
+                // AFTER onExecuted returns, so we must not touch the (old) element
+                // here. syncAutoplay (running every onDrawForeground) picks up the
+                // new element and plays it once it has loaded.
                 this._saveVideoPendingAutoplay = true;
+                // Remember the element present now so syncAutoplay can detect the
+                // fresh replacement core is about to inject.
                 this._saveVideoAutoplayPrevVideo = getPreviewContainer(this)?.querySelector("video") || null;
                 // Persist through node destruction (subgraph/tab switches) so
                 // playback can start when the node becomes visible again.

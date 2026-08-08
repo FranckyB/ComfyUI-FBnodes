@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import re
 import sys
+import time
 import av
 import json
 import math
@@ -270,7 +271,7 @@ class SaveVideoPlus:
                 "video": ("VIDEO", {"tooltip": "The video to save."}),
                 "filename_prefix": ("STRING", {
                     "default": "Vids/%date:yy-MM-dd%/vid_%date:HH-mm-ss%",
-                    "tooltip": "The prefix for the file to save.\nSupports %date:format% patterns."
+                    "tooltip": "The prefix for the file to save.\nSupports:\n%date:format% patterns (e.g. %date:yy-MM-dd%).\n%time% = workflow generation time."
                 }),
                 "codec": (cls.CODECS, {
                     "default": "h264",
@@ -307,6 +308,10 @@ class SaveVideoPlus:
             "optional": {
                 "latent": ("LATENT", {"tooltip": "Optional latent to save alongside the video (same filename with .latent extension)."}),
                 "metadata": ("STRING", {"forceInput": True, "tooltip": "Optional metadata JSON string to embed in the video (e.g. from VACE Stitcher)."}),
+                "exec_start": ("STRING", {
+                    "default": "",
+                    "tooltip": "Unix timestamp stamped by the UI when Execute is pressed. Enables %time% in filename_prefix (workflow generation seconds, excluding save/encode)."
+                }),
             },
             "hidden": {
                 "prompt": "PROMPT",
@@ -321,7 +326,63 @@ class SaveVideoPlus:
     CATEGORY = "FBnodes"
     DESCRIPTION = "Saves video with H.264 or H.265 codec and quality control. Includes audio and workflow metadata."
 
-    def save_video(self, video, filename_prefix, codec, chroma, crf, save, save_latent, browser_compat=True, auto_play=True, latent=None, metadata=None, prompt=None, extra_pnginfo=None):
+    @staticmethod
+    def _patch_embedded_workflow_saved_path(metadata_dict, new_path):
+        """Return a copy of metadata_dict whose embedded workflow JSON points this
+        SaveVideoPlus node's 'last saved' references at new_path.
+
+        The workflow JSON is captured by ComfyUI at execution start, when the node
+        still knows only the previously-saved video's path. We rewrite the node's
+        own properties._lastSavedVideoPath and the _fbSaveVideoLastResult widget
+        (widgets_values entry that is a JSON string with a "path" key) so the
+        dropped-back-in workflow self-references the file it lives in.
+        """
+        if not isinstance(metadata_dict, dict) or not new_path:
+            return metadata_dict
+
+        patched = dict(metadata_dict)
+        for key in ("workflow", "prompt"):
+            raw = patched.get(key)
+            data = raw
+            if isinstance(raw, str):
+                try:
+                    data = json.loads(raw)
+                except (json.JSONDecodeError, TypeError):
+                    continue  # not JSON; leave untouched
+            if not isinstance(data, dict):
+                continue
+
+            changed = False
+            nodes = data.get("nodes")
+            if isinstance(nodes, list):
+                for n in nodes:
+                    if not isinstance(n, dict) or n.get("type") != "SaveVideoPlus":
+                        continue
+                    props = n.get("properties")
+                    if isinstance(props, dict) and "_lastSavedVideoPath" in props:
+                        props["_lastSavedVideoPath"] = new_path
+                        changed = True
+                    wv = n.get("widgets_values")
+                    if isinstance(wv, list):
+                        for i, val in enumerate(wv):
+                            if isinstance(val, str) and '"path"' in val and "needsExternal" in val:
+                                try:
+                                    parsed = json.loads(val)
+                                except (json.JSONDecodeError, TypeError):
+                                    continue
+                                if isinstance(parsed, dict) and "path" in parsed:
+                                    parsed["path"] = new_path
+                                    wv[i] = json.dumps(parsed)
+                                    changed = True
+
+            if changed:
+                # Re-encode: the container writer re-stringifies non-str values,
+                # but keeping a str here preserves the original shape exactly.
+                patched[key] = json.dumps(data)
+
+        return patched
+
+    def save_video(self, video, filename_prefix, codec, chroma, crf, save, save_latent, browser_compat=True, auto_play=True, latent=None, metadata=None, prompt=None, extra_pnginfo=None, exec_start=""):
         # Expand %date:format% patterns (e.g., %date:yy-MM-dd_hh-mm%)
         # This mimics ComfyUI's frontend JS date expansion
         def expand_date_format(text):
@@ -336,7 +397,22 @@ class SaveVideoPlus:
                 return now.strftime(fmt)
             return re.sub(r'%date:([^%]+)%', replace_date, text)
 
-        filename_prefix = expand_date_format(filename_prefix)
+        # Expand %time%: seconds from pressing Execute until this node starts
+        # saving (pure workflow generation time, excluding the encode itself).
+        # exec_start is stamped into a hidden widget by the JS at queue time.
+        def expand_time_format(text):
+            if '%time%' not in text:
+                return text
+            elapsed = 0.0
+            try:
+                start = float(str(exec_start).strip())
+                if start > 0:
+                    elapsed = max(0.0, time.time() - start)
+            except (ValueError, TypeError):
+                pass
+            return text.replace('%time%', str(int(round(elapsed))))
+
+        filename_prefix = expand_time_format(expand_date_format(filename_prefix))
 
         # Bit depth determined by codec: h264=8-bit, h265=10-bit
         is_10bit = (codec == "h265")
@@ -441,6 +517,13 @@ class SaveVideoPlus:
                     metadata_dict.update(extra_pnginfo)
                 if prompt is not None:
                     metadata_dict["prompt"] = prompt
+
+        # QoL: the embedded workflow was captured at execution start, so the
+        # SaveVideoPlus node's own "last saved" pointers reference the PREVIOUS
+        # video. Patch them to the file we are about to write so a dropped-in
+        # video's workflow points to itself, not to an older clip.
+        if not args.disable_metadata:
+            metadata_dict = self._patch_embedded_workflow_saved_path(metadata_dict, file_path)
 
         # Prepare frame rate as fraction
         frame_rate_frac = Fraction(round(float(frame_rate) * 1000), 1000)
@@ -867,24 +950,6 @@ class LoadLTXLatentFile:
     def VALIDATE_INPUTS(cls, file_path):
         if not file_path:
             return True
-        if not os.path.exists(file_path):
-            return f"Latent file not found: {file_path}"
-        return True
-
-    @classmethod
-    def IS_CHANGED(cls, file_path):
-        """Return hash of file to detect changes."""
-        if not file_path or not os.path.exists(file_path):
-            return ""
-        m = hashlib.sha256()
-        with open(file_path, 'rb') as f:
-            m.update(f.read())
-        return m.digest().hex()
-
-    @classmethod
-    def VALIDATE_INPUTS(cls, file_path):
-        if not file_path:
-            return True  # Empty is valid (will error at runtime)
         if not os.path.exists(file_path):
             return f"Latent file not found: {file_path}"
         return True
