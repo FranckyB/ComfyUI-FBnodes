@@ -1192,6 +1192,103 @@ function setMaskDomVisible(node, editing) {
     app.graph?.setDirtyCanvas(true, true);
 }
 
+/**
+ * Upload an image Blob/File to the input folder and point this node at it.
+ * Shared by the context-menu paste, the Ctrl+V handler, and drag-drop.
+ */
+async function uploadImageToNode(node, imageWidget, refreshImageOptionsForSource, blob, filename, mime) {
+    const file = blob instanceof File ? blob : new File([blob], filename, { type: mime || blob.type || "image/png" });
+    const formData = new FormData();
+    formData.append("image", file);
+    formData.append("subfolder", "");
+    formData.append("type", "input");
+
+    const response = await api.fetchApi("/upload/image", { method: "POST", body: formData });
+    if (!response.ok) throw new Error("Upload failed");
+    const data = await response.json();
+
+    const sourceFolderWidget = node.widgets?.find(w => w.name === "source_folder");
+    if (sourceFolderWidget) {
+        sourceFolderWidget.value = "input";
+        node._sourceFolder = "input";
+        if (typeof sourceFolderWidget.callback === "function") {
+            try { await sourceFolderWidget.callback("input"); } catch (err) {}
+        }
+    }
+    if (imageWidget) {
+        imageWidget.value = data.name;
+        if (typeof refreshImageOptionsForSource === "function") {
+            await refreshImageOptionsForSource("input", { preferredValue: data.name });
+        }
+        if (imageWidget.callback) imageWidget.callback(data.name);
+    }
+    node.setDirtyCanvas?.(true, true);
+    app.graph?.setDirtyCanvas(true, true);
+}
+
+/**
+ * Paste an absolute image file path by reading the file via the path-browser API.
+ */
+async function pasteImagePathToNode(node, imageWidget, refreshImageOptionsForSource, pathText) {
+    const filename = pathText.split(/[\\/]/).pop();
+    const ext = filename.split('.').pop().toLowerCase();
+    const mime = ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : "image/jpeg";
+    const fileResponse = await api.fetchApi(`/fbnodes/path-browser/file?path=${encodeURIComponent(pathText)}`);
+    if (!fileResponse.ok) throw new Error("Read file failed");
+    const fileBlob = await fileResponse.blob();
+    await uploadImageToNode(node, imageWidget, refreshImageOptionsForSource, fileBlob, filename, mime);
+}
+
+/**
+ * Paste from ClipboardItem[] (from navigator.clipboard.read()).
+ * Prefers a text file path, then falls back to a raw image.
+ */
+async function pasteFromClipboardItems(node, imageWidget, refreshImageOptionsForSource, items) {
+    for (const item of items) {
+        if (item.types.includes("text/plain")) {
+            const textBlob = await item.getType("text/plain");
+            const text = (await textBlob.text()).trim();
+            if (isImageFilePath(text)) {
+                await pasteImagePathToNode(node, imageWidget, refreshImageOptionsForSource, text);
+                return true;
+            }
+        }
+    }
+    for (const item of items) {
+        for (const type of item.types) {
+            if (!type.startsWith("image/")) continue;
+            const blob = await item.getType(type);
+            const ext = type === "image/png" ? "png" : type === "image/jpeg" ? "jpg" : type === "image/webp" ? "webp" : "png";
+            const filename = `pasted_${Date.now()}.${ext}`;
+            await uploadImageToNode(node, imageWidget, refreshImageOptionsForSource, blob, filename, type);
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * Paste from a DataTransfer (from the native 'paste' event / Ctrl+V).
+ * Prefers a text file path, then falls back to image files.
+ */
+async function pasteFromDataTransfer(node, imageWidget, refreshImageOptionsForSource, dataTransfer) {
+    if (!dataTransfer) return false;
+    const text = (dataTransfer.getData("text/plain") || "").trim();
+    if (isImageFilePath(text)) {
+        await pasteImagePathToNode(node, imageWidget, refreshImageOptionsForSource, text);
+        return true;
+    }
+    if (dataTransfer.files && dataTransfer.files.length > 0) {
+        const file = dataTransfer.files[0];
+        const ext = file.name.split('.').pop().toLowerCase();
+        if (['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'].includes(ext)) {
+            await uploadImageToNode(node, imageWidget, refreshImageOptionsForSource, file, file.name, file.type);
+            return true;
+        }
+    }
+    return false;
+}
+
 function createImageContextMenu(x, y, items) {
     const existing = document.getElementById("fb-load-image-context-menu");
     if (existing) existing.remove();
@@ -1454,82 +1551,39 @@ function createMaskDomUI(node, imageWidget, refreshImageOptionsForSource) {
             {
                 label: "Paste Image",
                 action: async () => {
+                    // Right-click context menus do NOT provide the "user activation"
+                    // that navigator.clipboard.read() requires, so the browser denies
+                    // it and shows its own paste-permission chip. We cannot bypass that.
+                    // Instead: request permission explicitly via a one-time prompt.
+                    // Once granted, right-click paste works in one click forever.
                     try {
+                        // Attempt the read. If denied, this throws NotAllowedError.
                         const items = await navigator.clipboard.read();
-
-                        // First, try pasting a plain text file path.
-                        for (const item of items) {
-                            if (item.types.includes("text/plain")) {
-                                const textBlob = await item.getType("text/plain");
-                                const text = (await textBlob.text()).trim();
-                                if (isImageFilePath(text)) {
-                                    const filename = text.split(/[\\/]/).pop();
-                                    const ext = filename.split('.').pop().toLowerCase();
-                                    const mime = ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : "image/jpeg";
-                                    const fileResponse = await api.fetchApi(`/fbnodes/path-browser/file?path=${encodeURIComponent(text)}`);
-                                    if (!fileResponse.ok) throw new Error("Read file failed");
-                                    const fileBlob = await fileResponse.blob();
-                                    const file = new File([fileBlob], filename, { type: mime });
-                                    const formData = new FormData();
-                                    formData.append("image", file);
-                                    formData.append("subfolder", "");
-                                    formData.append("type", "input");
-
-                                    const response = await api.fetchApi("/upload/image", { method: "POST", body: formData });
-                                    if (!response.ok) throw new Error("Upload failed");
-                                    const data = await response.json();
-
-                                    const sourceFolderWidget = node.widgets?.find(w => w.name === "source_folder");
-                                    if (sourceFolderWidget) {
-                                        sourceFolderWidget.value = "input";
-                                        node._sourceFolder = "input";
-                                    }
-                                    if (imageWidget) {
-                                        imageWidget.value = data.name;
-                                        if (typeof refreshImageOptionsForSource === "function") {
-                                            refreshImageOptionsForSource("input", { preferredValue: data.name });
-                                        }
-                                        if (imageWidget.callback) imageWidget.callback(data.name);
-                                    }
-                                    return;
-                                }
-                            }
+                        const pasted = await pasteFromClipboardItems(node, imageWidget, refreshImageOptionsForSource, items);
+                        if (!pasted) {
+                            console.warn("[LoadImagePlus] Clipboard did not contain an image or image path");
                         }
-
-                        // Otherwise, fall back to a raw image in the clipboard.
-                        for (const item of items) {
-                            for (const type of item.types) {
-                                if (!type.startsWith("image/")) continue;
-                                const blob = await item.getType(type);
-                                const ext = type === "image/png" ? "png" : type === "image/jpeg" ? "jpg" : type === "image/webp" ? "webp" : "png";
-                                const filename = `pasted_${Date.now()}.${ext}`;
-                                const file = new File([blob], filename, { type });
-                                const formData = new FormData();
-                                formData.append("image", file);
-                                formData.append("subfolder", "");
-                                formData.append("type", "input");
-
-                                const response = await api.fetchApi("/upload/image", { method: "POST", body: formData });
-                                if (!response.ok) throw new Error("Upload failed");
-                                const data = await response.json();
-
-                                const sourceFolderWidget = node.widgets?.find(w => w.name === "source_folder");
-                                if (sourceFolderWidget) {
-                                    sourceFolderWidget.value = "input";
-                                    node._sourceFolder = "input";
-                                }
-                                if (imageWidget) {
-                                    imageWidget.value = data.name;
-                                    if (typeof refreshImageOptionsForSource === "function") {
-                                        refreshImageOptionsForSource("input", { preferredValue: data.name });
-                                    }
-                                    if (imageWidget.callback) imageWidget.callback(data.name);
-                                }
-                                return;
-                            }
-                        }
+                        return;
                     } catch (err) {
-                        console.error("[LoadImagePlus] Failed to paste image:", err);
+                        if (err.name === "NotAllowedError" || /not allowed/i.test(err.message)) {
+                            // Permission denied. Show a clear hint to use Ctrl+V,
+                            // which works without any permission.
+                            console.log("[LoadImagePlus] Clipboard-read blocked by browser. Press Ctrl+V to paste.");
+                            const hint = document.createElement("div");
+                            hint.textContent = "Press Ctrl+V to paste (browser blocks right-click clipboard access)";
+                            hint.style.cssText = `
+                                position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+                                background: rgba(34,39,48,0.98); border: 1px solid rgba(78,90,108,0.72);
+                                color: #c0cede; padding: 10px 18px; border-radius: 6px;
+                                font: 13px "Segoe UI", sans-serif; z-index: 10002;
+                                box-shadow: 0 4px 16px rgba(0,0,0,0.4); pointer-events: none;
+                                max-width: 400px; text-align: center;
+                            `;
+                            document.body.appendChild(hint);
+                            setTimeout(() => hint.remove(), 3500);
+                        } else {
+                            console.error("[LoadImagePlus] Failed to paste image:", err);
+                        }
                     }
                 }
             }
@@ -1923,6 +1977,29 @@ function installArrowKeyNavigation() {
             return;
         }
     }, true);
+
+    // Ctrl+V paste: when a Load Image node is hovered/selected, paste the
+    // clipboard image/path directly into it. The 'paste' event is used (not a
+    // keydown + clipboard.read()) because it supplies clipboardData without
+    // needing clipboard-read permission, so it works in a single step.
+    window.addEventListener("paste", (event) => {
+        if (event.defaultPrevented) return;
+        if (isTypingTarget(event.target)) return;
+
+        const node = getActiveLoadImageNode();
+        if (!node) return;
+
+        const imageWidget = node.widgets?.find(w => w.name === "image");
+        if (!imageWidget) return;
+
+        event.preventDefault();
+        event.stopPropagation();
+        pasteFromDataTransfer(node, imageWidget, node._refreshImageOptionsForSource, event.clipboardData)
+            .then((pasted) => {
+                if (!pasted) console.warn("[LoadImagePlus] Ctrl+V: clipboard did not contain an image or image path");
+            })
+            .catch((err) => console.error("[LoadImagePlus] Ctrl+V paste failed:", err));
+    }, true);
 }
 
 /**
@@ -2065,6 +2142,7 @@ app.registerExtension({
                     console.warn('[LoadImagePlus] Could not fetch file list:', err);
                 }
             };
+            node._refreshImageOptionsForSource = refreshImageOptionsForSource;
 
             const refreshImageOptionsForBrowsePath = async (browsePath, preferredValue = null) => {
                 if (!imageWidget || !browsePath) return false;
