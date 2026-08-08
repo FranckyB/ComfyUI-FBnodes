@@ -9,6 +9,95 @@
 import { app } from '../../../scripts/app.js'
 
 /**
+ * Walk MP4 atoms and extract mdta-style metadata keys ('workflow', 'prompt')
+ * from the moov/udta/meta/keys+ilst structure.
+ * Returns an object like { workflow: "...", prompt: "..." } or null.
+ */
+function parseMp4MdtaMetadata(videoData, dataView, decoder) {
+    const u32 = (o) => dataView.getUint32(o);
+    const tag = (o) => String.fromCharCode(videoData[o], videoData[o + 1], videoData[o + 2], videoData[o + 3]);
+
+    // Iterate child atoms within [start, end)
+    function* atoms(start, end) {
+        let off = start;
+        while (off + 8 <= end && off + 8 <= videoData.length) {
+            let size = u32(off);
+            const type = tag(off + 4);
+            let header = 8;
+            if (size === 1) { // 64-bit largesize
+                size = Number(dataView.getBigUint64(off + 8));
+                header = 16;
+            } else if (size === 0) {
+                size = end - off;
+            }
+            if (size < header || off + size > end) break;
+            yield { type, start: off, header, size, end: off + size };
+            off += size;
+        }
+    }
+
+    // Find the meta atom (under moov or moov/udta)
+    function findMeta() {
+        for (const a of atoms(0, videoData.length)) {
+            if (a.type !== 'moov') continue;
+            for (const b of atoms(a.start + a.header, a.end)) {
+                if (b.type === 'meta') return b;
+                if (b.type === 'udta') {
+                    for (const c of atoms(b.start + b.header, b.end)) {
+                        if (c.type === 'meta') return c;
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    const meta = findMeta();
+    if (!meta) return null;
+
+    // meta is a FullBox: skip 4-byte version/flags after the header
+    let keysAtom = null;
+    let ilstAtom = null;
+    for (const a of atoms(meta.start + meta.header + 4, meta.end)) {
+        if (a.type === 'keys') keysAtom = a;
+        if (a.type === 'ilst') ilstAtom = a;
+    }
+    if (!keysAtom || !ilstAtom) return null;
+
+    // Parse keys: 4-byte version/flags + 4-byte count, then entries
+    const keyNames = [];
+    {
+        const base = keysAtom.start + keysAtom.header;
+        const count = u32(base + 4);
+        let off = base + 8;
+        for (let i = 0; i < count && off + 8 <= keysAtom.end; i++) {
+            const sz = u32(off);
+            // off + 4 is the namespace ('mdta'), name follows
+            keyNames.push(decoder.decode(videoData.slice(off + 8, off + sz)));
+            off += sz;
+        }
+    }
+
+    // Parse ilst: items are NOT typed atoms — the field after size is the
+    // 1-based key index. Child atoms (e.g. 'data') start right after it.
+    const result = {};
+    for (const item of atoms(ilstAtom.start + ilstAtom.header, ilstAtom.end)) {
+        const index = u32(item.start + 4);
+        const name = keyNames[index - 1];
+        if (!name) continue;
+        for (const d of atoms(item.start + 8, item.end)) {
+            if (d.type !== 'data') continue;
+            // data atom: 4-byte type indicator + 4-byte locale, then payload
+            const payload = videoData.slice(d.start + d.header + 8, d.end);
+            result[name] = decoder.decode(payload);
+            break;
+        }
+    }
+
+    return ('workflow' in result || 'prompt' in result) ? result : null;
+}
+
+/**
  * Parse video file bytes to extract embedded workflow/prompt metadata.
  * Supports webm/mkv (EBML/Matroska) and mp4 (QuickTime) formats.
  */
@@ -77,41 +166,31 @@ function getVideoMetadata(file) {
                     offset -= 1;
                 }
 
-                // Second try: Look for 'prompt' or 'workflow' tags in metadata
-                // These are stored by our SaveVideoPlus node using movflags=use_metadata_tags
-                offset = 0;
-                while (offset < videoData.length - 100) {
-                    // Look for 'prompt' or 'workflow' strings followed by JSON
-                    const slice = decoder.decode(videoData.slice(offset, offset + 20));
-                    if (slice.includes('prompt') || slice.includes('workflow')) {
-                        // Try to find JSON starting after the key
-                        for (let i = 0; i < 50 && offset + i < videoData.length - 1; i++) {
-                            if (videoData[offset + i] === 0x7B) { // '{'
-                                // Found potential JSON start, try to parse
-                                let jsonEnd = offset + i;
-                                let braceCount = 0;
-                                for (let j = jsonEnd; j < Math.min(jsonEnd + 1000000, videoData.length); j++) {
-                                    if (videoData[j] === 0x7B) braceCount++;
-                                    if (videoData[j] === 0x7D) braceCount--;
-                                    if (braceCount === 0) {
-                                        jsonEnd = j + 1;
-                                        break;
-                                    }
-                                }
-                                const jsonStr = decoder.decode(videoData.slice(offset + i, jsonEnd));
-                                try {
-                                    const json = JSON.parse(jsonStr);
-                                    if (json.workflow || json.prompt || json.nodes) {
-                                        resolve(json.workflow ? json : { workflow: json });
-                                        return;
-                                    }
-                                } catch (e) {
-                                    // Not valid JSON, continue searching
-                                }
-                            }
-                        }
+                // Second try: Parse udta/meta/keys/ilst atoms properly.
+                // SaveVideoPlus stores 'workflow'/'prompt' as mdta keys via
+                // movflags=use_metadata_tags. Blind byte-scanning is unreliable:
+                // 'prompt' and 'workflow' sit 16 bytes apart in the keys atom, so
+                // a stride scan may grab the prompt payload and mistake it for a
+                // workflow (it has a 'prompt' key but no 'nodes').
+                const meta = parseMp4MdtaMetadata(videoData, dataView, decoder);
+                if (meta) {
+                    // Prefer the true workflow payload; fall back to prompt-only.
+                    let wf = meta.workflow;
+                    if (typeof wf === "string") {
+                        try { wf = JSON.parse(wf); } catch (e) { wf = null; }
                     }
-                    offset += 100; // Skip ahead in larger chunks
+                    if (wf && typeof wf === "object" && Array.isArray(wf.nodes)) {
+                        resolve({ workflow: wf, prompt: meta.prompt ?? null });
+                        return;
+                    }
+                    let pr = meta.prompt;
+                    if (typeof pr === "string") {
+                        try { pr = JSON.parse(pr); } catch (e) { pr = null; }
+                    }
+                    if (pr && typeof pr === "object") {
+                        resolve({ prompt: pr });
+                        return;
+                    }
                 }
             }
 

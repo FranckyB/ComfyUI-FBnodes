@@ -4,6 +4,10 @@ import { api } from "../../scripts/api.js";
 const CONTROLS_TOGGLE_WIDGET_KEY = "__fb_save_video_controls_toggle";
 const CONTROLS_EXPANDED_PROP = "_saveVideoControlsExpanded";
 const CONTROLS_COLLAPSED_SIZE_PROP = "_saveVideoCollapsedSize";
+// Serialized widget carrying the last execution result, so the preview can be
+// restored after tab switches and workflow reloads (custom node.properties
+// keys are not persisted into workflow JSON by ComfyUI).
+const LAST_RESULT_WIDGET_NAME = "_fbSaveVideoLastResult";
 // Same creation/minimum footprint as LoadVideoPlus.
 const SAVE_VIDEO_MIN_WIDTH = 300;
 const SAVE_VIDEO_MIN_HEIGHT = 320;
@@ -115,11 +119,130 @@ function setResultData(node, message) {
         node.properties._needsExternalPlayer = normalizeBool(needsExternal);
     }
 
+    // A new execution result invalidates any restored-preview URL snapshot,
+    // so the watcher in onDrawForeground will swap in the fresh video.
+    node._saveVideoRestoredUrl = null;
+
     updateDisplayState(node);
+    persistLastResultWidget(node);
     ensureMinWarningDisplaySize(node);
     syncWarningOverlay(node);
     node.setDirtyCanvas?.(true, true);
     return true;
+}
+
+// Mirrors node.properties into a hidden serialized widget so the last result
+// survives workflow save/load (ComfyUI does not persist custom properties).
+function persistLastResultWidget(node) {
+    const widget = node.widgets?.find((w) => w?.name === LAST_RESULT_WIDGET_NAME);
+    if (!widget) return;
+
+    const path = node.properties?._lastSavedVideoPath;
+    if (typeof path === "string" && path.length > 0) {
+        widget.value = JSON.stringify({
+            path,
+            needsExternal: !!node.properties?._needsExternalPlayer,
+        });
+    } else {
+        widget.value = "";
+    }
+}
+
+function restoreLastResultFromWidget(node) {
+    const widget = node.widgets?.find((w) => w?.name === LAST_RESULT_WIDGET_NAME);
+    const raw = widget?.value;
+    if (typeof raw !== "string" || !raw) return false;
+
+    let parsed = null;
+    try {
+        parsed = JSON.parse(raw);
+    } catch {
+        return false;
+    }
+    if (!parsed || typeof parsed.path !== "string" || !parsed.path) return false;
+
+    if (!node.properties) node.properties = {};
+    node.properties._lastSavedVideoPath = parsed.path;
+    node.properties._needsExternalPlayer = !!parsed.needsExternal;
+    updateDisplayState(node);
+    return true;
+}
+
+function ensureLastResultWidget(node) {
+    if (node.widgets?.some((w) => w?.name === LAST_RESULT_WIDGET_NAME)) return;
+    const widget = node.addWidget("text", LAST_RESULT_WIDGET_NAME, "", null, { serialize: true });
+    widget.serialize = true;
+    widget.hidden = true;
+    widget.computeSize = () => [0, -4];
+}
+
+// Builds the /view URL used to re-render the video element from the persisted
+// saved path. Absolute and output-rooted paths both resolve via type=output.
+function buildSavedVideoViewUrl(savedPath) {
+    if (!savedPath) return null;
+    const normalized = String(savedPath).replace(/\\/g, "/");
+    const lastSlash = normalized.lastIndexOf("/");
+    const filename = lastSlash >= 0 ? normalized.substring(lastSlash + 1) : normalized;
+    const subfolder = lastSlash >= 0 ? normalized.substring(0, lastSlash) : "";
+    if (!filename) return null;
+    let url = `/view?filename=${encodeURIComponent(filename)}&type=output`;
+    if (subfolder) url += `&subfolder=${encodeURIComponent(subfolder)}`;
+    return url;
+}
+
+// Rebuilds the preview player from the persisted saved path when ComfyUI core
+// did not restore its own video element (tab switch / workflow reload).
+// Returns true when a video element exists (ours or core's).
+function ensureRestoredVideoPreview(node) {
+    const container = getPreviewContainer(node);
+    if (!container) return false;
+    if (container.querySelector("video")) return true;
+
+    const url = buildSavedVideoViewUrl(node.properties?._lastSavedVideoPath);
+    if (!url) return false;
+
+    ensurePreviewFrame(container);
+    const mediaHost = container._previewMediaHost || container;
+
+    const vid = document.createElement("video");
+    vid.playsInline = true;
+    vid.controls = true;
+    vid.loop = true;
+    // Mirror core's native preview sizing (.comfy-img-preview video rule),
+    // since our element lives inside a nested media host.
+    vid.style.cssText = "width:100%;height:100%;object-fit:contain;display:block;";
+    vid.src = url;
+    mediaHost.appendChild(vid);
+    node._saveVideoRestoredUrl = url;
+    syncPreviewFooterFromVideo(node);
+    return true;
+}
+
+function scheduleRestoredVideoPreview(node, attempts = 0) {
+    if (ensureRestoredVideoPreview(node)) {
+        node.setDirtyCanvas?.(true, true);
+        return;
+    }
+    if (attempts < 20) {
+        setTimeout(() => scheduleRestoredVideoPreview(node, attempts + 1), 100);
+    }
+}
+
+// If the saved path changed (a new execution result arrived while this node
+// was hidden in a subgraph, so core's native preview never updated here),
+// rebuild our restored player to point at the new video.
+function syncRestoredPreviewUrl(node) {
+    const container = getPreviewContainer(node);
+    const vid = container?.querySelector("video") || null;
+    if (!vid || !container?._previewMediaHost || vid.parentElement !== container._previewMediaHost) return;
+
+    const url = buildSavedVideoViewUrl(node.properties?._lastSavedVideoPath);
+    if (!url || url === node._saveVideoRestoredUrl) return;
+
+    try { vid.pause(); } catch { /* ignore */ }
+    vid.remove();
+    node._saveVideoRestoredUrl = null;
+    ensureRestoredVideoPreview(node);
 }
 
 const _fbSaveVideoExecutedCache = new Map();
@@ -607,7 +730,11 @@ function syncAutoplay(node) {
     const container = getPreviewContainer(node);
     const vid = container?.querySelector("video") || null;
     if (!vid) return;
-    if (node._saveVideoAutoplayPrevVideo && vid === node._saveVideoAutoplayPrevVideo) return;
+    // Core's fresh inject, our freshly rebuilt player, and a still-playing
+    // restored element all count as valid targets; only the exact element
+    // snapshotted at execution time (the stale clip) is skipped.
+    const isOurs = !!(container?._previewMediaHost && vid.parentElement === container._previewMediaHost);
+    if (!isOurs && node._saveVideoAutoplayPrevVideo && vid === node._saveVideoAutoplayPrevVideo) return;
 
     node._saveVideoPendingAutoplay = false;
     node._saveVideoAutoplayPrevVideo = null;
@@ -708,6 +835,7 @@ app.registerExtension({
             node._configuredFromWorkflow = false;
 
             ensureControlsToggleWidget(node);
+            ensureLastResultWidget(node);
             ensurePreviewContainer(node);
 
             // Match LoadVideoPlus creation size. Runs after the default
@@ -735,12 +863,23 @@ app.registerExtension({
             restoreFromExecutedCache(node);
             ensureMinWarningDisplaySize(node);
             syncWarningOverlay(node);
+            // An execution may have completed while this node lived in a hidden
+            // subgraph; its result survives only in properties/caches, so the
+            // restored player (and pending autoplay) apply as soon as we render.
+            if (hasSavedPath(node)) {
+                if (node.properties?._saveVideoPendingAutoplay) {
+                    node._saveVideoPendingAutoplay = true;
+                    node.properties._saveVideoPendingAutoplay = false;
+                }
+                scheduleRestoredVideoPreview(node);
+            }
 
             const onDrawForeground = node.onDrawForeground;
             node.onDrawForeground = function (ctx) {
                 const drawResult = onDrawForeground ? onDrawForeground.apply(this, arguments) : undefined;
                 drawTitlePlayIcon(node, ctx);
                 syncWarningOverlay(node);
+                syncRestoredPreviewUrl(node);
                 syncPreviewFooterFromVideo(node);
                 syncAutoplay(node);
                 return drawResult;
@@ -785,11 +924,18 @@ app.registerExtension({
             this._configuredFromWorkflow = true;
             // Restore widget visibility without overwriting the size ComfyUI just loaded from the workflow.
             ensureControlsToggleWidget(this, { skipSize: true });
+            ensureLastResultWidget(this);
             ensurePreviewContainer(this);
+            // Widget values are applied during onConfigure — the serialized
+            // last-result widget is the source of truth across save/load.
+            restoreLastResultFromWidget(this);
             updateDisplayState(this);
             restoreFromExecutedCache(this);
             ensureMinWarningDisplaySize(this);
             syncWarningOverlay(this);
+            if (hasSavedPath(this)) {
+                scheduleRestoredVideoPreview(this);
+            }
             this.setDirtyCanvas?.(true, true);
             return result;
         };
@@ -809,6 +955,9 @@ app.registerExtension({
                 // the new element core injects for this run.
                 this._saveVideoPendingAutoplay = true;
                 this._saveVideoAutoplayPrevVideo = getPreviewContainer(this)?.querySelector("video") || null;
+                // Persist through node destruction (subgraph/tab switches) so
+                // playback can start when the node becomes visible again.
+                if (this.properties) this.properties._saveVideoPendingAutoplay = true;
             }
             return result;
         };
