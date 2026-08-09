@@ -359,7 +359,7 @@ app.registerExtension({
             name: "Add MiniMax Latent Preview Support",
             tooltip: "Enables true-color (TAESD) animated previews for MiniMax H3 video models.\n\nComfyUI does not ship a preview VAE for MiniMax - download taeh3.safetensors and place it in models/vae_approx:\nhttps://huggingface.co/Kijai/MiniMax-H3-TAE/tree/main/vae_approx",
             type: "boolean",
-            defaultValue: true,
+            defaultValue: false,
         },
     ],
     
