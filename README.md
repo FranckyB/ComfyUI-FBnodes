@@ -225,6 +225,17 @@ Provides animated video previews during KSampler execution for video models (Wan
 
 Enable in ComfyUI Settings: **FBnodes > Video Sampling > Animated Latent Preview**
 
+### MiniMax H3 support
+MiniMax H3 (Hailuo 3) video models can show true-color animated previews instead of the default Latent2RGB approximation. ComfyUI does not ship a preview VAE for MiniMax, so you need to download one manually:
+
+1. Download **taeh3.safetensors** from [Kijai/MiniMax-H3-TAE](https://huggingface.co/Kijai/MiniMax-H3-TAE/tree/main/vae_approx)
+2. Place it in your `ComfyUI/models/vae_approx/` folder
+3. Restart ComfyUI
+
+This is handled by a built-in tiny-VAE loader (no extra custom nodes needed). If the file is missing, MiniMax falls back to the standard preview and a message with the download link is printed to the console.
+
+You can toggle this support in ComfyUI Settings: **FBnodes > Video Sampling > Add MiniMax Latent Preview Support**
+
 ## Installation
 
 ### ComfyUI Manager

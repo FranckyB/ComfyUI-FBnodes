@@ -250,22 +250,33 @@ function getLatentPreviewCtx(id, width, height) {
 
 /**
  * Begin animated latent preview for a node
+ *
+ * `rate` is the number of latent frames per second of real video
+ * (video_fps / temporal_compression, sent by the backend). Advancing one frame
+ * every 1000/rate ms therefore plays back in real time. If a frame hasn't been
+ * decoded yet we skip it (advance the clock anyway) rather than pausing, so
+ * playback speed stays locked to real time instead of stretching into slow-mo.
  */
 function beginLatentPreview(id, previewImages, rate) {
     latentPreviewNodes.add(id);
-    
+
     if (animateIntervals[id]) {
         clearInterval(animateIntervals[id]);
     }
-    
+
     let displayIndex = 0;
+    // Last frame we actually drew - reused as a placeholder when the current
+    // frame hasn't arrived yet, so timing never stalls waiting for the decoder.
+    let lastDrawn = null;
     const node = getNodeById(id);
-    
+
     // Initialize progress to avoid race condition
     if (node) {
         node.progress = 0;
     }
-    
+
+    const frameDuration = 1000 / Math.max(1, rate);
+
     animateIntervals[id] = setInterval(() => {
         const currentNode = getNodeById(id);
         if (!currentNode?.progress && currentNode?.progress !== 0) {
@@ -273,27 +284,31 @@ function beginLatentPreview(id, previewImages, rate) {
             delete animateIntervals[id];
             return;
         }
-        
+
         // Check if we're still on the right graph
         if (app.canvas.graph.rootGraph !== currentNode.graph?.rootGraph) {
             clearInterval(animateIntervals[id]);
             delete animateIntervals[id];
             return;
         }
-        
-        if (!previewImages[displayIndex]) {
-            return;
+
+        // Prefer the frame for this timeslot; if it isn't decoded yet, fall back
+        // to the last drawn frame so the display updates but the clock keeps moving.
+        let frame = previewImages[displayIndex];
+        if (frame) {
+            lastDrawn = frame;
+        } else {
+            frame = lastDrawn;
         }
-        
-        const ctx = getLatentPreviewCtx(
-            id,
-            previewImages[displayIndex].width,
-            previewImages[displayIndex].height
-        );
-        ctx?.drawImage?.(previewImages[displayIndex], 0, 0);
-        
+
+        if (frame) {
+            const ctx = getLatentPreviewCtx(id, frame.width, frame.height);
+            ctx?.drawImage?.(frame, 0, 0);
+        }
+
+        // Always advance - real-time pacing, never slow down waiting for frames.
         displayIndex = (displayIndex + 1) % previewImages.length;
-    }, 1000 / rate);
+    }, frameDuration);
 }
 
 /**
@@ -338,6 +353,14 @@ app.registerExtension({
                 }
             },
         },
+        {
+            id: "FBnodes.MiniMaxLatentPreview",
+            category: ["FBnodes", "3. Video Sampling", "MiniMax Preview VAE"],
+            name: "Add MiniMax Latent Preview Support",
+            tooltip: "Enables true-color (TAESD) animated previews for MiniMax H3 video models.\n\nComfyUI does not ship a preview VAE for MiniMax - download taeh3.safetensors and place it in models/vae_approx:\nhttps://huggingface.co/Kijai/MiniMax-H3-TAE/tree/main/vae_approx",
+            type: "boolean",
+            defaultValue: true,
+        },
     ],
     
     async setup() {
@@ -353,6 +376,7 @@ app.registerExtension({
             if (!vhsActive) {
                 // Add our settings to the workflow extra data
                 res.workflow.extra['PM_latentpreview'] = app.ui.settings.getSettingValue("FBnodes.LatentPreview");
+                res.workflow.extra['FB_minimax_latentpreview'] = app.ui.settings.getSettingValue("FBnodes.MiniMaxLatentPreview");
             }
             
             return res;
