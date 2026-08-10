@@ -31,25 +31,70 @@ import node_helpers
 import server
 import latent_preview
 
+from .save_video import _detect_latent_format_name
 
-def load_latent_file(file_path: str) -> torch.Tensor:
-    """Load a .latent file and return the latent samples tensor (1, C, T, H, W)."""
+
+def read_latent_format(file_path: str) -> str | None:
+    """Read the recorded latent format tag from a .latent file's metadata.
+
+    Returns the format family string (e.g. 'Wan', 'MiniMaxH3', 'LTX') or None if
+    the file has no tag.
+    """
+    try:
+        from safetensors import safe_open
+        with safe_open(file_path, framework="pt") as f:
+            meta = f.metadata() or {}
+            return meta.get("latent_format")
+    except Exception:
+        return None
+
+
+def load_latent_file(file_path: str, return_format: bool = False):
+    """Load a .latent file and return the latent samples tensor (1, C, T, H, W).
+
+    If return_format is True, returns (tensor, format_name) where format_name is
+    the recorded 'latent_format' metadata tag, or one detected from the channel
+    count (Wan/LTX/MiniMax), or None if unknown.
+    """
     latent_data = safetensors.torch.load_file(file_path, device="cpu")
     multiplier = 1.0
     if "latent_format_version_0" not in latent_data:
         multiplier = 1.0 / 0.18215
-    return latent_data["latent_tensor"].float() * multiplier
+    # Support both the legacy 'latent_tensor' key and the newer 'samples' key.
+    if torch.is_tensor(latent_data.get("latent_tensor")):
+        tensor = latent_data["latent_tensor"]
+    elif torch.is_tensor(latent_data.get("samples")):
+        tensor = latent_data["samples"]
+    else:
+        raise KeyError("Latent file missing both 'latent_tensor' and 'samples'")
+    tensor = tensor.float() * multiplier
+
+    if not return_format:
+        return tensor
+
+    # Prefer the explicit metadata tag; fall back to channel-count detection.
+    fmt = read_latent_format(file_path) or _detect_latent_format_name(tensor)
+    return tensor, fmt
 
 
-def save_latent_file(file_path: str, latent_samples: torch.Tensor):
-    """Save latent samples tensor to a .latent file (lossless)."""
+def save_latent_file(file_path: str, latent_samples: torch.Tensor, latent_format: str | None = None):
+    """Save latent samples tensor to a .latent file (lossless).
+
+    Optionally records the latent format family (e.g. 'Wan', 'MiniMaxH3', 'LTX')
+    as safetensors string metadata so a loader elsewhere can identify it. The tag
+    is ignored by core LoadLatent, so it stays fully compatible.
+    """
+    if latent_format is None:
+        latent_format = _detect_latent_format_name(latent_samples)
+
     latent_output = {
         "latent_tensor": latent_samples,
         "latent_format_version_0": torch.tensor([]),
     }
+    metadata = {"latent_format": latent_format} if latent_format else None
     if os.path.exists(file_path):
         os.remove(file_path)
-    comfy.utils.save_torch_file(latent_output, file_path)
+    comfy.utils.save_torch_file(latent_output, file_path, metadata=metadata)
 
 
 def find_matching_latent(video_path: str) -> str | None:
@@ -1029,9 +1074,22 @@ class VACEStitcher:
         for f in clip_files:
             latent_path = find_matching_latent(f)
             if latent_path:
-                print(f"[VACE Stitcher]   Loading latent: {os.path.basename(latent_path)}")
-                clip_latents.append(load_latent_file(latent_path))
-                clip_pixels.append(None)  # will decode on demand
+                latent_tensor, latent_fmt = load_latent_file(latent_path, return_format=True)
+                # VACE stitching is a Wan pipeline - only Wan latents can be used.
+                # If the sidecar latent is a different family (e.g. MiniMax/LTX),
+                # warn and fall back to decoding the .mp4 instead.
+                if latent_fmt is not None and latent_fmt != "Wan":
+                    print(f"[VACE Stitcher]   Skipping latent {os.path.basename(latent_path)}: "
+                          f"format is '{latent_fmt}', but VACE stitching requires Wan latents. "
+                          f"Decoding video instead.")
+                    print(f"[VACE Stitcher]   Loading video: {os.path.basename(f)}")
+                    clip_latents.append(None)
+                    clip_pixels.append(load_video_file(f))
+                else:
+                    print(f"[VACE Stitcher]   Loading latent: {os.path.basename(latent_path)}"
+                          + (f" (format: {latent_fmt})" if latent_fmt else ""))
+                    clip_latents.append(latent_tensor)
+                    clip_pixels.append(None)  # will decode on demand
             else:
                 print(f"[VACE Stitcher]   Loading video: {os.path.basename(f)}")
                 clip_latents.append(None)

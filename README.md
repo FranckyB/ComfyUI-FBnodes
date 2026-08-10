@@ -223,6 +223,8 @@ Rules and limits:
 ## Animated Latent Preview
 Provides animated video previews during KSampler execution for video models (Wan, HunyuanVideo, Mochi, LTXV, Cosmos). Compatible with VideoHelperSuite — automatically defers if VHS is installed.
 
+**Performance**: TAESD video decodes run in a background thread (overlapping sampling instead of blocking it), decode at reduced resolution when the result would exceed the 512px preview cap anyway, and are capped to a configurable number of frames per step (**Max TAESD frames decoded per step**, default 6 — lower = less impact). The frame window rotates, so all frames still appear over the run.
+
 Enable in ComfyUI Settings: **FBnodes > Video Sampling > Animated Latent Preview**
 
 ### MiniMax H3 support

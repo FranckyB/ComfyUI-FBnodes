@@ -168,6 +168,19 @@ class WrappedPreviewer(_latent_preview_module.LatentPreviewer):
         """
         import server
 
+        # Decode at reduced resolution when full res would exceed ComfyUI's
+        # 512px preview display cap. TAEHV cost scales with output pixels, and
+        # downscaling the latent first is ~4x cheaper than decoding full-res
+        # then resizing - same displayed result.
+        upscale = getattr(self.taesd, 'upscale_ratio', None)
+        if upscale:
+            h, w = latent_frames.shape[-2], latent_frames.shape[-1]
+            longest = max(h, w) * upscale
+            if longest > 512:
+                s = 512 / longest
+                new_size = (max(1, int(h * s)), max(1, int(w * s)))
+                latent_frames = F.interpolate(latent_frames, size=new_size, mode='bilinear', align_corners=False)
+
         # Tiny-VAE decoders (built-in TAEHV variants / flat TAE) expose decode_video
         # which handles MemBlock temporal state correctly. Use it for the whole
         # batch of frames instead of decoding one at a time.
@@ -458,6 +471,11 @@ class _TAEHVDecoder:
         # marker so WrappedPreviewer detects this as a video TAESD
         self.first_stage_model = self.model
         self.is_h3 = latent_channels == 24 and patch_size == 2
+        # spatial upscale factor (patch embed * decoder upsamples) - lets the
+        # previewer downscale the latent before decoding to the 512px display cap
+        import torch.nn as nn
+        self.upscale_ratio = patch_size * 2 ** sum(
+            isinstance(m, nn.Upsample) for m in self.model.decoder)
 
     def _decode(self, latent):
         """[B, C, T, H, W] -> [B, 3, T*t_upscale - trim, H*ratio, W*ratio]"""

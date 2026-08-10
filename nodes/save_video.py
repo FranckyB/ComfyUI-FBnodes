@@ -48,6 +48,73 @@ def _log(message: str):
     print(f"[SaveVideoPlus] {message}")
 
 
+# Channel-count -> latent format, scoped to the model families these tools
+# target (Wan / LTX / MiniMax). Within this set the channel counts are
+# unambiguous for video latents, so the tag is reliable. Anything outside this
+# table is left untagged rather than guessed.
+_KNOWN_VIDEO_LATENT_CHANNELS = {
+    24: "MiniMaxH3",   # MiniMax H3 / Hailuo video (24ch)
+    16: "Wan",         # Wan 2.1 / 2.2 video (16ch)
+    128: "LTX",        # LTX / LTXV video (128ch)
+}
+
+
+def _detect_latent_format_name(tensor):
+    """
+    Infer the latent format family from a latent tensor's channel count.
+
+    Latent dicts don't carry their format. Since these tools only target
+    Wan / LTX / MiniMax, we match the channel dimension of video (5D) latents
+    against that known set. Returns the family name (e.g. 'MiniMaxH3', 'Wan',
+    'LTX') or None if the tensor isn't a recognized video latent.
+    """
+    if not torch.is_tensor(tensor) or tensor.ndim != 5:
+        return None
+    return _KNOWN_VIDEO_LATENT_CHANNELS.get(tensor.shape[1])
+
+
+def _is_comfy_nested_tensor(value):
+    """Detect ComfyUI's comfy.nested_tensor.NestedTensor wrapper.
+
+    It's a plain Python class (NOT a torch.Tensor) holding a list of tensors in
+    .tensors, with .is_nested = True. torch.is_tensor() returns False for it, so
+    it must be detected by shape, not type.
+    """
+    return (
+        getattr(value, "is_nested", False) is True
+        and isinstance(getattr(value, "tensors", None), (list, tuple))
+    )
+
+
+def _flatten_latent_tensors(latent, prefix=""):
+    """
+    Recursively collect tensors from a LATENT-style dict.
+
+    Most latents are flat ({"samples": tensor, ...}), but some models wrap the
+    tensors in nested dicts/objects, and ComfyUI's samplers can hand back a
+    NestedTensor wrapper. This walks nested dicts and unwraps NestedTensor so any
+    latent layout can be saved, using dotted keys for nested entries.
+    """
+    tensors = {}
+    for key, value in latent.items():
+        if not isinstance(key, str):
+            continue
+        full_key = f"{prefix}{key}"
+        if torch.is_tensor(value):
+            tensors[full_key] = value
+        elif _is_comfy_nested_tensor(value):
+            inner = [t for t in value.tensors if torch.is_tensor(t)]
+            if len(inner) == 1:
+                # Common case: a single-sample batch - keep the plain key.
+                tensors[full_key] = inner[0]
+            else:
+                for i, t in enumerate(inner):
+                    tensors[f"{full_key}.{i}"] = t
+        elif isinstance(value, dict):
+            tensors.update(_flatten_latent_tensors(value, prefix=f"{full_key}."))
+    return tensors
+
+
 def _latent_to_file_tensors(latent):
     """
     Convert a LATENT-style dict to a safetensors-compatible tensor dict.
@@ -58,26 +125,44 @@ def _latent_to_file_tensors(latent):
     if not isinstance(latent, dict):
         raise TypeError("Latent input must be a dict")
 
-    tensor_payload = {}
-    for key, value in latent.items():
-        if isinstance(key, str) and torch.is_tensor(value):
-            tensor_payload[key] = value
+    # Collect tensors, recursing into nested dicts (some models wrap samples).
+    tensor_payload = _flatten_latent_tensors(latent)
 
     if not tensor_payload:
-        raise ValueError("Latent dict does not contain any top-level tensor fields")
+        keys_desc = ", ".join(f"{k}={type(v).__name__}" for k, v in latent.items())
+        raise ValueError(
+            "Latent dict does not contain any tensor fields "
+            f"(top-level entries: {keys_desc or 'none'})"
+        )
 
-    # Backward compatibility with legacy latent files/loaders.
-    if "samples" in tensor_payload and "latent_tensor" not in tensor_payload:
-        tensor_payload["latent_tensor"] = tensor_payload["samples"]
-
-    # Some workflows provide valid LATENT dicts under nonstandard tensor keys.
-    # Pick a stable primary tensor so saving does not fail unnecessarily.
-    if "samples" not in tensor_payload and "latent_tensor" not in tensor_payload:
-        preferred_keys = ("latents", "latent", "video_latent", "video", "z")
-        primary_key = next((k for k in preferred_keys if k in tensor_payload), next(iter(tensor_payload)))
-        tensor_payload["samples"] = tensor_payload[primary_key]
-        tensor_payload["latent_tensor"] = tensor_payload[primary_key]
+    # Pick a single primary tensor. Core's LoadLatent reads 'latent_tensor', and
+    # our _latent_from_file_tensors accepts either, so we store the big buffer ONCE
+    # under 'samples' and do NOT also duplicate it under 'latent_tensor' (two copies
+    # would double file size, and aliasing the same buffer trips safetensors'
+    # shared-memory error). We normalise to a contiguous 'samples' entry.
+    primary_key = None
+    for candidate in ("samples", "latent_tensor"):
+        if candidate in tensor_payload:
+            primary_key = candidate
+            break
+    if primary_key is None:
+        preferred = ("latents", "latent", "video_latent", "video", "z", "samples.0")
+        primary_key = next((k for k in preferred if k in tensor_payload), next(iter(tensor_payload)))
         _log(f"LATENT input missing 'samples'; using '{primary_key}' as primary latent tensor")
+
+    # Drop every entry that shares storage with the primary (e.g. unwrapped
+    # NestedTensor views samples.0/samples.1 of one buffer) to avoid the
+    # safetensors shared-memory error, then normalise to a single canonical key.
+    # We use 'latent_tensor' because core ComfyUI LoadLatent reads exactly that,
+    # and our own _latent_from_file_tensors accepts it too - one copy on disk.
+    primary = tensor_payload[primary_key].contiguous()
+    for k in list(tensor_payload.keys()):
+        t = tensor_payload[k]
+        if torch.is_tensor(t) and t.data_ptr() == primary.data_ptr():
+            del tensor_payload[k]
+
+    tensor_payload["latent_tensor"] = primary
+    tensor_payload.pop("samples", None)
 
     if "latent_format_version_0" not in tensor_payload:
         tensor_payload["latent_format_version_0"] = torch.tensor([])
@@ -497,6 +582,18 @@ class SaveVideoPlus:
                         latent_metadata[x] = json.dumps(extra_pnginfo[x])
                 # Save the latent
                 latent_output = _latent_to_file_tensors(latent)
+
+                # Record which latent format this was, so a loader elsewhere can
+                # tell what model family produced it. Stored as safetensors string
+                # metadata (ignored by core LoadLatent, so fully compatible).
+                primary = latent_output.get("samples")
+                if primary is None:
+                    primary = latent_output.get("latent_tensor")
+                fmt_name = _detect_latent_format_name(primary)
+                if fmt_name:
+                    latent_metadata["latent_format"] = fmt_name
+                    _log(f"Tagged latent with format '{fmt_name}'")
+
                 if os.path.exists(latent_file):
                     os.remove(latent_file)
                 comfy.utils.save_torch_file(latent_output, latent_file, metadata=latent_metadata)
@@ -1040,8 +1137,22 @@ class GetVideoComponentsPlus:
             latent_path = os.path.splitext(video_path)[0] + '.latent'
             if os.path.exists(latent_path):
                 try:
+                    # Surface the recorded latent format tag, if present.
+                    fmt = None
+                    try:
+                        from safetensors import safe_open
+                        with safe_open(latent_path, framework="pt") as f:
+                            fmt = (f.metadata() or {}).get("latent_format")
+                    except Exception:
+                        pass
+
                     latent_data = safetensors.torch.load_file(latent_path, device="cpu")
                     latent = _latent_from_file_tensors(latent_data)
+
+                    if fmt is None and isinstance(latent, dict):
+                        fmt = _detect_latent_format_name(latent.get("samples"))
+                    if fmt:
+                        print(f"[GetVideoComponentsPlus] Loaded latent (format: {fmt}): {os.path.basename(latent_path)}")
                 except Exception as e:
                     print(f"[GetVideoComponentsPlus] Could not load latent file: {e}")
         return latent

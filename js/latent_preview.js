@@ -332,6 +332,14 @@ app.registerExtension({
     name: "FBnodes.LatentPreview",
     settings: [
         {
+            id: "FBnodes.MiniMaxLatentPreview",
+            category: ["FBnodes", "3. Video Sampling", "MiniMax Preview VAE"],
+            name: "Add MiniMax Latent Preview Support",
+            tooltip: "Enables true-color (TAESD) animated previews for MiniMax H3 video models.\n\nComfyUI does not ship a preview VAE for MiniMax - download taeh3.safetensors and place it in models/vae_approx:\nhttps://huggingface.co/Kijai/MiniMax-H3-TAE/tree/main/vae_approx",
+            type: "boolean",
+            defaultValue: false,
+        },
+        {
             id: "FBnodes.LatentPreview",
             category: ["FBnodes", "3. Video Sampling", "Animated Latent Preview"],
             name: "Display animated or subgraph previews when sampling",
@@ -352,14 +360,6 @@ app.registerExtension({
                     latentPreviewNodes = new Set();
                 }
             },
-        },
-        {
-            id: "FBnodes.MiniMaxLatentPreview",
-            category: ["FBnodes", "3. Video Sampling", "MiniMax Preview VAE"],
-            name: "Add MiniMax Latent Preview Support",
-            tooltip: "Enables true-color (TAESD) animated previews for MiniMax H3 video models.\n\nComfyUI does not ship a preview VAE for MiniMax - download taeh3.safetensors and place it in models/vae_approx:\nhttps://huggingface.co/Kijai/MiniMax-H3-TAE/tree/main/vae_approx",
-            type: "boolean",
-            defaultValue: false,
         },
     ],
     
