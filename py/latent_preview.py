@@ -64,7 +64,7 @@ class WrappedPreviewer(_latent_preview_module.LatentPreviewer):
     instead of static images.
     """
 
-    def __init__(self, previewer, rate=8, server_instance=None, model_name=None):
+    def __init__(self, previewer, rate=8, server_instance=None, model_name=None, max_seconds=5):
         # Don't call super().__init__() as we're wrapping an existing previewer
         self.first_preview = True
         self.last_time = 0
@@ -73,6 +73,13 @@ class WrappedPreviewer(_latent_preview_module.LatentPreviewer):
         self.server = server_instance
         self.is_video_taesd = False
         self.model_name = model_name
+        # How many SECONDS of video to show in the preview. The same leading slice
+        # is re-decoded each step so you watch it progressively denoise. Converted
+        # to latent frames via `rate` (latent frames per video second), so the same
+        # value means the same duration regardless of model temporal compression.
+        self.max_seconds = max(0.5, float(max_seconds))
+        # Latent frames in the window = seconds * (latent frames per second).
+        self.max_frames_per_step = max(1, int(round(self.max_seconds * self.rate)))
 
         # Check for an override decoder first (e.g. taeh3 for MiniMax) - these are
         # TAESD variants ComfyUI's VAE class can't build, so we load them ourselves.
@@ -126,36 +133,35 @@ class WrappedPreviewer(_latent_preview_module.LatentPreviewer):
             x0 = x0.reshape((-1,) + x0.shape[-3:])
 
         num_images = x0.size(0)
-        new_time = time.time()
-        num_previews = int((new_time - self.last_time) * self.rate)
-        self.last_time = self.last_time + num_previews / self.rate
 
-        if num_previews > num_images:
-            num_previews = num_images
-        elif num_previews <= 0:
+        # Fixed preview window: always the FIRST `max_frames_per_step` frames of the
+        # clip, re-decoded every step so you watch that slice progressively denoise
+        # (same frames, getting cleaner each step). Not a rotating window and not
+        # time-growing - a constant-size leading slice. Capped at the clip length.
+        num_previews = min(self.max_frames_per_step, num_images)
+        if num_previews <= 0:
             return None
 
         if self.first_preview:
             self.first_preview = False
-            # Send initialization message to frontend
+            # Tell the frontend the loop is exactly this fixed window.
             self.server.send_sync('PM_latentpreview', {
-                'length': num_images,
+                'length': num_previews,
                 'rate': self.rate,
                 'id': self.server.last_node_id
             })
-            self.last_time = new_time + 1 / self.rate
 
-        if self.c_index + num_previews > num_images:
-            x0 = x0.roll(-self.c_index, 0)[:num_previews]
-        else:
-            x0 = x0[self.c_index:self.c_index + num_previews]
+        # The leading window [0:num_previews], refreshed (re-decoded) each step.
+        x0 = x0[:num_previews]
 
-        # Process previews in a thread
+        # Process previews. NOTE: synchronous (.run()), not a background thread -
+        # the async/threaded version silently failed to display (send_sync from a
+        # non-event-loop thread + inference-mode tensors). The frame cap above is
+        # what bounds the per-step cost, so sync is acceptable and reliable.
         if hasattr(self, 'latent_rgb_factors'):
-            Thread(target=self._process_latent2rgb_batch, args=(x0, self.c_index, num_images)).run()
+            self._process_latent2rgb_batch(x0, 0, num_previews)
         else:
-            Thread(target=self._process_taesd_batch, args=(x0, self.c_index, num_images)).run()
-        self.c_index = (self.c_index + num_previews) % num_images
+            self._process_taesd_batch(x0, 0, num_previews)
         return None
 
     def _process_taesd_batch(self, latent_frames, ind, leng):
@@ -168,37 +174,44 @@ class WrappedPreviewer(_latent_preview_module.LatentPreviewer):
         """
         import server
 
-        # Tiny-VAE decoders (built-in TAEHV variants / flat TAE) expose decode_video
-        # which handles MemBlock temporal state correctly. Use it for the whole
-        # batch of frames instead of decoding one at a time.
-        if self.is_video_taesd and hasattr(self.taesd, 'decode_video'):
-            try:
-                # latent_frames is (N, C, H, W) - restack to (1, C, T, H, W)
-                x0_5d = latent_frames.movedim(0, 1).unsqueeze(0)  # (N,C,H,W) -> (1,C,N,H,W)
-                frames = self.taesd.decode_video(x0_5d)  # -> (T, H, W, 3) in 0-1
-                if frames.ndim == 4:
-                    for i in range(frames.shape[0]):
-                        preview_image = self._tensor_to_image(frames[i], do_scale=False)
-                        preview_image = self._resize_preview(preview_image)
-                        self._send_preview_frame(preview_image, ind, leng)
-                        ind = (ind + 1) % leng
-                    return
-            except Exception as e:
-                print(f"[FBnodes] decode_video preview failed, falling back to per-frame: {e}")
+        # The sampler hands us an inference-mode tensor; any decode of it (even in
+        # this background thread) trips "Inference tensors cannot be saved for
+        # backward". Clone into a normal tensor AND run all decode work under
+        # no_grad so autograd never touches it.
+        with torch.no_grad():
+            latent_frames = latent_frames.detach().clone()
 
-        # For TAESD, decode each frame (don't change this - it works)
-        for i in range(latent_frames.size(0)):
-            frame_latent = latent_frames[i:i + 1]  # Keep batch dim: (1, C, H, W)
+            # Tiny-VAE decoders (built-in TAEHV variants / flat TAE) expose decode_video
+            # which handles MemBlock temporal state correctly. Use it for the whole
+            # batch of frames instead of decoding one at a time.
+            if self.is_video_taesd and hasattr(self.taesd, 'decode_video'):
+                try:
+                    # latent_frames is (N, C, H, W) - restack to (1, C, T, H, W)
+                    x0_5d = latent_frames.movedim(0, 1).unsqueeze(0)  # (N,C,H,W) -> (1,C,N,H,W)
+                    frames = self.taesd.decode_video(x0_5d)  # -> (T, H, W, 3) in 0-1
+                    if frames.ndim == 4:
+                        for i in range(frames.shape[0]):
+                            preview_image = self._tensor_to_image(frames[i], do_scale=False)
+                            preview_image = self._resize_preview(preview_image)
+                            self._send_preview_frame(preview_image, ind, leng)
+                            ind = (ind + 1) % leng
+                        return
+                except Exception as e:
+                    print(f"[FBnodes] decode_video preview failed, falling back to per-frame: {e}")
 
-            # Decode single frame to PIL Image (same as ComfyUI does)
-            preview_image = self.decode_single_frame(frame_latent)
+            # For TAESD, decode each frame (don't change this - it works)
+            for i in range(latent_frames.size(0)):
+                frame_latent = latent_frames[i:i + 1]  # Keep batch dim: (1, C, H, W)
 
-            if preview_image is None:
-                continue
+                # Decode single frame to PIL Image (same as ComfyUI does)
+                preview_image = self.decode_single_frame(frame_latent)
 
-            preview_image = self._resize_preview(preview_image)
-            self._send_preview_frame(preview_image, ind, leng)
-            ind = (ind + 1) % leng
+                if preview_image is None:
+                    continue
+
+                preview_image = self._resize_preview(preview_image)
+                self._send_preview_frame(preview_image, ind, leng)
+                ind = (ind + 1) % leng
 
     def _resize_preview(self, preview_image):
         """Downscale a PIL preview so its longest side is at most 512."""
@@ -470,8 +483,12 @@ class _TAEHVDecoder:
         return out.to(device=latent.device, dtype=torch.float32)
 
     def decode(self, latent):
-        """[B, C, H, W] -> [B, 3, H*ratio, W*ratio], decoded as a single frame."""
-        return self._decode(latent.unsqueeze(2))[:, :, 0]
+        """Decode to image. Accepts [B, C, H, W] (adds a T dim) or [B, C, T, H, W]
+        (used as-is). Returns [B, 3, H*ratio, W*ratio] for the first frame."""
+        if latent.ndim == 4:
+            latent = latent.unsqueeze(2)  # [B, C, H, W] -> [B, C, 1, H, W]
+        # latent is now [B, C, T, H, W]; decode and take the first temporal frame
+        return self._decode(latent)[:, :, 0]
 
     def decode_video(self, latent, frame_indices=None):
         """[B, C, T, H, W] -> [n, H*ratio, W*ratio, 3], contiguous."""
@@ -629,10 +646,12 @@ def install_latent_preview_hook():
                 extra_info = next(serv.prompt_queue.currently_running.values().__iter__())[3]['extra_pnginfo']['workflow']['extra']
                 prev_setting = extra_info.get('PM_latentpreview', False)
                 minimax_setting = extra_info.get('FB_minimax_latentpreview', True)
+                max_seconds = extra_info.get('FB_preview_seconds', 5)
             except:
                 # For safety since there's lots of keys, any of which can fail
                 prev_setting = False
                 minimax_setting = True
+                max_seconds = 5
 
             if not prev_setting or not hasattr(previewer, "decode_latent_to_preview"):
                 return previewer
@@ -645,7 +664,7 @@ def install_latent_preview_hook():
                 return previewer
 
             rate_setting = RATES_TABLE.get(model_name, 8)
-            return WrappedPreviewer(previewer, rate_setting, serv, model_name)
+            return WrappedPreviewer(previewer, rate_setting, serv, model_name, max_seconds=max_seconds)
 
         _hook_installed = True
         print("[FBnodes] Latent preview hook installed successfully")

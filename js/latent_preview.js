@@ -332,6 +332,15 @@ app.registerExtension({
     name: "FBnodes.LatentPreview",
     settings: [
         {
+            id: "FBnodes.LatentPreviewSeconds",
+            category: ["FBnodes", "3. Video Sampling", "Animated Preview"],
+            name: "Preview length (seconds)",
+            tooltip: "How many seconds of the video (from the start) are shown in the animated preview.\nThe same segment is re-decoded each sampling step, so you watch it progressively sharpen.\nLower = less decode cost per step.",
+            type: "number",
+            defaultValue: 5,
+            attrs: { min: 1, max: 30, step: 1 },
+        },
+        {
             id: "FBnodes.MiniMaxLatentPreview",
             category: ["FBnodes", "3. Video Sampling", "MiniMax Preview VAE"],
             name: "Add MiniMax Latent Preview Support",
@@ -377,6 +386,7 @@ app.registerExtension({
                 // Add our settings to the workflow extra data
                 res.workflow.extra['PM_latentpreview'] = app.ui.settings.getSettingValue("FBnodes.LatentPreview");
                 res.workflow.extra['FB_minimax_latentpreview'] = app.ui.settings.getSettingValue("FBnodes.MiniMaxLatentPreview");
+                res.workflow.extra['FB_preview_seconds'] = app.ui.settings.getSettingValue("FBnodes.LatentPreviewSeconds");
             }
             
             return res;
