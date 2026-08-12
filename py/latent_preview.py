@@ -133,7 +133,7 @@ class WrappedPreviewer(_latent_preview_module.LatentPreviewer):
             raise Exception('Unsupported preview type for animated latent previews')
 
     def _load_override_decoder(self, model_name):
-        """Load a custom TAESD decoder for a format core can't handle (taeh3/taeltx).
+        """Load a custom TAESD decoder for a format core can't build (taeh3/taeltx).
         Returns the decoder object or None if unavailable/not applicable."""
         family_key = _FORMAT_TO_INJECTION.get(model_name)
         if not family_key:
@@ -141,6 +141,16 @@ class WrappedPreviewer(_latent_preview_module.LatentPreviewer):
         cfg = TAESD_INJECTIONS[family_key]
         if cfg.get('kind') != 'custom':
             return None
+
+        # Respect the user's chosen ComfyUI preview method. Only inject TAESD when
+        # previews are set to TAESD or Auto - if they picked Latent2RGB (or none),
+        # don't hijack their preview with our TAESD decoder.
+        try:
+            from comfy.cli_args import args, LatentPreviewMethod
+            if args.preview_method not in (LatentPreviewMethod.TAESD, LatentPreviewMethod.Auto):
+                return None
+        except Exception:
+            pass
 
         # Custom filename from settings takes precedence; else the default file.
         taesd_name = (self._injection_file or '').strip() or cfg['default_file']
@@ -190,10 +200,14 @@ class WrappedPreviewer(_latent_preview_module.LatentPreviewer):
         # The leading window [0:num_previews], refreshed (re-decoded) each step.
         x0 = x0[:num_previews]
 
-        # Process previews. NOTE: synchronous (.run()), not a background thread -
-        # the async/threaded version silently failed to display (send_sync from a
-        # non-event-loop thread + inference-mode tensors). The frame cap above is
-        # what bounds the per-step cost, so sync is acceptable and reliable.
+        # Decode synchronously on the sampling thread (same as ComfyUI core). The
+        # clone produces a normal tensor - the sampler's x0 is an inference-mode
+        # tensor, and decoding it directly trips "Inference tensors cannot be saved
+        # for backward". Users who find the decode cost too high can lower the
+        # preview length or disable TAESD injection / animated previews in Settings.
+        with torch.no_grad():
+            x0 = x0.detach().clone()
+
         if hasattr(self, 'latent_rgb_factors'):
             self._process_latent2rgb_batch(x0, 0, num_previews)
         else:
@@ -210,13 +224,9 @@ class WrappedPreviewer(_latent_preview_module.LatentPreviewer):
         """
         import server
 
-        # The sampler hands us an inference-mode tensor; any decode of it (even in
-        # this background thread) trips "Inference tensors cannot be saved for
-        # backward". Clone into a normal tensor AND run all decode work under
-        # no_grad so autograd never touches it.
+        # latent_frames was already cloned into a normal (non-inference) tensor by
+        # the caller, so decode work here is safe.
         with torch.no_grad():
-            latent_frames = latent_frames.detach().clone()
-
             # Tiny-VAE decoders (built-in TAEHV variants / flat TAE) expose decode_video
             # which handles MemBlock temporal state correctly. Use it for the whole
             # batch of frames instead of decoding one at a time.
