@@ -17,6 +17,7 @@ import torch.nn.functional as F
 RATES_TABLE = {
     'Mochi': 24 // 6,
     'LTXV': 24 // 8,
+    'LTXAV': 24 // 8,
     'HunyuanVideo': 24 // 4,
     'Cosmos1CV8x8x8': 24 // 8,
     'Wan21': 16 // 4,
@@ -25,19 +26,46 @@ RATES_TABLE = {
     'MiniMaxH3AV': 24 // 4
 }
 
-# TAESD model overrides: latent format class name -> (vae_approx file prefix, kind).
-# ComfyUI's get_previewer() warns "could not find models/vae_approx/None" when a
-# latent format doesn't define taesd_decoder_name. Some of those TAESD models are
-# variants core can't build (taeh3 is a 24-channel, patch-2 TAEHV for MiniMax H3,
-# while core's VAE hardcodes HunyuanVideo's 16ch/patch-4), so 'custom' entries are
-# loaded by our built-in tiny-VAE loader instead of being handed to ComfyUI.
-TAESD_MODEL_OVERRIDES = {
-    'MiniMaxH3Video': ('taeh3', 'custom'),
-    'MiniMaxH3AV': ('taeh3', 'custom')
+# TAESD preview injection, per model family. ComfyUI's get_previewer() warns
+# "could not find models/vae_approx/None" for latent formats that don't define
+# taesd_decoder_name, and some TAESD checkpoints are variants core can't build
+# (taeh3 is a 24ch/patch-2 TAEHV; taeltx is 128ch). Each entry maps a model
+# family to the latent-format classes it covers, the default vae_approx file,
+# the settings keys for its enable toggle and custom filename, and a help URL.
+#
+# 'kind':
+#   - 'custom': core's VAE/TAESD can't build it, we load it via the built-in
+#     tiny-VAE loader. The format gets a placeholder decoder name so core falls
+#     back to Latent2RGB silently, and WrappedPreviewer swaps in our decoder.
+#   - 'core': core can build it; we set taesd_decoder_name and register the name
+#     in ComfyUI's VIDEO_TAES list.
+TAESD_INJECTIONS = {
+    'minimax': {
+        'label': 'MiniMax H3',
+        'formats': ['MiniMaxH3Video', 'MiniMaxH3AV'],
+        'default_file': 'taeh3',
+        'kind': 'custom',
+        'enable_key': 'FB_inject_minimax',
+        'file_key': 'FB_inject_minimax_file',
+        'url': 'https://huggingface.co/Kijai/MiniMax-H3-TAE/tree/main/vae_approx',
+    },
+    'ltx': {
+        'label': 'LTX',
+        'formats': ['LTXV', 'LTXAV'],
+        'default_file': 'taeltx2_3',
+        'kind': 'custom',
+        'enable_key': 'FB_inject_ltx',
+        'file_key': 'FB_inject_ltx_file',
+        'url': 'https://huggingface.co/Kijai/LTX2.3_comfy/tree/main/vae',
+    },
 }
 
-# Where to get the MiniMax preview VAE (not shipped with ComfyUI)
-MINIMAX_TAE_URL = "https://huggingface.co/Kijai/MiniMax-H3-TAE/tree/main/vae_approx"
+# format class name -> injection family key (for O(1) lookup at preview time)
+_FORMAT_TO_INJECTION = {
+    fmt: key
+    for key, cfg in TAESD_INJECTIONS.items()
+    for fmt in cfg['formats']
+}
 
 # Global flag to track if we've hooked the previewer
 _hook_installed = False
@@ -64,7 +92,7 @@ class WrappedPreviewer(_latent_preview_module.LatentPreviewer):
     instead of static images.
     """
 
-    def __init__(self, previewer, rate=8, server_instance=None, model_name=None, max_seconds=5):
+    def __init__(self, previewer, rate=8, server_instance=None, model_name=None, max_seconds=5, injection_file=None):
         # Don't call super().__init__() as we're wrapping an existing previewer
         self.first_preview = True
         self.last_time = 0
@@ -73,6 +101,8 @@ class WrappedPreviewer(_latent_preview_module.LatentPreviewer):
         self.server = server_instance
         self.is_video_taesd = False
         self.model_name = model_name
+        # Custom TAESD filename (from settings) for this model's injection, if any.
+        self._injection_file = injection_file
         # How many SECONDS of video to show in the preview. The same leading slice
         # is re-decoded each step so you watch it progressively denoise. Converted
         # to latent frames via `rate` (latent frames per video second), so the same
@@ -103,21 +133,27 @@ class WrappedPreviewer(_latent_preview_module.LatentPreviewer):
             raise Exception('Unsupported preview type for animated latent previews')
 
     def _load_override_decoder(self, model_name):
-        """Load a custom TAESD decoder for formats core can't handle (e.g. taeh3).
+        """Load a custom TAESD decoder for a format core can't handle (taeh3/taeltx).
         Returns the decoder object or None if unavailable/not applicable."""
-        if not model_name or model_name not in TAESD_MODEL_OVERRIDES:
+        family_key = _FORMAT_TO_INJECTION.get(model_name)
+        if not family_key:
             return None
-        taesd_name, kind = TAESD_MODEL_OVERRIDES[model_name]
-        if kind != 'custom':
+        cfg = TAESD_INJECTIONS[family_key]
+        if cfg.get('kind') != 'custom':
             return None
+
+        # Custom filename from settings takes precedence; else the default file.
+        taesd_name = (self._injection_file or '').strip() or cfg['default_file']
+        label = cfg['label']
+
         decoder = _load_custom_taesd(taesd_name)
         if decoder is not None:
-            print(f"[FBnodes] Using TAESD override '{taesd_name}' for {model_name} latent previews")
+            print(f"[FBnodes] Using TAESD override '{taesd_name}' for {label} latent previews")
         else:
-            print(f"[FBnodes] MiniMax latent preview: '{taesd_name}' not found in models/vae_approx. "
-                  f"Download it from: {MINIMAX_TAE_URL}\n"
+            print(f"[FBnodes] {label} latent preview: '{taesd_name}' not found in models/vae_approx. "
+                  f"Download it from: {cfg['url']}\n"
                   f"[FBnodes] Falling back to the standard (Latent2RGB) preview. "
-                  f"You can disable MiniMax support in Settings > FBnodes > 3. Video Sampling.")
+                  f"You can disable {label} support in Settings > FBnodes > Preview Injection.")
         return decoder
 
     def decode_latent_to_preview_image(self, preview_format, x0):
@@ -533,15 +569,14 @@ def _load_custom_taesd(taesd_name):
 
 def inject_taesd_overrides():
     """
-    Fix ComfyUI's "could not find models/vae_approx/None" warning for latent
-    formats that don't define taesd_decoder_name (e.g. MiniMaxH3Video).
+    Register TAESD decoder names for latent formats that don't define one, fixing
+    ComfyUI's "could not find models/vae_approx/None" warning. Driven by
+    TAESD_INJECTIONS. 'custom' formats get a placeholder name so core falls back to
+    Latent2RGB silently (WrappedPreviewer swaps in our loader); 'core' formats are
+    registered in ComfyUI's VIDEO_TAES list.
 
-    - 'core' kind: sets taesd_decoder_name on the latent format class and registers
-      the name in ComfyUI's VIDEO_TAES list (for VAE-style video TAEs core can build).
-    - 'custom' kind: the decoder can't be built by core's VAE class (e.g. taeh3 is a
-      24ch/patch-2 TAEHV), so we load it ourselves in WrappedPreviewer. The format
-      gets a placeholder name (absent from VIDEO_TAES) so core takes the plain TAESD
-      path, fails gracefully, and falls back to Latent2RGB - no warning, no crash.
+    The per-model enable toggle is read at preview time (in the get_previewer hook),
+    so the placeholder registration here is harmless even when a model is disabled.
     """
     try:
         import folder_paths
@@ -551,37 +586,44 @@ def inject_taesd_overrides():
         available = folder_paths.get_filename_list('vae_approx')
 
         patched = []
-        for format_name, (taesd_name, kind) in TAESD_MODEL_OVERRIDES.items():
-            latent_cls = getattr(latent_formats, format_name, None)
-            if latent_cls is None:
-                continue
+        for family_key, cfg in TAESD_INJECTIONS.items():
+            taesd_name = cfg['default_file']
+            kind = cfg['kind']
+            label = cfg['label']
 
-            # Respect ComfyUI if it already defines a decoder for this format
-            if getattr(latent_cls, 'taesd_decoder_name', None):
-                continue
+            for format_name in cfg['formats']:
+                latent_cls = getattr(latent_formats, format_name, None)
+                if latent_cls is None:
+                    continue
 
-            # Only patch if the TAESD model file is actually present
-            if not any(fn.startswith(taesd_name) for fn in available):
-                print(f"[FBnodes] MiniMax latent preview: models/vae_approx/{taesd_name}.* not found.")
-                print(f"[FBnodes] Download it from: {MINIMAX_TAE_URL}")
-                print(f"[FBnodes] MiniMax will use the standard (Latent2RGB) preview. "
-                      f"You can disable this support in Settings > FBnodes > 3. Video Sampling.")
-                continue
+                # Respect ComfyUI if it already defines a decoder for this format
+                if getattr(latent_cls, 'taesd_decoder_name', None):
+                    continue
 
-            if kind == 'core':
-                # Full video TAEs (VAE-style), loadable by core via TAEHVPreviewerImpl
-                latent_cls.taesd_decoder_name = taesd_name
-                if video_taes is not None and taesd_name not in video_taes:
-                    video_taes.append(taesd_name)
-            else:
-                # 'custom': core can't build this variant (plain TAESD AND VAE paths
-                # both fail on e.g. taeh3), so give it a placeholder name that won't
-                # match any file. Core finds nothing -> falls back to Latent2RGB
-                # silently (no warning, no crash), and WrappedPreviewer swaps in our
-                # correctly-sized decoder at preview time.
-                latent_cls.taesd_decoder_name = '_fbnodes_custom_' + taesd_name
+                # Only patch if the TAESD model file is actually present
+                if not any(fn.startswith(taesd_name) for fn in available):
+                    print(f"[FBnodes] {label} latent preview: models/vae_approx/{taesd_name}.* not found.")
+                    print(f"[FBnodes] Download it from: {cfg['url']}")
+                    print(f"[FBnodes] {label} will use the standard (Latent2RGB) preview. "
+                          f"You can configure it in Settings > FBnodes > Preview Injection.")
+                    break
 
-            patched.append(format_name)
+                if kind == 'core':
+                    # Full video TAEs (VAE-style), loadable by core via TAEHVPreviewerImpl
+                    latent_cls.taesd_decoder_name = taesd_name
+                    if video_taes is not None and taesd_name not in video_taes:
+                        video_taes.append(taesd_name)
+                else:
+                    # 'custom': core can't build this variant (plain TAESD AND VAE paths
+                    # both fail), so give it a placeholder name that won't match any
+                    # file. Core finds nothing -> falls back to Latent2RGB silently
+                    # (no warning, no crash), and WrappedPreviewer swaps in our loader.
+                    # The name is prefixed with '_' so it stays non-matching but still
+                    # reads as the intended model (e.g. _taeltx2_3) rather than looking
+                    # like an FBnodes-specific artifact in any log line.
+                    latent_cls.taesd_decoder_name = '_' + taesd_name
+
+                patched.append(format_name)
 
         if patched:
             print(f"[FBnodes] TAESD preview override installed for: {', '.join(patched)}")
@@ -645,12 +687,10 @@ def install_latent_preview_hook():
             try:
                 extra_info = next(serv.prompt_queue.currently_running.values().__iter__())[3]['extra_pnginfo']['workflow']['extra']
                 prev_setting = extra_info.get('PM_latentpreview', False)
-                minimax_setting = extra_info.get('FB_minimax_latentpreview', True)
                 max_seconds = extra_info.get('FB_preview_seconds', 5)
             except:
                 # For safety since there's lots of keys, any of which can fail
                 prev_setting = False
-                minimax_setting = True
                 max_seconds = 5
 
             if not prev_setting or not hasattr(previewer, "decode_latent_to_preview"):
@@ -658,13 +698,19 @@ def install_latent_preview_hook():
 
             model_name = latent_format.__class__.__name__
 
-            # Respect the MiniMax support toggle - skip the custom TAESD override
-            # (and its decoder load) when the user disabled it in settings.
-            if model_name in TAESD_MODEL_OVERRIDES and not minimax_setting:
-                return previewer
+            # Per-model injection toggle + custom TAESD filename. If this model
+            # family has an injection but the user disabled it, skip the override.
+            family_key = _FORMAT_TO_INJECTION.get(model_name)
+            injection_file = None
+            if family_key:
+                cfg = TAESD_INJECTIONS[family_key]
+                enabled = extra_info.get(cfg['enable_key'], True)
+                if not enabled:
+                    return previewer
+                injection_file = extra_info.get(cfg['file_key']) or None
 
             rate_setting = RATES_TABLE.get(model_name, 8)
-            return WrappedPreviewer(previewer, rate_setting, serv, model_name, max_seconds=max_seconds)
+            return WrappedPreviewer(previewer, rate_setting, serv, model_name, max_seconds=max_seconds, injection_file=injection_file)
 
         _hook_installed = True
         print("[FBnodes] Latent preview hook installed successfully")

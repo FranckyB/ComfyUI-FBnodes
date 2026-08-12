@@ -331,6 +331,40 @@ function isVHSLatentPreviewActive() {
 app.registerExtension({
     name: "FBnodes.LatentPreview",
     settings: [
+        // NOTE: the settings panel renders this array in REVERSE order, so the
+        // last entry appears first. Kept so "Display animated..." shows on top.
+        {
+            id: "FBnodes.InjectLtxFile",
+            category: ["FBnodes", "Preview Injection", "LTX"],
+            name: "LTX TAESD filename",
+            tooltip: "The vae_approx file used for LTX true-color previews.\nLeave blank to use the default (taeltx2_3.safetensors).",
+            type: "text",
+            defaultValue: "",
+        },
+        {
+            id: "FBnodes.InjectLtx",
+            category: ["FBnodes", "Preview Injection", "LTX Enable"],
+            name: "Enable LTX latent preview injection",
+            tooltip: "Enables true-color (TAESD) animated previews for LTX video models.\n\nComfyUI does not ship a preview VAE for LTX - place the LTX TAESD file in models/vae_approx.",
+            type: "boolean",
+            defaultValue: true,
+        },
+        {
+            id: "FBnodes.InjectMinimaxFile",
+            category: ["FBnodes", "Preview Injection", "MiniMax"],
+            name: "MiniMax TAESD filename",
+            tooltip: "The vae_approx file used for MiniMax true-color previews.\nLeave blank to use the default (taeh3.safetensors).",
+            type: "text",
+            defaultValue: "",
+        },
+        {
+            id: "FBnodes.InjectMinimax",
+            category: ["FBnodes", "Preview Injection", "MiniMax Enable"],
+            name: "Enable MiniMax latent preview injection",
+            tooltip: "Enables true-color (TAESD) animated previews for MiniMax H3 video models.\n\nComfyUI does not ship a preview VAE for MiniMax - place the MiniMax TAESD file in models/vae_approx.",
+            type: "boolean",
+            defaultValue: true,
+        },
         {
             id: "FBnodes.LatentPreviewSeconds",
             category: ["FBnodes", "3. Video Sampling", "Animated Preview"],
@@ -339,14 +373,6 @@ app.registerExtension({
             type: "number",
             defaultValue: 5,
             attrs: { min: 1, max: 30, step: 1 },
-        },
-        {
-            id: "FBnodes.MiniMaxLatentPreview",
-            category: ["FBnodes", "3. Video Sampling", "MiniMax Preview VAE"],
-            name: "Add MiniMax Latent Preview Support",
-            tooltip: "Enables true-color (TAESD) animated previews for MiniMax H3 video models.\n\nComfyUI does not ship a preview VAE for MiniMax - download taeh3.safetensors and place it in models/vae_approx:\nhttps://huggingface.co/Kijai/MiniMax-H3-TAE/tree/main/vae_approx",
-            type: "boolean",
-            defaultValue: false,
         },
         {
             id: "FBnodes.LatentPreview",
@@ -385,8 +411,12 @@ app.registerExtension({
             if (!vhsActive) {
                 // Add our settings to the workflow extra data
                 res.workflow.extra['PM_latentpreview'] = app.ui.settings.getSettingValue("FBnodes.LatentPreview");
-                res.workflow.extra['FB_minimax_latentpreview'] = app.ui.settings.getSettingValue("FBnodes.MiniMaxLatentPreview");
                 res.workflow.extra['FB_preview_seconds'] = app.ui.settings.getSettingValue("FBnodes.LatentPreviewSeconds");
+                // Per-model TAESD injection toggles + optional custom filenames
+                res.workflow.extra['FB_inject_minimax'] = app.ui.settings.getSettingValue("FBnodes.InjectMinimax");
+                res.workflow.extra['FB_inject_minimax_file'] = app.ui.settings.getSettingValue("FBnodes.InjectMinimaxFile");
+                res.workflow.extra['FB_inject_ltx'] = app.ui.settings.getSettingValue("FBnodes.InjectLtx");
+                res.workflow.extra['FB_inject_ltx_file'] = app.ui.settings.getSettingValue("FBnodes.InjectLtxFile");
             }
             
             return res;

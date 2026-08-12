@@ -221,22 +221,21 @@ Rules and limits:
 - Rejects unsafe values (absolute paths or traversal-like paths)
 
 ## Animated Latent Preview
-Provides animated video previews during KSampler execution for video models (Wan, HunyuanVideo, Mochi, LTXV, Cosmos). Compatible with VideoHelperSuite — automatically defers if VHS is installed.
+Provides animated video previews during KSampler execution for video models (Wan, LTX, MiniMax). Compatible with VideoHelperSuite — automatically defers if VHS is installed.
 
-**Performance**: TAESD video decodes run in a background thread (overlapping sampling instead of blocking it), decode at reduced resolution when the result would exceed the 512px preview cap anyway, and are capped to a configurable number of frames per step (**Max TAESD frames decoded per step**, default 6 — lower = less impact). The frame window rotates, so all frames still appear over the run.
+The preview shows a configurable leading slice of the video, re-decoded every sampling step so you watch that segment progressively sharpen as denoising progresses.
 
 Enable in ComfyUI Settings: **FBnodes > Video Sampling > Animated Latent Preview**
 
-### MiniMax H3 support
-MiniMax H3 (Hailuo 3) video models can show true-color animated previews instead of the default Latent2RGB approximation. ComfyUI does not ship a preview VAE for MiniMax, so you need to download one manually:
+### True-color preview injection (MiniMax / LTX)
+ComfyUI's latent previewer doesn't have a TAESD decoder mapped for some models, so they fall back to the lower-quality Latent2RGB approximation. FBnodes injects TAESD support for those models so they show true-color previews. You can toggle each model's injection or set a custom TAESD filename in ComfyUI Settings: **FBnodes > Preview Injection**
 
-1. Download **taeh3.safetensors** from [Kijai/MiniMax-H3-TAE](https://huggingface.co/Kijai/MiniMax-H3-TAE/tree/main/vae_approx)
-2. Place it in your `ComfyUI/models/vae_approx/` folder
-3. Restart ComfyUI
+Download the TAESD file for each model you use and place it in `ComfyUI/models/vae_approx/`:
 
-This is handled by a built-in tiny-VAE loader (no extra custom nodes needed). If the file is missing, MiniMax falls back to the standard preview and a message with the download link is printed to the console.
+- **MiniMax H3** — [taeh3.safetensors](https://huggingface.co/Kijai/MiniMax-H3-TAE/tree/main/vae_approx)
+- **LTX** — [taeltx2_3.safetensors](https://huggingface.co/Kijai/LTX2.3_comfy/tree/main/vae)
 
-You can toggle this support in ComfyUI Settings: **FBnodes > Video Sampling > Add MiniMax Latent Preview Support**
+Then refresh ComfyUI. If a file is missing, that model keeps the standard preview and a message with the download link is printed to the console.
 
 ## Installation
 

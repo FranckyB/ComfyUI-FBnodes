@@ -500,12 +500,12 @@ function getFramePreviewLayer(host) {
     frameImg.className = "fbnodes-save-video-frame-preview";
     frameImg.alt = "Video frame preview";
     frameImg.style.position = "absolute";
-    frameImg.style.left = "8px";
-    frameImg.style.right = "8px";
-    frameImg.style.top = "12px";
-    frameImg.style.bottom = "84px";
-    frameImg.style.width = "calc(100% - 16px)";
-    frameImg.style.height = "calc(100% - 96px)";
+    frameImg.style.left = "0";
+    frameImg.style.right = "0";
+    frameImg.style.top = "0";
+    frameImg.style.bottom = "0";
+    frameImg.style.width = "100%";
+    frameImg.style.height = "100%";
     frameImg.style.objectFit = "contain";
     frameImg.style.background = "transparent";
     frameImg.style.borderRadius = "4px";
@@ -533,12 +533,31 @@ function syncFramePreviewLayer(node, host) {
     }
 
     const savedPath = node.properties?._lastSavedVideoPath || "";
-    if (node._saveVideoFramePreviewForPath !== savedPath) {
-        node._saveVideoFramePreviewForPath = savedPath;
+    // Key the loaded src on the ELEMENT, not the node: core's replaceChildren()
+    // wipes and recreates this <img> when it injects the native <video> after
+    // onExecuted, and a node-level guard would then skip re-setting src on the
+    // fresh element (leaving a broken/empty image until refresh). This only runs
+    // for the compat-warning overlay; normal videos return early above.
+    if (frameImg._loadedForPath !== savedPath) {
+        frameImg._loadedForPath = savedPath;
         frameImg.onload = () => {
             const w = frameImg.naturalWidth || 0;
             const h = frameImg.naturalHeight || 0;
             setSavePreviewFooter(host, w && h ? `${w} × ${h}` : "—");
+        };
+        // The mp4 may still be flushing to disk when this fires right after save,
+        // so the frame endpoint can 500 -> broken image that never recovers.
+        // Retry with backoff so the thumbnail appears once the file is readable.
+        let retries = 0;
+        frameImg.onerror = () => {
+            if (frameImg._loadedForPath !== savedPath) return; // stale/replaced
+            if (retries >= 8) return;
+            retries += 1;
+            const delay = Math.min(150 * retries, 1200);
+            setTimeout(() => {
+                if (frameImg._loadedForPath !== savedPath) return;
+                frameImg.src = `${frameUrl}&t=${Date.now()}`;
+            }, delay);
         };
         frameImg.src = `${frameUrl}&t=${Date.now()}`;
     }
@@ -718,6 +737,12 @@ function applyWarningOverlay(node) {
     }
 
     if (node._saveVideoShowCompatWarning) {
+        // Hide the native (unplayable) video element so only the still frame +
+        // warning text show - the original can't render in the browser anyway.
+        const mediaHost = host._previewMediaHost || host;
+        const vid = mediaHost.querySelector("video") || host.querySelector("video");
+        if (vid) vid.style.display = "none";
+
         overlay.innerHTML = "";
 
         const line1 = document.createElement("div");
@@ -726,7 +751,7 @@ function applyWarningOverlay(node) {
         line1.style.color = "rgba(255, 235, 235, 0.98)";
 
         const line2 = document.createElement("div");
-        line2.textContent = "Use \u25B6 at the top to open in System Player";
+        line2.textContent = "Use ▶ at the top to open in System Player";
         line2.style.marginTop = "8px";
         line2.style.font = "600 14px sans-serif";
         line2.style.color = "rgba(255, 235, 235, 0.92)";
@@ -735,6 +760,11 @@ function applyWarningOverlay(node) {
         overlay.appendChild(line2);
         overlay.style.display = "flex";
     } else {
+        // Restore the video element for playable clips.
+        const mediaHost = host._previewMediaHost || host;
+        const vid = mediaHost.querySelector("video") || host.querySelector("video");
+        if (vid) vid.style.display = "";
+
         overlay.innerHTML = "";
         overlay.style.display = "none";
     }
@@ -778,6 +808,14 @@ function syncPreviewFooterFromVideo(node) {
 // avoids playing the stale clip in the window before core swaps the new one in.
 function syncAutoplay(node) {
     if (!node._saveVideoPendingAutoplay) return;
+
+    // Never autoplay when the clip isn't browser-playable (warning/still-frame
+    // shown instead of a real video) - there's nothing meaningful to play.
+    if (node._saveVideoShowCompatWarning) {
+        node._saveVideoPendingAutoplay = false;
+        if (node.properties) node.properties._saveVideoPendingAutoplay = false;
+        return;
+    }
 
     const container = getPreviewContainer(node);
     const vid = container?.querySelector("video") || null;

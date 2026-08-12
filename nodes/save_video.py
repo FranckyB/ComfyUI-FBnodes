@@ -729,8 +729,11 @@ class SaveVideoPlus:
             else:
                 raise
 
-        # h265 + yuv422/444 won't play in browser, so generate a browser-compatible preview in temp
-        if not save or codec == "h264" or (codec == "h265" and chroma == "yuv420"):
+        # Only H.264 is reliably browser-playable. Chrome/Edge cannot decode H.265
+        # (even yuv420), so ALL h265 needs a browser-compatible preview or the
+        # still-frame + external-player path. Previously h265+yuv420 was wrongly
+        # treated as directly playable, producing a blank player.
+        if not save or codec == "h264":
             # Browser can play this directly (or it's already a preview)
             return {
                 "ui": {
@@ -966,6 +969,7 @@ class SaveVideoPlus:
                     "images": [{"filename": preview_file, "subfolder": "", "type": "temp"}],
                     "animated": (True,),
                     "saved_video_path": (file_path,),
+                    "preview_filename": (preview_file,),
                     "needs_external_player": (False,),
                 },
                 "result": (file_path,),
