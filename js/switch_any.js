@@ -61,73 +61,77 @@ app.registerExtension({
     async beforeRegisterNodeDef(nodeType, nodeData, app) {
         if (nodeData.name !== "SwitchAny") return;
 
+        // Synchronous relabel: populate the select dropdown from `names` and set each input slot's label + visibility.
+        // that keeps ComfyUI's native link handling and subgraph widget connection intact.
+        function refreshSwitchAny(node) {
+            const selectWidget = node.widgets?.find(w => w.name === "select");
+            const numWidget = node.widgets?.find(w => w.name === "num_inputs");
+            const namesWidget = node.widgets?.find(w => w.name === "names");
+            if (!numWidget || !namesWidget) return;
+
+            const count = Math.max(1, Math.min(MAX_INPUTS, numWidget.value ?? 2));
+            const names = parseNames(namesWidget.value || "", count);
+
+            // Populate the dropdown choices, preserving the current selection.
+            // Skip entirely if `select` was converted to an input socket.
+            if (selectWidget && selectWidget.options) {
+                const prev = selectWidget.value;
+                selectWidget.options.values = names;
+                if (!names.includes(prev)) {
+                    selectWidget.value = names[0];
+                }
+            }
+
+            // Relabel + show/hide the dynamic input slots in place (no destruction).
+            if (node.inputs) {
+                for (let i = 0; i < MAX_INPUTS; i++) {
+                    const slot = node.inputs.find(inp => inp.name === `input_${i + 1}`);
+                    if (!slot) continue;
+                    slot.label = i < count ? names[i] : `input_${i + 1}`;
+                    slot.hidden = i >= count;
+                }
+            }
+
+            node.setDirtyCanvas(true, true);
+        }
+
         const onNodeCreated = nodeType.prototype.onNodeCreated;
         nodeType.prototype.onNodeCreated = function () {
             const result = onNodeCreated?.apply(this, arguments);
             const node = this;
 
             node.setSize([260, node.size[1]]);
+            node._refreshSwitchAny = () => refreshSwitchAny(node);
 
-            const selectWidget = node.widgets.find(w => w.name === "select");
             const numWidget = node.widgets.find(w => w.name === "num_inputs");
             const namesWidget = node.widgets.find(w => w.name === "names");
 
-            node._refreshSwitchAny = refreshNode;
-
-            function refreshNode() {
-                if (!selectWidget || !numWidget || !namesWidget) return;
-                const count = numWidget.value ?? 2;
-                const names = parseNames(namesWidget.value || "", count);
-
-                // Update dropdown choices
-                const prev = selectWidget.value;
-                selectWidget.options.values = names;
-                selectWidget.value = names.includes(prev) ? prev : names[0];
-
-                // Show/hide input slots
-                if (node.inputs) {
-                    for (let i = 0; i < MAX_INPUTS; i++) {
-                        const slot = node.inputs.find(inp => inp.name === `input_${i + 1}`);
-                        if (slot) {
-                            // Rename the visible slot to the custom name
-                            slot.label = i < count ? names[i] : `input_${i + 1}`;
-                            // Hide slots beyond num_inputs
-                            if (i >= count) {
-                                slot.hidden = true;
-                            } else {
-                                slot.hidden = false;
-                            }
-                        }
-                    }
-                }
-
-                node.setDirtyCanvas(true, true);
-            }
-
-            // Hook callbacks
+            // Hook callbacks (fire on user edits).
             const origNum = numWidget?.callback;
             if (numWidget) {
                 numWidget.callback = function (value) {
                     if (origNum) origNum.apply(this, arguments);
-                    refreshNode();
+                    refreshSwitchAny(node);
                 };
             }
-
             const origNames = namesWidget?.callback;
             if (namesWidget) {
                 namesWidget.callback = function (value) {
                     if (origNames) origNames.apply(this, arguments);
-                    refreshNode();
+                    refreshSwitchAny(node);
                 };
             }
 
-            // Initial sync
-            setTimeout(refreshNode, 50);
+            // Only refresh live when NOT restoring from a workflow - onConfigure
+            // handles restoration synchronously.
+            if (!node._configuredFromWorkflow) {
+                refreshSwitchAny(node);
+            }
 
             return result;
         };
 
-        // Refresh names every time the node is executed
+        // Refresh names every time the node is executed.
         const onExecuted = nodeType.prototype.onExecuted;
         nodeType.prototype.onExecuted = function (data) {
             const result = onExecuted?.apply(this, arguments);
@@ -135,45 +139,28 @@ app.registerExtension({
             return result;
         };
 
-        // Restore state on workflow load / page reload
+        // Restore state on workflow load / page reload / tab switch. Synchronous -
+        // no setTimeout - so labels are re-applied before the node renders (this is
+        // what fixes subgraphs, where slots are rebuilt from the Python definition).
         const onConfigure = nodeType.prototype.onConfigure;
         nodeType.prototype.onConfigure = function (info) {
+            this._configuredFromWorkflow = true;
             const result = onConfigure?.apply(this, arguments);
-            const node = this;
 
-            setTimeout(() => {
-                const selectWidget = node.widgets?.find(w => w.name === "select");
-                const numWidget = node.widgets?.find(w => w.name === "num_inputs");
-                const namesWidget = node.widgets?.find(w => w.name === "names");
-                if (!selectWidget || !numWidget || !namesWidget) return;
+            // Re-apply labels/visibility synchronously from the saved widget values.
+            refreshSwitchAny(this);
 
-                const count = numWidget.value ?? 2;
-                const names = parseNames(namesWidget.value || "", count);
-
-                selectWidget.options.values = names;
-                // Restore saved selection
-                if (info.widgets_values) {
-                    const idx = node.widgets.indexOf(selectWidget);
-                    const saved = info.widgets_values[idx];
-                    if (saved && names.includes(saved)) {
-                        selectWidget.value = saved;
-                    }
+            // Restore the saved select value if it's still a widget.
+            const selectWidget = this.widgets?.find(w => w.name === "select");
+            if (selectWidget && info.widgets_values) {
+                const idx = this.widgets.indexOf(selectWidget);
+                const saved = info.widgets_values[idx];
+                if (saved && selectWidget.options?.values?.includes(saved)) {
+                    selectWidget.value = saved;
                 }
+            }
 
-                // Show/hide + rename input slots
-                if (node.inputs) {
-                    for (let i = 0; i < MAX_INPUTS; i++) {
-                        const slot = node.inputs.find(inp => inp.name === `input_${i + 1}`);
-                        if (slot) {
-                            slot.label = i < count ? names[i] : `input_${i + 1}`;
-                            slot.hidden = i >= count;
-                        }
-                    }
-                }
-
-                node.setDirtyCanvas(true, true);
-            }, 50);
-
+            this.setDirtyCanvas(true, true);
             return result;
         };
     }
