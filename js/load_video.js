@@ -1192,13 +1192,23 @@ app.registerExtension({
                 if (sfWidget) node._sourceFolder = sfWidget.value || 'input';
 
                 // Restore sentinel selection from properties; ComfyUI may reset the
-                // hidden video widget to (none) on tab switch.
+                // hidden video widget to (none) on tab switch. Restore synchronously
+                // and unconditionally - the options list is repopulated async below,
+                // so we must not gate on its current (stale) contents. Inject the
+                // persisted value into the options if it isn't there yet.
                 const persistedSelection = node.properties?._videoFileSelection;
-                if (persistedSelection && videoWidget && videoWidget.value !== persistedSelection) {
+                if (persistedSelection && videoWidget) {
                     const allowed = Array.isArray(videoWidget.options?.values)
                         ? videoWidget.options.values
                         : Object.values(videoWidget.options?.values || {});
-                    if (allowed.includes(persistedSelection) || persistedSelection === '(none)' || persistedSelection === '(blank)') {
+                    if (!allowed.includes(persistedSelection)) {
+                        if (Array.isArray(videoWidget.options.values)) {
+                            videoWidget.options.values.push(persistedSelection);
+                        } else {
+                            videoWidget.options.values = { ...videoWidget.options.values, [persistedSelection]: persistedSelection };
+                        }
+                    }
+                    if (videoWidget.value !== persistedSelection) {
                         videoWidget.value = persistedSelection;
                     }
                 }
