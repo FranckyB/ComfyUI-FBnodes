@@ -67,7 +67,12 @@ def _detect_latent_format_name(tensor):
     Wan / LTX / MiniMax, we match the channel dimension of video (5D) latents
     against that known set. Returns the family name (e.g. 'MiniMaxH3', 'Wan',
     'LTX') or None if the tensor isn't a recognized video latent.
+
+    Accepts ComfyUI's NestedTensor wrapper (AV latents) - uses the first
+    (video) part for channel detection.
     """
+    if _is_comfy_nested_tensor(tensor):
+        tensor = tensor.tensors[0] if tensor.tensors else None
     if not torch.is_tensor(tensor) or tensor.ndim != 5:
         return None
     return _KNOWN_VIDEO_LATENT_CHANNELS.get(tensor.shape[1])
@@ -186,10 +191,33 @@ def _latent_from_file_tensors(latent_data):
 
     out = {}
 
+    # Collect ordered NestedTensor parts written as samples.0/samples.1/... The
+    # primary part (samples.0) is stored under 'latent_tensor' (or 'samples').
+    nested_parts = {}
+    for key, value in latent_data.items():
+        if isinstance(key, str) and key.startswith("samples.") and torch.is_tensor(value):
+            suffix = key[len("samples."):]
+            if suffix.isdigit():
+                nested_parts[int(suffix)] = value
+
+    primary_tensor = None
     if torch.is_tensor(latent_data.get("samples")):
-        out["samples"] = latent_data["samples"].float() * multiplier
+        primary_tensor = latent_data["samples"]
     elif torch.is_tensor(latent_data.get("latent_tensor")):
-        out["samples"] = latent_data["latent_tensor"].float() * multiplier
+        primary_tensor = latent_data["latent_tensor"]
+
+    if nested_parts:
+        # The primary (index 0) part is stored under latent_tensor/samples.
+        nested_parts.setdefault(0, primary_tensor)
+        parts = [nested_parts[i] for i in sorted(nested_parts)]
+        try:
+            from comfy.nested_tensor import NestedTensor
+            out["samples"] = NestedTensor([p.float() * multiplier for p in parts])
+        except Exception:
+            # Fallback: if NestedTensor can't be built, expose the video part only.
+            out["samples"] = parts[0].float() * multiplier
+    elif primary_tensor is not None:
+        out["samples"] = primary_tensor.float() * multiplier
     else:
         raise KeyError("Latent file missing both 'samples' and 'latent_tensor'")
 
@@ -198,6 +226,9 @@ def _latent_from_file_tensors(latent_data):
         if key in reserved_keys:
             continue
         if key == "samples":
+            continue
+        if isinstance(key, str) and key.startswith("samples."):
+            # Already folded back into the NestedTensor above.
             continue
         if torch.is_tensor(value):
             out[key] = value

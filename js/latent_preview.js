@@ -334,6 +334,15 @@ app.registerExtension({
         // NOTE: the settings panel renders this array in REVERSE order, so the
         // last entry appears first. Kept so "Display animated..." shows on top.
         {
+            id: "FBnodes.PreviewMaxRes",
+            category: ["FBnodes", "Preview Injection", "Preview Resolution"],
+            name: "Max preview resolution",
+            tooltip: "Maximum resolution (longest side) the TAESD preview is displayed at.\nMatches ComfyUI's 512px default. Raise for sharper previews (slower), lower for faster.\nApplies to the displayed preview only - the video is decoded at full size first.",
+            type: "number",
+            defaultValue: 512,
+            attrs: { min: 128, max: 1024, step: 16 },
+        },
+        {
             id: "FBnodes.InjectLtxFile",
             category: ["FBnodes", "Preview Injection", "LTX"],
             name: "LTX TAESD filename",
@@ -417,6 +426,7 @@ app.registerExtension({
                 res.workflow.extra['FB_inject_minimax_file'] = app.ui.settings.getSettingValue("FBnodes.InjectMinimaxFile");
                 res.workflow.extra['FB_inject_ltx'] = app.ui.settings.getSettingValue("FBnodes.InjectLtx");
                 res.workflow.extra['FB_inject_ltx_file'] = app.ui.settings.getSettingValue("FBnodes.InjectLtxFile");
+                res.workflow.extra['FB_preview_max_res'] = app.ui.settings.getSettingValue("FBnodes.PreviewMaxRes");
             }
             
             return res;

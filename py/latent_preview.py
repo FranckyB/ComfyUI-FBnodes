@@ -92,7 +92,7 @@ class WrappedPreviewer(_latent_preview_module.LatentPreviewer):
     instead of static images.
     """
 
-    def __init__(self, previewer, rate=8, server_instance=None, model_name=None, max_seconds=5, injection_file=None):
+    def __init__(self, previewer, rate=8, server_instance=None, model_name=None, max_seconds=5, injection_file=None, inject_enabled=True, max_res=512):
         # Don't call super().__init__() as we're wrapping an existing previewer
         self.first_preview = True
         self.last_time = 0
@@ -103,6 +103,11 @@ class WrappedPreviewer(_latent_preview_module.LatentPreviewer):
         self.model_name = model_name
         # Custom TAESD filename (from settings) for this model's injection, if any.
         self._injection_file = injection_file
+        # Whether TAESD injection is enabled for this model (per-model toggle).
+        self._inject_enabled = inject_enabled
+        # Max preview resolution (longest side). Matches ComfyUI's 512px display
+        # cap by default; user-configurable.
+        self.max_res = int(max_res) if max_res else 512
         # How many SECONDS of video to show in the preview. The same leading slice
         # is re-decoded each step so you watch it progressively denoise. Converted
         # to latent frames via `rate` (latent frames per video second), so the same
@@ -135,6 +140,10 @@ class WrappedPreviewer(_latent_preview_module.LatentPreviewer):
     def _load_override_decoder(self, model_name):
         """Load a custom TAESD decoder for a format core can't build (taeh3/taeltx).
         Returns the decoder object or None if unavailable/not applicable."""
+        # Injection disabled for this model - use core's previewer (Latent2RGB).
+        if not self._inject_enabled:
+            return None
+
         family_key = _FORMAT_TO_INJECTION.get(model_name)
         if not family_key:
             return None
@@ -260,14 +269,15 @@ class WrappedPreviewer(_latent_preview_module.LatentPreviewer):
                 ind = (ind + 1) % leng
 
     def _resize_preview(self, preview_image):
-        """Downscale a PIL preview so its longest side is at most 512."""
-        if preview_image.width > 512 or preview_image.height > 512:
+        """Downscale a PIL preview so its longest side is at most self.max_res."""
+        cap = self.max_res
+        if preview_image.width > cap or preview_image.height > cap:
             if preview_image.width > preview_image.height:
-                new_width = 512
-                new_height = int(512 * preview_image.height / preview_image.width)
+                new_width = cap
+                new_height = int(cap * preview_image.height / preview_image.width)
             else:
-                new_height = 512
-                new_width = int(512 * preview_image.width / preview_image.height)
+                new_height = cap
+                new_width = int(cap * preview_image.width / preview_image.height)
             preview_image = preview_image.resize((new_width, new_height), Image.LANCZOS)
         return preview_image
 
@@ -304,14 +314,15 @@ class WrappedPreviewer(_latent_preview_module.LatentPreviewer):
                                 bias=self.latent_rgb_factors_bias)
 
         # Resize if needed
-        if image_tensor.size(1) > 512 or image_tensor.size(2) > 512:
+        cap = self.max_res
+        if image_tensor.size(1) > cap or image_tensor.size(2) > cap:
             image_tensor = image_tensor.movedim(-1, 0)
             if image_tensor.size(2) < image_tensor.size(3):
-                height = (512 * image_tensor.size(2)) // image_tensor.size(3)
-                image_tensor = F.interpolate(image_tensor, (height, 512), mode='bilinear')
+                height = (cap * image_tensor.size(2)) // image_tensor.size(3)
+                image_tensor = F.interpolate(image_tensor, (height, cap), mode='bilinear')
             else:
-                width = (512 * image_tensor.size(3)) // image_tensor.size(2)
-                image_tensor = F.interpolate(image_tensor, (512, width), mode='bilinear')
+                width = (cap * image_tensor.size(3)) // image_tensor.size(2)
+                image_tensor = F.interpolate(image_tensor, (cap, width), mode='bilinear')
             image_tensor = image_tensor.movedim(0, -1)
 
         # Convert to uint8 (scale from -1..1 to 0..255)
@@ -698,29 +709,33 @@ def install_latent_preview_hook():
                 extra_info = next(serv.prompt_queue.currently_running.values().__iter__())[3]['extra_pnginfo']['workflow']['extra']
                 prev_setting = extra_info.get('PM_latentpreview', False)
                 max_seconds = extra_info.get('FB_preview_seconds', 5)
+                max_res = extra_info.get('FB_preview_max_res', 512)
             except:
                 # For safety since there's lots of keys, any of which can fail
                 prev_setting = False
                 max_seconds = 5
+                max_res = 512
 
             if not prev_setting or not hasattr(previewer, "decode_latent_to_preview"):
                 return previewer
 
             model_name = latent_format.__class__.__name__
 
-            # Per-model injection toggle + custom TAESD filename. If this model
-            # family has an injection but the user disabled it, skip the override.
+            # Per-model injection toggle + custom TAESD filename. When disabled, the
+            # wrapper still animates, just using core's previewer (Latent2RGB) - the
+            # injection toggle only controls the TAESD swap, not the animation.
             family_key = _FORMAT_TO_INJECTION.get(model_name)
             injection_file = None
+            inject_enabled = True
             if family_key:
                 cfg = TAESD_INJECTIONS[family_key]
-                enabled = extra_info.get(cfg['enable_key'], True)
-                if not enabled:
-                    return previewer
-                injection_file = extra_info.get(cfg['file_key']) or None
+                inject_enabled = extra_info.get(cfg['enable_key'], True)
+                if inject_enabled:
+                    injection_file = extra_info.get(cfg['file_key']) or None
 
             rate_setting = RATES_TABLE.get(model_name, 8)
-            return WrappedPreviewer(previewer, rate_setting, serv, model_name, max_seconds=max_seconds, injection_file=injection_file)
+            return WrappedPreviewer(previewer, rate_setting, serv, model_name, max_seconds=max_seconds,
+                                    injection_file=injection_file, inject_enabled=inject_enabled, max_res=max_res)
 
         _hook_installed = True
         print("[FBnodes] Latent preview hook installed successfully")
