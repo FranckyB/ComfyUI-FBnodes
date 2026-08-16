@@ -90,9 +90,24 @@ class VisualLoraPicker:
         return abs_lora_path
 
     def pick_lora(self, image: str, strength_model: float, lora_stack=None):
-        """Resolve the LoRA from the selected image and append it to the stack."""
-        if not image:
-            raise ValueError("No LoRA thumbnail selected")
+        """Resolve the LoRA from the selected image and append it to the stack.
+
+        Selecting "(none)" (or an empty value) means "no LoRA" - the incoming
+        stack is passed through unchanged.
+        """
+        # Normalize the "(none)" / empty selection to a no-op passthrough.
+        if not image or not str(image).strip() or str(image).strip().lower() == "(none)":
+            stack = []
+            if lora_stack is not None and isinstance(lora_stack, (list, tuple)):
+                for item in lora_stack:
+                    if isinstance(item, (list, tuple)) and len(item) >= 1:
+                        path = str(item[0] or "").strip()
+                        if not path:
+                            continue
+                        model_strength = float(item[1]) if len(item) >= 2 else 1.0
+                        clip_strength = float(item[2]) if len(item) >= 3 else 0.0
+                        stack.append((path, model_strength, clip_strength))
+            return (stack,)
 
         lora_path, found = self._derive_lora_path(image)
         if not found:
