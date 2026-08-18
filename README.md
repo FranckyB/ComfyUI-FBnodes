@@ -33,6 +33,15 @@ Video loader with the same file browser and UX as Load Image+, but for videos. O
 - **Drag-and-Drop Support**: Drop video files directly onto the node
 - **VIDEO Output**: Outputs a VIDEO, ready to pipe into Get Video Components+
 
+### Load Audio+
+Audio loader with the same file browser and UX as Load Image+/Video+, plus in/out trimming.
+
+- **Input/Output Folder Switching**: Toggle between browsing your input or output folder
+- **File Browser**: Thumbnail browser with audio-first filtering and subfolder navigation
+- **Drag-and-Drop Support**: Drop audio files directly onto the node
+- **Trim timeline**: Draggable in/out handles with playhead, scrubbing, and clip looping
+- **Outputs**: `AUDIO` (trimmed) and `duration` (seconds)
+
 ### LTX Review
 Review gate node for 2-pass LTX-style workflows. It pauses execution, decodes video/audio latents internally, opens a review popup with playback, and continues only when you proceed (or timeout policy allows it).
 
@@ -102,6 +111,22 @@ Interactive crop node with draggable crop box, optional aspect-ratio lock, and l
 - **Aspect ratio lock**: Includes ratio presets with landscape toggle
 - **Auto reset on new image**: New input image resets crop to full frame and ratio to `None`
 - **Dual output**: Crops both IMAGE and MASK outputs together
+
+### Clip Stitcher
+Merge multiple video clips into one with optional cross-dissolve transitions. Pure blending, no generation.
+
+- **File browser**: Multi-select clips from input/output or anywhere on disk; remembers last browsed folder
+- **Reorderable clip list**: Drag-to-reorder, enable/disable individual clips, hover to preview
+- **Clip duration**: Force fixed segment lengths — useful when source clips vary in length. Clip 0 plays `0 → clip_duration`; each later clip overlaps the previous by `blend_duration` (e.g. 5s duration + 1s blend = segments start at 0, 4, 9, 14…). Short clips are padded with black
+- **Blend duration**: Seconds of cross-dissolve between clips (0 = hard cut). Audio is crossfaded to match
+- **Output**: 10-bit VIDEO via ComfyUI's CreateVideo
+
+### Crop Audio+
+Trim an incoming AUDIO connection between in/out points. Minimal node — just the two sliders. (Usefull if you need to trim audio in a workflow, from incoming Video Components)
+
+- **Inputs**: `audio`, `in_point`, `out_point` (seconds; 0 = full length)
+- **Outputs**: `audio` (trimmed), `duration` (trimmed length in seconds)
+
 
 ### VACE Stitcher
 Generate smooth AI-powered transitions between video clips using VACE conditioning and 2-stage sampling with a single node featuring a built-in clip browser, drag-to-reorder list, and cached .latent transitions for resumability.

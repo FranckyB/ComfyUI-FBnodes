@@ -2,13 +2,15 @@
 ComfyUI-FBnodes - Utility nodes for ComfyUI
 """
 
-__version__ = "1.4.0"
+__version__ = "1.4.5"
 __author__ = "François Beaudry"
 __license__ = "GPL-3.0"
 
 from .nodes import (
     ApplyLoraPlus,
     ApplyLTXLoraPlus,
+    ClipStitcher,
+    CropAudioPlus,
     LoadAudioPlus,
     MonoToStereo,
     GetVideoComponentsPlus,
@@ -42,6 +44,8 @@ install_latent_preview_hook()
 NODE_CLASS_MAPPINGS = {
     "ApplyLoraPlus": ApplyLoraPlus,
     "ApplyLTXLoraPlus": ApplyLTXLoraPlus,
+    "ClipStitcher": ClipStitcher,
+    "CropAudioPlus": CropAudioPlus,
     "LoadAudioPlus": LoadAudioPlus,
     "AudioMonoToStereo": MonoToStereo,
     "GetVideoComponentsPlus": GetVideoComponentsPlus,
@@ -70,6 +74,8 @@ NODE_CLASS_MAPPINGS = {
 NODE_DISPLAY_NAME_MAPPINGS = {
     "ApplyLoraPlus": "Apply LoRA+",
     "ApplyLTXLoraPlus": "Apply LTX LoRA+",
+    "ClipStitcher": "Clip Stitcher",
+    "CropAudioPlus": "Crop Audio+",
     "LoadAudioPlus": "Load Audio+",
     "AudioMonoToStereo": "Audio Mono to Stereo",
     "GetVideoComponentsPlus": "Get Video Components+",

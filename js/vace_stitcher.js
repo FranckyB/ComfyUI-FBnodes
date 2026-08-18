@@ -759,6 +759,24 @@ function hideHoverThumbnail() {
     }
 }
 
+// ── Height management (mirrors PM multi_lora_stacker_lm.js) ──────────
+// Report content height via getMinHeight + CSS vars so the layout
+// system sizes the node; the DOM fills the rest via getHeight "100%".
+function computeContentHeight(clipEntries, statusPanelHeight) {
+    const ROW_H = 30;
+    const HEADER_FOOTER = 78;
+    const visibleRows = Math.max(3, Math.min(10, clipEntries.length));
+    return HEADER_FOOTER + visibleRows * ROW_H + Number(statusPanelHeight || 0);
+}
+
+function notifyHeightChange(node, rootEl, clipEntries) {
+    if (!rootEl) return;
+    const h = computeContentHeight(clipEntries, node?._statusPanelHeight);
+    rootEl.style.setProperty('--comfy-widget-min-height', `${h}px`);
+    rootEl.style.setProperty('--comfy-widget-height', `${h}px`);
+    setTimeout(() => { node?.setDirtyCanvas?.(true, true); }, 10);
+}
+
 // ── Node extension ───────────────────────────────────────────────────────────
 
 app.registerExtension({
@@ -960,7 +978,12 @@ app.registerExtension({
                 "clip_list_section",
                 "customwidget",
                 sectionContainer,
-                { serialize: false, hideOnZoom: false }
+                {
+                    serialize: false,
+                    hideOnZoom: false,
+                    getMinHeight: () => computeContentHeight(clipEntries, node._statusPanelHeight),
+                    getHeight: () => "100%",
+                }
             );
             node._statusPanelHeight = 0;
 
@@ -977,14 +1000,9 @@ app.registerExtension({
                 }
             });
 
-            // computeSize: fixed height based on clip count, min 3 rows, max 10 rows
-            sectionWidget.computeSize = function (width) {
-                const ROW_H = 30;
-                const HEADER_FOOTER = 78;
-                const visibleRows = Math.max(3, Math.min(10, clipEntries.length));
-                const h = HEADER_FOOTER + visibleRows * ROW_H + Number(node._statusPanelHeight || 58);
-                return [width, h];
-            };
+            // No computeSize override — fixed computeSize locks the widget to a
+            // fixed strip and leaves dead space below. The layout system sizes
+            // the node from getMinHeight/CSS vars; DOM fills via height:100%.
 
             // ── Delete button state management ──
             async function updateDeleteBtnState() {
@@ -1068,14 +1086,14 @@ app.registerExtension({
                     if (statusPanel.style.display === "none") {
                         if (Number(node._statusPanelHeight || 0) !== 0) {
                             node._statusPanelHeight = 0;
-                            node.setDirtyCanvas(true, true);
+                            notifyHeightChange(node, sectionContainer, clipEntries);
                         }
                         return;
                     }
                     const measured = Math.max(50, Math.ceil(statusPanel.scrollHeight) + 12);
-                    if (measured !== Number(node._statusPanelHeight || 58)) {
+                    if (measured !== Number(node._statusPanelHeight || 0)) {
                         node._statusPanelHeight = measured;
-                        node.setDirtyCanvas(true, true);
+                        notifyHeightChange(node, sectionContainer, clipEntries);
                     }
                 });
             }
@@ -1215,7 +1233,7 @@ app.registerExtension({
                     empty.style.cssText = "color:#888;font-size:11px;text-align:center;padding:8px;";
                     clipListContainer.appendChild(empty);
                     hideStatusPanel();
-                    node.setDirtyCanvas(true, true);
+                    notifyHeightChange(node, sectionContainer, clipEntries);
                     return;
                 }
 
@@ -1426,7 +1444,7 @@ app.registerExtension({
                 }).catch(() => {});
 
                 // Update node height
-                node.setDirtyCanvas(true, true);
+                notifyHeightChange(node, sectionContainer, clipEntries);
                 updateClipStatusPanel();
             }
 

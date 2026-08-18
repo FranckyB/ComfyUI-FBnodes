@@ -94,7 +94,11 @@ def _decode_audio_waveform(file_path: str) -> tuple[torch.Tensor, int]:
         )
 
         chunks: list[np.ndarray] = []
-        for frame in container.decode(audio=stream.index):
+        # Pass the stream object directly. `container.decode(audio=stream.index)`
+        # is wrong: PyAV's `audio=` kwarg expects the Nth *audio* stream (0-based),
+        # while stream.index is the container-wide index (1 when a video stream
+        # precedes it in an mp4), causing IndexError on such files.
+        for frame in container.decode(stream):
             resampled = resampler.resample(frame)
             if resampled is None:
                 continue

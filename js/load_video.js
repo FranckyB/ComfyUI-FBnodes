@@ -783,8 +783,16 @@ app.registerExtension({
                         `/fbnodes/video-info?filename=${encodeURIComponent(filename)}&source=${sourceFolder}`
                     );
                     if (!resp.ok) {
-                        // If probe fails, do not block native preview for compatible clips.
-                        if (token === node._playabilityCheckToken && typeof onCompatible === 'function') {
+                        if (token !== node._playabilityCheckToken) return;
+                        if (resp.status === 404) {
+                            // File missing (e.g. restored workflow referencing a deleted
+                            // video) - show the placeholder, not an error/warning.
+                            setPlayabilityWarning(false);
+                            showPlaceholderVideoPreview(node);
+                            return;
+                        }
+                        // If probe fails for another reason, do not block native preview.
+                        if (typeof onCompatible === 'function') {
                             onCompatible();
                         }
                         return;
@@ -1269,26 +1277,25 @@ app.registerExtension({
                         // Out-of-tree absolute path: render via our raw-file route,
                         // then detect H265/yuv444 and swap in a server preview clip.
                         setTimeout(() => {
-                            createVideoPreview(
+                            runPlayabilityCheck(filename, () => createVideoPreview(
                                 node,
                                 buildVideoPreviewUrl(filename, node._sourceFolder || 'input'),
                                 null,
                                 filename,
                                 node._sourceFolder || 'input'
-                            );
-                            runPlayabilityCheck(filename);
+                            ));
                         }, 200);
                     } else {
-                        // Render through our framed video host.
+                        // Render through our framed video host. The playability check
+                        // runs first; only compatible/existing files create the player.
                         setTimeout(() => {
-                            createVideoPreview(
+                            runPlayabilityCheck(filename, () => createVideoPreview(
                                 node,
                                 buildVideoPreviewUrl(filename, node._sourceFolder || 'input'),
                                 null,
                                 filename,
                                 node._sourceFolder || 'input'
-                            );
-                            runPlayabilityCheck(filename);
+                            ));
                         }, 200);
                     }
                 }

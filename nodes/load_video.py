@@ -106,7 +106,10 @@ class LoadVideoPlus:
                 resolved_path = file_path
 
         if not resolved_path:
-            raise FileNotFoundError(f"Video file not found: {file_path}")
+            # File missing (e.g. restored workflow referencing a deleted video).
+            # Don't error - behave like (blank) so downstream nodes still run.
+            print(f"[LoadVideoPlus] Video file not found, using placeholder: {file_path}")
+            return (VideoFromFile(_PLACEHOLDER_VIDEO_PATH),)
 
         return (VideoFromFile(resolved_path),)
 
