@@ -116,7 +116,7 @@ class ClipStitcher:
                     "tooltip": "Fixed segment length per clip in seconds. 0 = use full clip length (legacy). When > 0, clip 0 starts at 0; clip i starts at i*clip_duration - blend, and ends at (i+1)*clip_duration.",
                 }),
                 "blend_duration": ("FLOAT", {
-                    "default": 1.0,
+                    "default": 0.5,
                     "min": 0.0,
                     "max": 60.0,
                     "step": 0.05,
@@ -221,10 +221,16 @@ class ClipStitcher:
         # ── Build fixed-length video segments (pad with black if source is too short) ──
         # Each source clip is taken from its OWN start. Only the overlap with the
         # previous output segment shifts; we never skip into the source.
+        # The LAST clip is not padded: it plays to its natural end (no trailing black).
         if use_fixed_segments and len(clip_pixels) > 1:
             segments = []
+            last_idx = len(clip_pixels) - 1
             for i, px in enumerate(clip_pixels):
-                seg_len = seg_frames if i == 0 else seg_frames + blend
+                if i == last_idx:
+                    # Last clip: keep natural length, but still overlap previous by blend.
+                    seg_len = px.shape[0]
+                else:
+                    seg_len = seg_frames if i == 0 else seg_frames + blend
                 segments.append(_extract_video_window(px, 0, seg_len))
         else:
             segments = list(clip_pixels)
@@ -252,11 +258,16 @@ class ClipStitcher:
             images = torch.cat(out_segments, dim=0)
 
         # ── Build fixed-length audio segments (pad with silence if source is too short) ──
+        # The LAST clip's audio is not padded; it ends with the video.
         samples_per_frame = target_sr / fps
         audio_segments = []
+        last_idx = len(clip_audio) - 1
         for i, payload in enumerate(clip_audio):
             if use_fixed_segments and len(clip_pixels) > 1:
-                seg_len = seg_frames if i == 0 else seg_frames + blend
+                if i == last_idx:
+                    seg_len = clip_pixels[i].shape[0]
+                else:
+                    seg_len = seg_frames if i == 0 else seg_frames + blend
                 seg_samples = max(1, int(round(seg_len * samples_per_frame)))
                 w = _extract_audio_window(payload, 0, seg_len, samples_per_frame, seg_samples)
             else:
