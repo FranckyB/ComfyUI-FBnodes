@@ -708,22 +708,18 @@ def install_latent_preview_hook():
             try:
                 extra_info = next(serv.prompt_queue.currently_running.values().__iter__())[3]['extra_pnginfo']['workflow']['extra']
                 prev_setting = extra_info.get('PM_latentpreview', False)
-                max_seconds = extra_info.get('FB_preview_seconds', 5)
-                max_res = extra_info.get('FB_preview_max_res', 512)
             except:
                 # For safety since there's lots of keys, any of which can fail
                 prev_setting = False
-                max_seconds = 5
-                max_res = 512
 
             if not prev_setting or not hasattr(previewer, "decode_latent_to_preview"):
                 return previewer
 
             model_name = latent_format.__class__.__name__
 
-            # Per-model injection toggle + custom TAESD filename. When disabled, the
-            # wrapper still animates, just using core's previewer (Latent2RGB) - the
-            # injection toggle only controls the TAESD swap, not the animation.
+            # Per-model injection toggle + custom TAESD filename. If injection is
+            # disabled for this model, bypass our wrapper entirely and let ComfyUI's
+            # original previewer handle it (no time limit, no custom resolution).
             family_key = _FORMAT_TO_INJECTION.get(model_name)
             injection_file = None
             inject_enabled = True
@@ -732,6 +728,12 @@ def install_latent_preview_hook():
                 inject_enabled = extra_info.get(cfg['enable_key'], True)
                 if inject_enabled:
                     injection_file = extra_info.get(cfg['file_key']) or None
+
+            if not inject_enabled:
+                return previewer
+
+            max_seconds = extra_info.get('FB_preview_seconds', 5)
+            max_res = extra_info.get('FB_preview_max_res', 512)
 
             rate_setting = RATES_TABLE.get(model_name, 8)
             return WrappedPreviewer(previewer, rate_setting, serv, model_name, max_seconds=max_seconds,
