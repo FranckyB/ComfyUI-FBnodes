@@ -103,6 +103,26 @@ async function getLorasRoot() {
     }
 }
 
+async function folderExists(folderPath) {
+    if (!folderPath) return false;
+    try {
+        const resp = await api.fetchApi(
+            `/fbnodes/path-browser/list?path=${encodeURIComponent(folderPath)}&kind=image`
+        );
+        if (!resp.ok) return false;
+        const data = await resp.json();
+        return data.ok === true;
+    } catch (err) {
+        console.warn("[VisualLoraPicker] Could not verify folder:", err);
+        return false;
+    }
+}
+
+async function resolveLoraDir(preferredDir) {
+    if (await folderExists(preferredDir)) return preferredDir;
+    return getLorasRoot();
+}
+
 async function listImagesInFolder(folderPath) {
     if (!folderPath) return [];
     try {
@@ -344,7 +364,7 @@ app.registerExtension({
                 }
 
                 const nextPath = paths[nextIndex];
-                const nextDir = dirnameForPath(nextPath);
+                const nextDir = await resolveLoraDir(dirnameForPath(nextPath));
                 node.properties._vlpImageDir = nextDir;
                 setImagePath(nextPath);
                 await refreshPickerOptions(nextDir, nextPath);
@@ -385,7 +405,10 @@ app.registerExtension({
                 // Update preview and persistence
                 loadPreview(cleaned);
                 node.properties._vlpImagePath = cleaned || "";
-                node.properties._vlpImageDir = cleaned ? dirnameForPath(cleaned) : "";
+                // Preserve the current folder even when the user selects "(none)".
+                if (cleaned && cleaned !== "(none)") {
+                    node.properties._vlpImageDir = dirnameForPath(cleaned);
+                }
 
                 node.setDirtyCanvas(true, true);
             };
@@ -438,7 +461,9 @@ app.registerExtension({
                 callback: async () => {
                     const root = await getLorasRoot();
                     const current = node.properties?._vlpImagePath || imageWidget?.value || "";
-                    const currentDir = current ? dirnameForPath(current) : "";
+                    // Keep the last visited folder even if the current selection is "(none)".
+                    const currentDir = node.properties?._vlpImageDir || (current ? dirnameForPath(current) : "");
+                    const initialPath = (await resolveLoraDir(currentDir)) || root;
 
                     createFileBrowserModal(
                         current,
@@ -454,7 +479,7 @@ app.registerExtension({
                         "input",
                         {
                             enableNavigation: true,
-                            initialPath: currentDir || root,
+                            initialPath: initialPath,
                             selectedAbsPath: current,
                             navKind: "image",
                             allowedTypes: ["image"],
@@ -543,12 +568,12 @@ app.registerExtension({
 
             // Restore state on workflow load / tab switch
             const onConfigure = node.onConfigure;
-            node.onConfigure = function (info) {
+            node.onConfigure = async function (info) {
                 node._configuredFromWorkflow = true;
                 const res = onConfigure?.apply(this, arguments);
 
                 const restoredImage = stripAnnotation(imageWidget?.value);
-                if (restoredImage) {
+                if (restoredImage && restoredImage !== "(none)") {
                     node.properties._vlpImagePath = restoredImage;
                     node.properties._vlpImageDir = dirnameForPath(restoredImage);
                 }
@@ -567,8 +592,9 @@ app.registerExtension({
                 }
                 syncNumericStrength();
 
-                const dir = node.properties?._vlpImageDir || dirnameForPath(restoredImage);
+                const dir = await resolveLoraDir(node.properties?._vlpImageDir || dirnameForPath(restoredImage));
                 if (dir) {
+                    node.properties._vlpImageDir = dir;
                     refreshPickerOptions(dir, node.properties?._vlpImagePath || restoredImage);
                 }
 
@@ -578,14 +604,18 @@ app.registerExtension({
             };
 
             // Initial load
-            setTimeout(() => {
+            setTimeout(async () => {
                 const initial = stripAnnotation(imageWidget?.value);
-                if (initial) {
+                if (initial && initial !== "(none)") {
                     node.properties._vlpImagePath = initial;
-                    node.properties._vlpImageDir = dirnameForPath(initial);
-                    refreshPickerOptions(dirnameForPath(initial), initial);
+                    const dir = await resolveLoraDir(dirnameForPath(initial));
+                    node.properties._vlpImageDir = dir;
+                    refreshPickerOptions(dir, initial);
                     loadPreview(initial);
                 } else {
+                    const dir = await resolveLoraDir(node.properties?._vlpImageDir) || await getLorasRoot();
+                    node.properties._vlpImageDir = dir;
+                    refreshPickerOptions(dir, null);
                     loadPreview(null);
                 }
             }, 10);
