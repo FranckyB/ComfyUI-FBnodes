@@ -260,6 +260,7 @@ function ensureRestoredVideoPreview(node) {
     vid.style.cssText = "width:100%;height:100%;object-fit:contain;display:block;";
     vid.src = url;
     mediaHost.appendChild(vid);
+    attachPreviewVideoHooks(node, vid);
     node._saveVideoRestoredUrl = url;
     syncPreviewFooterFromVideo(node);
     return true;
@@ -290,6 +291,26 @@ function syncRestoredPreviewUrl(node) {
     vid.remove();
     node._saveVideoRestoredUrl = null;
     ensureRestoredVideoPreview(node);
+}
+
+function handlePreviewVideoError(node, vid) {
+    if (!node || !vid) return;
+    if (!node.properties) node.properties = {};
+    node.properties._needsExternalPlayer = true;
+    updateDisplayState(node);
+    vid.controls = false;
+    vid.style.display = "none";
+    setSavePreviewFooter(getPreviewContainer(node), "Preview unavailable in browser");
+    syncWarningOverlay(node);
+    node.setDirtyCanvas?.(true, true);
+}
+
+function attachPreviewVideoHooks(node, vid) {
+    if (!node || !vid || vid._fbSaveVideoHooksAttached) return;
+    vid._fbSaveVideoHooksAttached = true;
+    vid.addEventListener("error", () => {
+        handlePreviewVideoError(node, vid);
+    });
 }
 
 const _fbSaveVideoExecutedCache = new Map();
@@ -787,6 +808,8 @@ function syncPreviewFooterFromVideo(node) {
 
     const vid = container.querySelector("video");
     if (!vid) return;
+
+    attachPreviewVideoHooks(node, vid);
 
     const update = () => {
         const w = vid.videoWidth || 0;
