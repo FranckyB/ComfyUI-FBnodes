@@ -14,6 +14,7 @@ const EXEC_START_WIDGET_NAME = "exec_start";
 // Same creation/minimum footprint as LoadVideoPlus.
 const SAVE_VIDEO_MIN_WIDTH = 300;
 const SAVE_VIDEO_MIN_HEIGHT = 320;
+const SAVE_VIDEO_PREVIEW_TOP_INSET = 0;
 
 function hideExecStartWidget(node) {
     const widget = node.widgets?.find((w) => w?.name === EXEC_START_WIDGET_NAME);
@@ -406,7 +407,7 @@ function ensurePreviewFrame(container) {
         frame = document.createElement("div");
         frame.className = "fbnodes-save-video-frame";
         frame.style.cssText = `
-            position: absolute; left: 8px; top: 8px; right: 8px; bottom: 34px;
+            position: absolute; left: 8px; top: ${SAVE_VIDEO_PREVIEW_TOP_INSET}px; right: 8px; bottom: 34px;
             overflow: hidden; background: rgba(34, 39, 48, 0.98);
             border: 1px solid rgba(78, 90, 108, 0.72); border-radius: 10px;
             box-sizing: border-box;

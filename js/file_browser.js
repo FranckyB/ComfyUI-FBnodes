@@ -1010,14 +1010,37 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder, 
             font-size: 16px;
             line-height: 1;
         ">v</button>
-        <input type="text" placeholder="Search files..." class="search-input" style="
+        <div class="search-wrap" style="
+            position: relative;
             flex: 1;
-            padding: 8px 12px;
-            background: rgba(45, 55, 72, 0.7);
-            border: 1px solid rgba(226, 232, 240, 0.2);
-            border-radius: 6px;
-            color: #ccc;
+            display: flex;
+            align-items: center;
         ">
+            <input type="text" placeholder="Search files..." class="search-input" style="
+                flex: 1;
+                padding: 8px 36px 8px 12px;
+                background: rgba(45, 55, 72, 0.7);
+                border: 1px solid rgba(226, 232, 240, 0.2);
+                border-radius: 6px;
+                color: #ccc;
+            ">
+            <button class="clear-search" title="Clear search" style="
+                position: absolute;
+                right: 8px;
+                top: 50%;
+                transform: translateY(-50%);
+                width: 20px;
+                height: 20px;
+                padding: 0;
+                border: none;
+                background: transparent;
+                color: #aaa;
+                cursor: pointer;
+                font-size: 16px;
+                line-height: 1;
+                display: none;
+            ">×</button>
+        </div>
         <select class="filter-type" style="
             padding: 8px 12px;
             background: rgba(45, 55, 72, 0.7);
@@ -1230,10 +1253,15 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder, 
 
     // Setup search/filter
     const searchInput = filterBar.querySelector('.search-input');
+    const clearSearchBtn = filterBar.querySelector('.clear-search');
     const filterType = filterBar.querySelector('.filter-type');
     const viewModeBtn = filterBar.querySelector('.view-mode');
     const siblingPrevBtn = filterBar.querySelector('.sibling-prev');
     const siblingNextBtn = filterBar.querySelector('.sibling-next');
+
+    const updateSearchClearBtn = () => {
+        clearSearchBtn.style.display = searchInput.value ? 'block' : 'none';
+    };
 
     overlay._navigateSibling = async (dir) => {
         await navigateSiblingFolder(dir, gridContainer, currentFile, onFileSelect, overlay, breadcrumb);
@@ -1278,7 +1306,16 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder, 
     };
     updateViewModeBtn();
 
-    searchInput.oninput = () => filterThumbnails(gridContainer, searchInput.value, filterType.value);
+    searchInput.oninput = () => {
+        updateSearchClearBtn();
+        filterThumbnails(gridContainer, searchInput.value, filterType.value);
+    };
+    clearSearchBtn.onclick = () => {
+        searchInput.value = '';
+        updateSearchClearBtn();
+        filterThumbnails(gridContainer, searchInput.value, filterType.value);
+        searchInput.focus();
+    };
     filterType.onchange = () => {
         if (showListKindSelector) {
             setListMode(filterType.value || 'all');
@@ -1322,6 +1359,7 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder, 
     loadFileThumbnails(gridContainer, currentFile, onFileSelect, overlay, breadcrumb).then(() => {
         filterThumbnails(gridContainer, searchInput.value, filterType.value);
     });
+    updateSearchClearBtn();
 }
 
 async function loadFileThumbnails(container, currentFile, onFileSelect, overlay, breadcrumbElement) {

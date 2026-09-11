@@ -804,6 +804,91 @@ def render_stroke_mask(mask_data, width, height, batch_size=1):
         return None
 
 
+def _coerce_bool(value):
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"1", "true", "yes", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "off", ""}:
+            return False
+    return bool(value)
+
+
+def _parse_crop_data(crop_data):
+    default = {
+        "enabled": False,
+        "left_pct": 0.0,
+        "right_pct": 100.0,
+        "top_pct": 0.0,
+        "bottom_pct": 100.0,
+    }
+
+    if not crop_data or not isinstance(crop_data, str):
+        return default
+
+    try:
+        parsed = json.loads(crop_data)
+    except Exception:
+        return default
+
+    state = {
+        "enabled": _coerce_bool(parsed.get("enabled")),
+        "left_pct": float(parsed.get("left_pct", 0.0)),
+        "right_pct": float(parsed.get("right_pct", 100.0)),
+        "top_pct": float(parsed.get("top_pct", 0.0)),
+        "bottom_pct": float(parsed.get("bottom_pct", 100.0)),
+    }
+
+    state["left_pct"] = max(0.0, min(100.0, state["left_pct"]))
+    state["right_pct"] = max(0.0, min(100.0, state["right_pct"]))
+    state["top_pct"] = max(0.0, min(100.0, state["top_pct"]))
+    state["bottom_pct"] = max(0.0, min(100.0, state["bottom_pct"]))
+
+    if state["right_pct"] <= state["left_pct"]:
+        state["right_pct"] = min(100.0, state["left_pct"] + 1.0)
+    if state["bottom_pct"] <= state["top_pct"]:
+        state["bottom_pct"] = min(100.0, state["top_pct"] + 1.0)
+
+    return state
+
+
+def _apply_crop_and_flip(image_tensor, mask_tensor, crop_data="", flip_x=False, flip_y=False):
+    if image_tensor is None or not hasattr(image_tensor, 'shape') or len(image_tensor.shape) < 4:
+        return image_tensor, mask_tensor
+
+    crop_state = _parse_crop_data(crop_data)
+    image_height = int(image_tensor.shape[1])
+    image_width = int(image_tensor.shape[2])
+
+    if crop_state.get("enabled"):
+        left = int(round((crop_state["left_pct"] / 100.0) * image_width))
+        right = int(round((crop_state["right_pct"] / 100.0) * image_width))
+        top = int(round((crop_state["top_pct"] / 100.0) * image_height))
+        bottom = int(round((crop_state["bottom_pct"] / 100.0) * image_height))
+
+        left = max(0, min(left, image_width - 1))
+        right = max(left + 1, min(right, image_width))
+        top = max(0, min(top, image_height - 1))
+        bottom = max(top + 1, min(bottom, image_height))
+
+        image_tensor = image_tensor[:, top:bottom, left:right, :]
+
+        if mask_tensor is not None and hasattr(mask_tensor, 'shape') and len(mask_tensor.shape) >= 3:
+            mask_tensor = mask_tensor[:, top:bottom, left:right]
+
+    if _coerce_bool(flip_x):
+        image_tensor = torch.flip(image_tensor, dims=[2])
+        if mask_tensor is not None and hasattr(mask_tensor, 'shape') and len(mask_tensor.shape) >= 3:
+            mask_tensor = torch.flip(mask_tensor, dims=[2])
+
+    if _coerce_bool(flip_y):
+        image_tensor = torch.flip(image_tensor, dims=[1])
+        if mask_tensor is not None and hasattr(mask_tensor, 'shape') and len(mask_tensor.shape) >= 3:
+            mask_tensor = torch.flip(mask_tensor, dims=[1])
+
+    return image_tensor, mask_tensor
+
+
 def get_placeholder_image_tensor():
     """Return a small black square tensor for missing/failed image loads."""
     return torch.zeros((1, 64, 64, 3), dtype=torch.float32)
@@ -852,6 +937,9 @@ class LoadImagePlus:
             },
             "optional": {
                 "mask_data": ("STRING", {"default": "", "multiline": False}),
+                "crop_data": ("STRING", {"default": "", "multiline": False}),
+                "flip_x": ("BOOLEAN", {"default": False}),
+                "flip_y": ("BOOLEAN", {"default": False}),
             },
             "hidden": {
                 "unique_id": "UNIQUE_ID",
@@ -869,7 +957,7 @@ class LoadImagePlus:
     def VALIDATE_INPUTS(cls, **kwargs):
         return True
 
-    def load(self, image="", source_folder="input", frame_position=0.0, mask_data="", unique_id=None):
+    def load(self, image="", source_folder="input", frame_position=0.0, mask_data="", crop_data="", flip_x=False, flip_y=False, unique_id=None):
         if frame_position is None:
             frame_position = 0.0
 
@@ -964,6 +1052,14 @@ class LoadImagePlus:
             rendered_mask = render_stroke_mask(mask_data, width, height, image_tensor.shape[0])
             if rendered_mask is not None:
                 mask_tensor = rendered_mask
+
+        image_tensor, mask_tensor = _apply_crop_and_flip(
+            image_tensor,
+            mask_tensor,
+            crop_data=crop_data,
+            flip_x=flip_x,
+            flip_y=flip_y,
+        )
 
         if is_blank and not preview_images:
             preview_images = self._save_preview_images(image_tensor, mask_tensor)
@@ -1070,11 +1166,11 @@ class LoadImagePlus:
         return results
 
     @classmethod
-    def IS_CHANGED(cls, image, source_folder="input", frame_position=0.0, mask_data="", **kwargs):
+    def IS_CHANGED(cls, image, source_folder="input", frame_position=0.0, mask_data="", crop_data="", flip_x=False, flip_y=False, **kwargs):
         if image == "(none)":
-            return ("no_file", source_folder, frame_position, mask_data)
+            return ("no_file", source_folder, frame_position, mask_data, crop_data, flip_x, flip_y)
         if image == "(blank)":
-            return ("blank", source_folder, frame_position, mask_data)
+            return ("blank", source_folder, frame_position, mask_data, crop_data, flip_x, flip_y)
 
         mtime = "no_file"
         if image:
@@ -1090,4 +1186,4 @@ class LoadImagePlus:
             elif os.path.exists(file_path):
                 mtime = os.path.getmtime(file_path)
 
-        return (mtime, source_folder, frame_position, mask_data)
+        return (mtime, source_folder, frame_position, mask_data, crop_data, flip_x, flip_y)

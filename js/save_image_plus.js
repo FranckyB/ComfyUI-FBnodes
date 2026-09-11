@@ -230,6 +230,8 @@ function estimateSelectionRowsHeight(state) {
     return lines * btnH + (lines - 1) * lineGap + padY * 2;
 }
 
+const COMPARE_FRAME_TOP_GAP = 8;
+
 function ensureMinDisplaySize(node) {
     const state = ensureCompareState(node);
     const contentTop = getContentStartY(node);
@@ -240,7 +242,7 @@ function ensureMinDisplaySize(node) {
     const bottomPad = 8;
 
     const minW = 260;
-    const minH = Math.ceil(contentTop + controlsH + frameMinH + footerGap + footerH + bottomPad);
+    const minH = Math.ceil(contentTop + controlsH + COMPARE_FRAME_TOP_GAP + frameMinH + footerGap + footerH + bottomPad);
 
     const curW = Number(node.size?.[0] || 0);
     const curH = Number(node.size?.[1] || 0);
@@ -609,7 +611,7 @@ function drawCompareCanvas(ctx, node) {
     const footerH = 24;
     const footerGap = 6;
     const frameX = 10;
-    const frameY = contentTop + controlsH;
+    const frameY = contentTop + controlsH + COMPARE_FRAME_TOP_GAP;
     const frameW = Math.max(40, Number(node.size?.[0] || 320) - 20);
     const frameH = Math.max(80, contentBottom - frameY - footerH - footerGap);
 

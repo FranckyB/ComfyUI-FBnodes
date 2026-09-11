@@ -19,12 +19,14 @@ const MASK_TOOLBAR_MIN_WIDTH = 300;
 const MASK_TOOLBAR_HEIGHT = 26;
 const MASK_PANEL_INSET = 10;
 const MASK_MIN_HEIGHT = 320;
-const MASK_RESIZE_STRIP = 18;
-const MASK_PREVIEW_FRAME_GAP = 6;
+const MASK_SECTION_GAP = 4;
+const MASK_PREVIEW_FRAME_GAP = 4;
 const MASK_FOOTER_HEIGHT = 24;
-const MASK_TOOLBAR_FRAME_HEIGHT = MASK_TOOLBAR_HEIGHT + 2;
+const MASK_TOOLBAR_FRAME_HEIGHT = MASK_TOOLBAR_HEIGHT;
+const MINI_TOOLBAR_HEIGHT = 24;
+const MINI_TOOLBAR_FRAME_HEIGHT = MINI_TOOLBAR_HEIGHT;
+const MASK_BOTTOM_PAD = 0;
 const MASK_TOP_INSET_OFF = 0;
-const MASK_TOP_INSET_ON = MASK_TOOLBAR_FRAME_HEIGHT + 2;
 
 // Track videos that the browser can't decode (H265/yuv444) to skip browser attempt on future scrubs
 const _nonBrowserDecodableVideos = new Set();
@@ -421,6 +423,7 @@ function showEmptyPreview(node, requestId = null) {
         dom.hasImage = false;
         dom.img.removeAttribute("src");
         dom.imgWrap.style.display = "none";
+        dom.transformFrame.style.display = "none";
         dom.toolbar.style.display = "none";
         dom.toolbarFrame.style.display = "none";
         dom.previewFrame.style.display = "block";
@@ -431,6 +434,7 @@ function showEmptyPreview(node, requestId = null) {
             ctx.clearRect(0, 0, dom.canvas.width, dom.canvas.height);
         }
         dom.cursor.style.display = "none";
+        dom.cropLayer.style.display = "none";
     }
 
     node.setDirtyCanvas(true, true);
@@ -461,12 +465,10 @@ function showBlankPreview(node, requestId = null) {
             dom.img.src = img.src;
             dom.img.draggable = false;
             dom.imgWrap.style.display = "block";
-            dom.toolbarFrame.style.display = "none";
-            dom.toolbar.style.display = "none";
-            dom.previewFrame.style.top = `${MASK_TOP_INSET_OFF}px`;
             dom.previewFrame.style.display = "block";
             dom.footer.style.display = "block";
             dom.footerText.textContent = "\u2014";
+            updatePreviewChrome(node);
         }
 
         node.setDirtyCanvas(true, true);
@@ -681,6 +683,153 @@ function getMaskDataWidget(node) {
     return node.widgets?.find(w => w.name === "mask_data") || null;
 }
 
+function getCropDataWidget(node) {
+    return node.widgets?.find(w => w.name === "crop_data") || null;
+}
+
+function getFlipWidget(node, axis) {
+    return node.widgets?.find(w => w.name === axis) || null;
+}
+
+function normalizeBoolValue(value) {
+    if (typeof value === "string") {
+        const normalized = value.trim().toLowerCase();
+        if (["1", "true", "yes", "on"].includes(normalized)) return true;
+        if (["0", "false", "no", "off", ""].includes(normalized)) return false;
+    }
+    return !!value;
+}
+
+function getFlipState(node) {
+    return {
+        x: normalizeBoolValue(getFlipWidget(node, "flip_x")?.value),
+        y: normalizeBoolValue(getFlipWidget(node, "flip_y")?.value),
+    };
+}
+
+function setFlipWidgetValue(node, axis, enabled) {
+    const widget = getFlipWidget(node, axis);
+    if (widget) widget.value = !!enabled;
+    if (!node.properties) node.properties = {};
+    node.properties[axis] = !!enabled;
+}
+
+function parseCropData(value) {
+    if (!value || typeof value !== "string") {
+        return { version: 1, enabled: false, left_pct: 0, right_pct: 100, top_pct: 0, bottom_pct: 100 };
+    }
+    try {
+        const data = JSON.parse(value);
+        return {
+            version: 1,
+            enabled: !!data?.enabled,
+            left_pct: Number.isFinite(Number(data?.left_pct)) ? Number(data.left_pct) : 0,
+            right_pct: Number.isFinite(Number(data?.right_pct)) ? Number(data.right_pct) : 100,
+            top_pct: Number.isFinite(Number(data?.top_pct)) ? Number(data.top_pct) : 0,
+            bottom_pct: Number.isFinite(Number(data?.bottom_pct)) ? Number(data.bottom_pct) : 100,
+        };
+    } catch (err) {
+        return { version: 1, enabled: false, left_pct: 0, right_pct: 100, top_pct: 0, bottom_pct: 100 };
+    }
+}
+
+function normalizeCropState(state) {
+    state.left_pct = Math.max(0, Math.min(100, Number(state.left_pct) || 0));
+    state.right_pct = Math.max(0, Math.min(100, Number(state.right_pct) || 100));
+    state.top_pct = Math.max(0, Math.min(100, Number(state.top_pct) || 0));
+    state.bottom_pct = Math.max(0, Math.min(100, Number(state.bottom_pct) || 100));
+    if (state.right_pct <= state.left_pct) state.right_pct = Math.min(100, state.left_pct + 1);
+    if (state.bottom_pct <= state.top_pct) state.bottom_pct = Math.min(100, state.top_pct + 1);
+    state.enabled = !!state.enabled;
+    return state;
+}
+
+function ensureCropState(node) {
+    if (!node._cropState) {
+        const raw = node.properties?._cropData || getCropDataWidget(node)?.value || "";
+        node._cropState = normalizeCropState(parseCropData(raw));
+    }
+    return node._cropState;
+}
+
+function syncCropData(node) {
+    const state = normalizeCropState(ensureCropState(node));
+    const value = JSON.stringify({
+        version: 1,
+        enabled: !!state.enabled,
+        left_pct: Number(state.left_pct.toFixed(4)),
+        right_pct: Number(state.right_pct.toFixed(4)),
+        top_pct: Number(state.top_pct.toFixed(4)),
+        bottom_pct: Number(state.bottom_pct.toFixed(4)),
+    });
+    const widget = getCropDataWidget(node);
+    if (widget) widget.value = value;
+    if (!node.properties) node.properties = {};
+    node.properties._cropData = value;
+    node.setDirtyCanvas(true, true);
+    app.graph?.setDirtyCanvas(true, true);
+}
+
+function cropDisplayRectFromState(node) {
+    const state = ensureCropState(node);
+    const flips = getFlipState(node);
+    const left = flips.x ? 100 - state.right_pct : state.left_pct;
+    const right = flips.x ? 100 - state.left_pct : state.right_pct;
+    const top = flips.y ? 100 - state.bottom_pct : state.top_pct;
+    const bottom = flips.y ? 100 - state.top_pct : state.bottom_pct;
+    return normalizeCropState({ enabled: state.enabled, left_pct: left, right_pct: right, top_pct: top, bottom_pct: bottom });
+}
+
+function setCropStateFromDisplayRect(node, rect) {
+    const state = ensureCropState(node);
+    const flips = getFlipState(node);
+    const next = normalizeCropState({
+        enabled: state.enabled,
+        left_pct: flips.x ? 100 - rect.right_pct : rect.left_pct,
+        right_pct: flips.x ? 100 - rect.left_pct : rect.right_pct,
+        top_pct: flips.y ? 100 - rect.bottom_pct : rect.top_pct,
+        bottom_pct: flips.y ? 100 - rect.top_pct : rect.bottom_pct,
+    });
+    state.left_pct = next.left_pct;
+    state.right_pct = next.right_pct;
+    state.top_pct = next.top_pct;
+    state.bottom_pct = next.bottom_pct;
+    syncCropData(node);
+}
+
+function toSourceNormPoint(node, point) {
+    const flips = getFlipState(node);
+    return [
+        flips.x ? (1 - point[0]) : point[0],
+        flips.y ? (1 - point[1]) : point[1],
+    ];
+}
+
+function setToggleButtonState(button, active) {
+    if (!button) return;
+    button.dataset.active = active ? "1" : "0";
+    if (button.dataset.toggleStyle === "switch") {
+        const track = button._toggleTrack;
+        const thumb = button._toggleThumb;
+        if (track) {
+            track.style.background = active ? "rgba(255,255,255,0.22)" : "rgba(255,255,255,0.10)";
+            track.style.borderColor = active ? "rgba(255,255,255,0.72)" : "rgba(255,255,255,0.28)";
+        }
+        if (thumb) {
+            thumb.style.left = active ? "16px" : "2px";
+            thumb.style.background = "#ffffff";
+            thumb.style.boxShadow = active
+                ? "0 0 0 1px rgba(255,255,255,0.14), 0 1px 3px rgba(0,0,0,0.34)"
+                : "0 0 0 1px rgba(255,255,255,0.10), 0 1px 3px rgba(0,0,0,0.28)";
+        }
+        button.style.background = "transparent";
+        button.style.color = active ? "#ffffff" : "#d5dce6";
+        return;
+    }
+    button.style.background = active ? "#2f6f92" : "transparent";
+    button.style.color = active ? "#ffffff" : "#b9c2ce";
+}
+
 function parseMaskData(value) {
     if (!value || typeof value !== "string") {
         return { version: 1, brushSize: 64, erasing: false, strokes: [] };
@@ -698,6 +847,10 @@ function parseMaskData(value) {
     }
 }
 
+function isMaskEnabled(node) {
+    return normalizeBoolValue(node?.properties?._maskEnabled);
+}
+
 function ensureMaskState(node) {
     if (!node._maskState) {
         // Vector strokes for editing/undo live in node.properties._maskStrokes
@@ -710,7 +863,7 @@ function ensureMaskState(node) {
                 ? getMaskDataWidget(node).value : "");
         const parsed = parseMaskData(strokeJson);
         node._maskState = {
-            enabled: false,
+            enabled: isMaskEnabled(node),
             brushSize: parsed.brushSize,
             erasing: parsed.erasing,
             hideWhilePressed: false,
@@ -722,6 +875,111 @@ function ensureMaskState(node) {
         };
     }
     return node._maskState;
+}
+
+function applyPreviewTransforms(node) {
+    const dom = node._maskDom;
+    if (!dom) return;
+    const flips = getFlipState(node);
+    const scaleX = flips.x ? -1 : 1;
+    const scaleY = flips.y ? -1 : 1;
+    const transform = `scale(${scaleX}, ${scaleY})`;
+    dom.img.style.transform = transform;
+    dom.canvas.style.transform = transform;
+    setToggleButtonState(dom.flipXBtn, flips.x);
+    setToggleButtonState(dom.flipYBtn, flips.y);
+}
+
+function updateCropOverlay(node) {
+    const dom = node._maskDom;
+    if (!dom?.cropLayer) return;
+
+    const state = ensureCropState(node);
+    if (!dom.hasImage || !state.enabled) {
+        dom.cropLayer.style.display = "none";
+        return;
+    }
+
+    const rect = cropDisplayRectFromState(node);
+    const w = Math.max(1, dom.imgWrap.offsetWidth || 1);
+    const h = Math.max(1, dom.imgWrap.offsetHeight || 1);
+    const left = (rect.left_pct / 100) * w;
+    const right = (rect.right_pct / 100) * w;
+    const top = (rect.top_pct / 100) * h;
+    const bottom = (rect.bottom_pct / 100) * h;
+
+    dom.cropLayer.style.display = "block";
+    dom.cropBox.style.left = `${left}px`;
+    dom.cropBox.style.top = `${top}px`;
+    dom.cropBox.style.width = `${Math.max(1, right - left)}px`;
+    dom.cropBox.style.height = `${Math.max(1, bottom - top)}px`;
+
+    dom.cropShadeTop.style.left = "0px";
+    dom.cropShadeTop.style.top = "0px";
+    dom.cropShadeTop.style.width = `${w}px`;
+    dom.cropShadeTop.style.height = `${Math.max(0, top)}px`;
+
+    dom.cropShadeBottom.style.left = "0px";
+    dom.cropShadeBottom.style.top = `${bottom}px`;
+    dom.cropShadeBottom.style.width = `${w}px`;
+    dom.cropShadeBottom.style.height = `${Math.max(0, h - bottom)}px`;
+
+    dom.cropShadeLeft.style.left = "0px";
+    dom.cropShadeLeft.style.top = `${top}px`;
+    dom.cropShadeLeft.style.width = `${Math.max(0, left)}px`;
+    dom.cropShadeLeft.style.height = `${Math.max(0, bottom - top)}px`;
+
+    dom.cropShadeRight.style.left = `${right}px`;
+    dom.cropShadeRight.style.top = `${top}px`;
+    dom.cropShadeRight.style.width = `${Math.max(0, w - right)}px`;
+    dom.cropShadeRight.style.height = `${Math.max(0, bottom - top)}px`;
+
+    const handles = [
+        [dom.cropHandles.nw, left, top, "nwse-resize"],
+        [dom.cropHandles.ne, right, top, "nesw-resize"],
+        [dom.cropHandles.sw, left, bottom, "nesw-resize"],
+        [dom.cropHandles.se, right, bottom, "nwse-resize"],
+        [dom.cropHandles.n, (left + right) / 2, top, "ns-resize"],
+        [dom.cropHandles.s, (left + right) / 2, bottom, "ns-resize"],
+        [dom.cropHandles.w, left, (top + bottom) / 2, "ew-resize"],
+        [dom.cropHandles.e, right, (top + bottom) / 2, "ew-resize"],
+    ];
+    for (const [el, x, y, cursor] of handles) {
+        el.style.left = `${x}px`;
+        el.style.top = `${y}px`;
+        el.style.cursor = cursor;
+    }
+}
+
+function updatePreviewChrome(node) {
+    const dom = node._maskDom;
+    if (!dom) return;
+
+    const hasImage = !!dom.hasImage;
+    const maskState = ensureMaskState(node);
+    const cropState = ensureCropState(node);
+    const transformVisible = hasImage;
+    const toolbarVisible = hasImage && maskState.enabled && !cropState.enabled;
+    const cropInteractive = hasImage && cropState.enabled;
+
+    dom.transformFrame.style.display = transformVisible ? "block" : "none";
+    dom.toolbarFrame.style.display = toolbarVisible ? "block" : "none";
+    dom.toolbar.style.display = toolbarVisible ? "grid" : "none";
+
+    let topInset = 0;
+    if (transformVisible) topInset += MINI_TOOLBAR_FRAME_HEIGHT + MASK_SECTION_GAP;
+    if (toolbarVisible) topInset += MASK_TOOLBAR_FRAME_HEIGHT + MASK_SECTION_GAP;
+    dom.previewFrame.style.top = `${topInset}px`;
+
+    dom.canvas.style.pointerEvents = hasImage && maskState.enabled && !cropState.enabled ? "auto" : "none";
+    dom.canvas.style.cursor = hasImage && maskState.enabled && !cropState.enabled ? "crosshair" : "default";
+    dom.cropLayer.style.display = cropInteractive ? "block" : "none";
+    if (!(hasImage && maskState.enabled && !cropState.enabled)) {
+        dom.cursor.style.display = "none";
+    }
+
+    applyPreviewTransforms(node);
+    updateCropOverlay(node);
 }
 
 // Rasterize the current strokes into a full-strength PNG data URL at the image's
@@ -756,6 +1014,7 @@ function syncMaskData(node) {
     if (widget) widget.value = state.enabled ? buildMaskDataURL(node) : "";
     // Editable vector strokes persist separately so undo/redo survives reloads.
     if (!node.properties) node.properties = {};
+    node.properties._maskEnabled = !!state.enabled;
     node.properties._maskStrokes = state.strokes.length > 0 ? JSON.stringify({
         version: 1,
         brushSize: state.brushSize,
@@ -1111,12 +1370,14 @@ function updateMaskDomImage(node) {
         dom.hasImage = false;
         dom.img.removeAttribute("src");
         dom.imgWrap.style.display = "none";
+        dom.transformFrame.style.display = "none";
         dom.toolbar.style.display = "none";
         dom.toolbarFrame.style.display = "none";
         dom.previewFrame.style.top = `${MASK_TOP_INSET_OFF}px`;
         dom.previewFrame.style.display = "block";
         dom.footer.style.display = "block";
         dom.footerText.textContent = "—";
+        dom.cropLayer.style.display = "none";
         return;
     }
     dom.hasImage = true;
@@ -1125,15 +1386,10 @@ function updateMaskDomImage(node) {
     if (changed) dom.img.src = img.src;
     dom.img.draggable = false;
     dom.imgWrap.style.display = "block";
-    const showToolbar = ensureMaskState(node).enabled;
-    dom.toolbarFrame.style.display = showToolbar ? "block" : "none";
-    dom.toolbar.style.display = showToolbar ? "grid" : "none";
-    dom.previewFrame.style.top = showToolbar
-        ? `${MASK_TOP_INSET_ON}px`
-        : `${MASK_TOP_INSET_OFF}px`;
     dom.previewFrame.style.display = "block";
     dom.footer.style.display = "block";
     updateMaskFooter(dom, node);
+    updatePreviewChrome(node);
     if (changed) resizeMaskNodeToFit(node);
 }
 
@@ -1175,19 +1431,14 @@ function setMaskDomVisible(node, editing) {
     // input. This matches TrixLoader's canvas gating.
     dom.root.style.display = "block";
     const showImageArea = !!dom.hasImage;
-    const showToolbar = showImageArea && editing;
-    dom.toolbarFrame.style.display = showToolbar ? "block" : "none";
-    dom.toolbar.style.display = showToolbar ? "grid" : "none";
-    dom.previewFrame.style.top = showToolbar
-        ? `${MASK_TOP_INSET_ON}px`
-        : `${MASK_TOP_INSET_OFF}px`;
     dom.previewFrame.style.display = "block";
     dom.footer.style.display = "block";
-    dom.canvas.style.pointerEvents = editing ? "auto" : "none";
-    dom.canvas.style.cursor = editing ? "crosshair" : "default";
+    dom.canvas.style.pointerEvents = showImageArea && editing && !ensureCropState(node).enabled ? "auto" : "none";
+    dom.canvas.style.cursor = showImageArea && editing && !ensureCropState(node).enabled ? "crosshair" : "default";
     if (!editing) dom.cursor.style.display = "none";
     updateMaskDomImage(node);
     renderMaskDomCanvas(node);
+    updatePreviewChrome(node);
     node.setDirtyCanvas(true, true);
     app.graph?.setDirtyCanvas(true, true);
 }
@@ -1389,11 +1640,31 @@ function createMaskDomUI(node, imageWidget, refreshImageOptionsForSource) {
     const toolbarFrame = document.createElement("div");
     toolbarFrame.style.cssText = `
         position: absolute; left: ${MASK_PANEL_INSET}px; right: ${MASK_PANEL_INSET}px;
-        top: 0; height: ${MASK_TOOLBAR_FRAME_HEIGHT}px; z-index: 8;
+        top: ${MINI_TOOLBAR_FRAME_HEIGHT + MASK_SECTION_GAP}px; height: ${MASK_TOOLBAR_FRAME_HEIGHT}px; z-index: 8;
         overflow: hidden; background: rgba(34, 39, 48, 0.98); display: none;
         border: 1px solid rgba(78, 90, 108, 0.72); border-radius: 10px;
         box-sizing: border-box; pointer-events: none;
     `;
+
+    const transformFrame = document.createElement("div");
+    transformFrame.style.cssText = `
+        position: absolute; left: ${MASK_PANEL_INSET}px; right: ${MASK_PANEL_INSET}px;
+        top: 0; height: ${MINI_TOOLBAR_FRAME_HEIGHT}px; z-index: 9;
+        overflow: hidden; background: rgba(34, 39, 48, 0.98); display: none;
+        border: 1px solid rgba(78, 90, 108, 0.72); border-radius: 10px;
+        box-sizing: border-box; pointer-events: none;
+    `;
+
+    const transformBar = document.createElement("div");
+    transformBar.style.cssText = `
+        position: absolute; left: 1px; top: 1px; z-index: 9; width: calc(100% - 2px); height: calc(100% - 2px);
+        display: flex; align-items: center; justify-content: space-evenly; gap: 28px;
+        padding: 0 10px; box-sizing: border-box; background: transparent;
+        pointer-events: auto;
+    `;
+    for (const name of ["mousedown", "mouseup", "mousemove", "click", "dblclick", "contextmenu", "pointerdown", "pointermove", "pointerup"]) {
+        transformBar.addEventListener(name, name === "contextmenu" ? stop : stopBubble, { passive: false });
+    }
 
     const toolbar = document.createElement("div");
     toolbar.style.cssText = `
@@ -1413,7 +1684,7 @@ function createMaskDomUI(node, imageWidget, refreshImageOptionsForSource) {
     slider.max = "512";
     slider.value = String(ensureMaskState(node).brushSize || 64);
     slider.title = "Brush size";
-    slider.style.cssText = "width: 100%; min-width: 16px; height: 14px; margin: 0; accent-color: #41a7d8; cursor: pointer;";
+    slider.style.cssText = "width: 100%; min-width: 16px; height: 14px; margin: 0; accent-color: #ffffff; cursor: pointer;";
     slider.addEventListener("input", () => {
         const state = ensureMaskState(node);
         state.brushSize = Math.max(1, Number(slider.value) || 64);
@@ -1458,19 +1729,76 @@ function createMaskDomUI(node, imageWidget, refreshImageOptionsForSource) {
         return button;
     };
 
+    const makeTextToggleButton = (label, title) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.title = title;
+        button.dataset.toggleStyle = "switch";
+        button.style.cssText = `
+            min-width: 108px; height: 20px; padding: 0; margin: 0; border-radius: 10px;
+            border: none; background: transparent; color: #d5dce6; cursor: pointer;
+            display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+            font: 600 11px "Segoe UI", sans-serif; line-height: 1; letter-spacing: 0.01em;
+            flex-shrink: 0; transition: background 0.12s, color 0.12s;
+        `;
+
+        const text = document.createElement("span");
+        text.textContent = label;
+        text.style.cssText = "display:inline-block; min-width:46px; text-align:left;";
+
+        const track = document.createElement("span");
+        track.style.cssText = `
+            position: relative; display: inline-block; width: 30px; height: 16px;
+            border-radius: 999px; background: rgba(255,255,255,0.10);
+            border: 1px solid rgba(255,255,255,0.28); box-sizing: border-box;
+            transition: background 0.12s, border-color 0.12s;
+        `;
+
+        const thumb = document.createElement("span");
+        thumb.style.cssText = `
+            position: absolute; left: 2px; top: 1px; width: 12px; height: 12px;
+            border-radius: 50%; background: #ffffff;
+            box-shadow: 0 0 0 1px rgba(255,255,255,0.10), 0 1px 3px rgba(0,0,0,0.28);
+            transition: left 0.12s, box-shadow 0.12s;
+        `;
+        track.appendChild(thumb);
+        button.append(text, track);
+        button._toggleTrack = track;
+        button._toggleThumb = thumb;
+
+        button.addEventListener("pointerenter", () => {
+            button.style.color = "#eef2f7";
+            if (button.dataset.active !== "1" && button._toggleTrack) {
+                button._toggleTrack.style.background = "rgba(255,255,255,0.14)";
+                button._toggleTrack.style.borderColor = "rgba(255,255,255,0.38)";
+            }
+        });
+        button.addEventListener("pointerleave", () => {
+            setToggleButtonState(button, button.dataset.active === "1");
+        });
+        button.addEventListener("pointerdown", stop, { passive: false });
+        button.addEventListener("click", stop, { passive: false });
+        setToggleButtonState(button, false);
+        return button;
+    };
+
     const eyeBtn = makeButton(ICON_EYE, "Hold to hide mask");
     const undoBtn = makeButton(ICON_UNDO, "Undo");
     const redoBtn = makeButton(ICON_REDO, "Redo");
     const eraseBtn = makeButton(ICON_ERASE, "Erase");
     const clearBtn = makeButton(ICON_CLEAR, "Clear");
+    const flipXBtn = makeTextToggleButton("Flip X", "Flip horizontally");
+    const flipYBtn = makeTextToggleButton("Flip Y", "Flip vertically");
 
     toolbar.append(slider, eyeBtn, undoBtn, redoBtn, eraseBtn, clearBtn);
+    transformBar.append(flipXBtn, flipYBtn);
+    transformFrame.append(transformBar);
     toolbarFrame.append(toolbar);
 
     const previewFrame = document.createElement("div");
     previewFrame.style.cssText = `
-        position: absolute; left: ${MASK_PANEL_INSET}px; top: ${MASK_TOP_INSET_OFF}px;
-        right: ${MASK_PANEL_INSET}px; bottom: ${MASK_FOOTER_HEIGHT + MASK_PREVIEW_FRAME_GAP + 8}px;
+        position: absolute; left: ${MASK_PANEL_INSET}px; top: ${MINI_TOOLBAR_FRAME_HEIGHT + MASK_SECTION_GAP}px;
+        right: ${MASK_PANEL_INSET}px; bottom: ${MASK_FOOTER_HEIGHT + MASK_PREVIEW_FRAME_GAP + MASK_BOTTOM_PAD}px;
         overflow: hidden; background: rgba(34, 39, 48, 0.98); display: none;
         border: 1px solid rgba(78, 90, 108, 0.72); border-radius: 10px;
         box-sizing: border-box;
@@ -1482,7 +1810,7 @@ function createMaskDomUI(node, imageWidget, refreshImageOptionsForSource) {
     const footer = document.createElement("div");
     footer.style.cssText = `
         position: absolute; left: ${MASK_PANEL_INSET}px; right: ${MASK_PANEL_INSET}px;
-        bottom: 8px; height: ${MASK_FOOTER_HEIGHT}px; display: none;
+        bottom: ${MASK_BOTTOM_PAD}px; height: ${MASK_FOOTER_HEIGHT}px; display: none;
         border-radius: 8px; border: 1px solid rgba(66, 72, 84, 0.95);
         background: rgba(34, 39, 48, 0.98); box-sizing: border-box;
         color: rgba(192, 206, 222, 0.95); font: 600 10px "Segoe UI";
@@ -1512,7 +1840,29 @@ function createMaskDomUI(node, imageWidget, refreshImageOptionsForSource) {
     `;
     cursor.innerHTML = `<div style="position:absolute;left:50%;top:50%;width:2px;height:2px;border-radius:50%;background:white;transform:translate(-50%,-50%);box-shadow:0 0 1px black;"></div>`;
 
-    imgWrap.append(img, canvas, cursor);
+    const cropLayer = document.createElement("div");
+    cropLayer.style.cssText = "position:absolute; left:0; top:0; width:100%; height:100%; display:none; pointer-events:none; z-index:5;";
+    const cropShadeTop = document.createElement("div");
+    const cropShadeBottom = document.createElement("div");
+    const cropShadeLeft = document.createElement("div");
+    const cropShadeRight = document.createElement("div");
+    for (const shade of [cropShadeTop, cropShadeBottom, cropShadeLeft, cropShadeRight]) {
+        shade.style.cssText = "position:absolute; background:rgba(0,0,0,0.42); pointer-events:none;";
+        cropLayer.appendChild(shade);
+    }
+    const cropBox = document.createElement("div");
+    cropBox.style.cssText = "position:absolute; border:1px solid rgba(255,255,255,0.72); box-sizing:border-box; cursor:move; pointer-events:auto;";
+    cropLayer.appendChild(cropBox);
+    const cropHandles = {};
+    for (const key of ["n", "s", "e", "w", "nw", "ne", "sw", "se"]) {
+        const handle = document.createElement("div");
+        handle.dataset.handle = key;
+        handle.style.cssText = "position:absolute; width:12px; height:12px; margin-left:-6px; margin-top:-6px; border:1px solid rgba(255,255,255,0.9); background:rgba(20,24,30,0.9); border-radius:50%; box-sizing:border-box; pointer-events:auto;";
+        cropHandles[key] = handle;
+        cropLayer.appendChild(handle);
+    }
+
+    imgWrap.append(img, canvas, cursor, cropLayer);
 
     preview.addEventListener("contextmenu", (event) => {
         event.preventDefault();
@@ -1592,7 +1942,7 @@ function createMaskDomUI(node, imageWidget, refreshImageOptionsForSource) {
 
     preview.append(imgWrap);
     previewFrame.append(preview);
-    root.append(toolbarFrame, previewFrame, footer);
+    root.append(transformFrame, toolbarFrame, previewFrame, footer);
 
     const fitCanvas = () => {
         const naturalW = img.naturalWidth || 1;
@@ -1624,6 +1974,7 @@ function createMaskDomUI(node, imageWidget, refreshImageOptionsForSource) {
         updateMaskFooter(node._maskDom, node);
         renderMaskDomCanvas(node);
         updateMaskCursor(node);
+        updateCropOverlay(node);
     };
 
     const toNormPoint = (event) => {
@@ -1637,7 +1988,7 @@ function createMaskDomUI(node, imageWidget, refreshImageOptionsForSource) {
     const addPoint = (event) => {
         const state = ensureMaskState(node);
         if (!state.activeStroke) return;
-        const point = toNormPoint(event);
+        const point = toSourceNormPoint(node, toNormPoint(event));
         const points = state.activeStroke.points;
         const last = points[points.length - 1];
         if (!last || Math.abs(last[0] - point[0]) > 0.0015 || Math.abs(last[1] - point[1]) > 0.0015) {
@@ -1751,12 +2102,94 @@ function createMaskDomUI(node, imageWidget, refreshImageOptionsForSource) {
         renderMaskDomCanvas(node);
     }, { passive: false });
 
+    flipXBtn.addEventListener("click", (event) => {
+        stop(event);
+        const next = !getFlipState(node).x;
+        setFlipWidgetValue(node, "flip_x", next);
+        applyPreviewTransforms(node);
+        updateCropOverlay(node);
+        syncCropData(node);
+    }, { passive: false });
+
+    flipYBtn.addEventListener("click", (event) => {
+        stop(event);
+        const next = !getFlipState(node).y;
+        setFlipWidgetValue(node, "flip_y", next);
+        applyPreviewTransforms(node);
+        updateCropOverlay(node);
+        syncCropData(node);
+    }, { passive: false });
+
+    const clampCropDisplayRect = (rect) => {
+        rect.left_pct = Math.max(0, Math.min(99, rect.left_pct));
+        rect.right_pct = Math.max(rect.left_pct + 1, Math.min(100, rect.right_pct));
+        rect.top_pct = Math.max(0, Math.min(99, rect.top_pct));
+        rect.bottom_pct = Math.max(rect.top_pct + 1, Math.min(100, rect.bottom_pct));
+    };
+
+    let cropDrag = null;
+
+    const beginCropDrag = (mode, handle, event) => {
+        stop(event);
+        if (app.canvas) app.canvas.allow_dragcanvas = false;
+        cropDrag = {
+            mode,
+            handle,
+            x: event.clientX,
+            y: event.clientY,
+            rect: cropDisplayRectFromState(node),
+        };
+
+        const onMove = (moveEvent) => {
+            if (!cropDrag) return;
+            const bounds = cropLayer.getBoundingClientRect();
+            const dxPct = ((moveEvent.clientX - cropDrag.x) / Math.max(1, bounds.width)) * 100;
+            const dyPct = ((moveEvent.clientY - cropDrag.y) / Math.max(1, bounds.height)) * 100;
+            const rect = { ...cropDrag.rect };
+
+            if (cropDrag.mode === "move") {
+                const width = rect.right_pct - rect.left_pct;
+                const height = rect.bottom_pct - rect.top_pct;
+                rect.left_pct = Math.max(0, Math.min(100 - width, rect.left_pct + dxPct));
+                rect.right_pct = rect.left_pct + width;
+                rect.top_pct = Math.max(0, Math.min(100 - height, rect.top_pct + dyPct));
+                rect.bottom_pct = rect.top_pct + height;
+            } else {
+                if (cropDrag.handle.includes("w")) rect.left_pct += dxPct;
+                if (cropDrag.handle.includes("e")) rect.right_pct += dxPct;
+                if (cropDrag.handle.includes("n")) rect.top_pct += dyPct;
+                if (cropDrag.handle.includes("s")) rect.bottom_pct += dyPct;
+            }
+
+            clampCropDisplayRect(rect);
+            setCropStateFromDisplayRect(node, rect);
+            updateCropOverlay(node);
+        };
+
+        const onUp = () => {
+            cropDrag = null;
+            if (app.canvas) app.canvas.allow_dragcanvas = true;
+            document.removeEventListener("mousemove", onMove);
+            document.removeEventListener("mouseup", onUp);
+        };
+
+        document.addEventListener("mousemove", onMove);
+        document.addEventListener("mouseup", onUp);
+    };
+
+    cropBox.addEventListener("mousedown", (event) => beginCropDrag("move", null, event));
+    for (const handle of Object.values(cropHandles)) {
+        handle.addEventListener("mousedown", (event) => beginCropDrag("resize", handle.dataset.handle, event));
+    }
+
     img.onload = fitCanvas;
     const observer = new ResizeObserver(fitCanvas);
     observer.observe(preview);
 
     const dom = {
-        root, toolbarFrame, toolbar, previewFrame, preview, footer, footerText, imgWrap, img, canvas, cursor, slider, eraseBtn,
+        root, transformFrame, transformBar, toolbarFrame, toolbar, previewFrame, preview, footer, footerText, imgWrap, img, canvas, cursor,
+        cropLayer, cropBox, cropShadeTop, cropShadeBottom, cropShadeLeft, cropShadeRight, cropHandles,
+        slider, eraseBtn, flipXBtn, flipYBtn,
         hasImage: false,
         observer,
         // Aspect-fit height used ONCE to pick a sensible default node size on the
@@ -1770,7 +2203,7 @@ function createMaskDomUI(node, imageWidget, refreshImageOptionsForSource) {
             const imageH = Math.round(availableW * naturalH / naturalW);
             return Math.max(
                 MASK_MIN_HEIGHT - 40,
-                imageH + MASK_TOOLBAR_HEIGHT + MASK_PREVIEW_FRAME_GAP + MASK_FOOTER_HEIGHT + MASK_PREVIEW_FRAME_GAP + 8,
+                imageH + MASK_TOOLBAR_HEIGHT + MASK_PREVIEW_FRAME_GAP + MASK_FOOTER_HEIGHT + MASK_PREVIEW_FRAME_GAP + MASK_BOTTOM_PAD,
             );
         },
     };
@@ -1796,8 +2229,8 @@ function createMaskDomUI(node, imageWidget, refreshImageOptionsForSource) {
     }
     // Force the DOM panel to match the node width (inset on both sides like the
     // save image node). Its height is the image-aspect panel height (width-based,
-    // no vertical feedback). A bare strip is left below the panel so the node's
-    // bottom-right resize handle stays reachable.
+    // no vertical feedback). Leave only a tiny bottom strip so the node's
+    // bottom-right resize handle stays reachable without a large visible chin.
     const origWidgetDraw = widget.draw;
     widget.draw = function (ctx, n, widgetWidth, y, H) {
         if (origWidgetDraw) origWidgetDraw.apply(this, arguments);
@@ -1807,13 +2240,14 @@ function createMaskDomUI(node, imageWidget, refreshImageOptionsForSource) {
         // resizable. Transparent bg means empty areas show the node's own colour.
         this.element.style.setProperty("width", (n.size[0] - 2) + "px", "important");
         this.element.style.setProperty("left", "-9px", "important");
-        this.element.style.setProperty("margin", "0px", "important");
+        this.element.style.setProperty("margin", "-4px 0 0 0", "important");
         this.element.style.setProperty("padding", "0px 2px", "important");
         this.element.style.setProperty("box-sizing", "border-box", "important");
         this.element.style.setProperty("background", "transparent", "important");
         this.element.style.setProperty("overflow", "hidden", "important");
     };
     setMaskDomVisible(node, false);
+    applyPreviewTransforms(node);
     return dom;
 }
 
@@ -2074,8 +2508,21 @@ app.registerExtension({
             if (maskDataWidget) {
                 hideWidget(maskDataWidget);
             }
+            const cropDataWidget = this.widgets?.find(w => w.name === "crop_data");
+            if (cropDataWidget) {
+                hideWidget(cropDataWidget);
+            }
+            const flipXWidget = this.widgets?.find(w => w.name === "flip_x");
+            if (flipXWidget) {
+                hideWidget(flipXWidget);
+            }
+            const flipYWidget = this.widgets?.find(w => w.name === "flip_y");
+            if (flipYWidget) {
+                hideWidget(flipYWidget);
+            }
             let imageWidget = null;
             let imagePickerWidget = null;
+            let cropButton = null;
             node._imagePickerMap = { "(none)": "(none)", "(blank)": "(blank)" };
 
             const updateImagePickerOptions = (values, preferredValue = null) => {
@@ -2421,6 +2868,26 @@ app.registerExtension({
                 };
                 this.widgets.splice(imageWidgetIndex + 3, 0, maskButton);
                 Object.defineProperty(maskButton, "node", { value: node });
+                node._maskToggleButton = maskButton;
+
+                cropButton = {
+                    type: "button",
+                    name: "Crop",
+                    value: null,
+                    callback: () => {
+                        const state = ensureCropState(node);
+                        state.enabled = !state.enabled;
+                        syncCropData(node);
+                        updatePreviewChrome(node);
+                        cropButton.name = state.enabled ? "Crop: On" : "Crop";
+                        node.setDirtyCanvas(true, true);
+                        app.graph?.setDirtyCanvas(true, true);
+                    },
+                    serialize: false
+                };
+                this.widgets.splice(imageWidgetIndex + 4, 0, cropButton);
+                Object.defineProperty(cropButton, "node", { value: node });
+                node._cropToggleButton = cropButton;
                 createMaskDomUI(node, imageWidget, refreshImageOptionsForSource);
 
                 // Start at a comfortable default size (only for brand-new nodes;
@@ -2507,11 +2974,27 @@ app.registerExtension({
                 }
 
                 node._maskState = null;
+                node._cropState = null;
                 const maskWidget = getMaskDataWidget(node);
                 if (maskWidget && !maskWidget.value && node.properties?._maskData) {
                     maskWidget.value = node.properties._maskData;
                 }
                 ensureMaskState(node);
+                const cropWidget = getCropDataWidget(node);
+                if (cropWidget && !cropWidget.value && node.properties?._cropData) {
+                    cropWidget.value = node.properties._cropData;
+                }
+                ensureCropState(node);
+                if (flipXWidget && typeof node.properties?.flip_x !== "undefined") {
+                    flipXWidget.value = !!node.properties.flip_x;
+                }
+                if (flipYWidget && typeof node.properties?.flip_y !== "undefined") {
+                    flipYWidget.value = !!node.properties.flip_y;
+                }
+                if (node._maskDom) {
+                    applyPreviewTransforms(node);
+                    updatePreviewChrome(node);
+                }
 
                 // Restore persisted display state from properties (survives tab switches)
                 if (!node.properties) node.properties = {};
@@ -2545,6 +3028,13 @@ app.registerExtension({
                 } else if (imageWidget_val && imageWidget_val !== "(none)" && !alreadyLoaded) {
                     // Only reload if widget value changed from persisted state
                     loadAndDisplayImage(node, imageWidget_val);
+                }
+
+                if (node._cropToggleButton) {
+                    node._cropToggleButton.name = ensureCropState(node).enabled ? "Crop: On" : "Crop";
+                }
+                if (node._maskToggleButton) {
+                    node._maskToggleButton.name = ensureMaskState(node).enabled ? "Mask: On" : "Mask";
                 }
 
                 return result;

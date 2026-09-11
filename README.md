@@ -21,7 +21,8 @@ If yuv444 is selected, will generate a preview clip, so it can still be seen in 
 - **Video Frame Scrubbing**: Load any frame from a video using the frame position slider
 - **Drag-and-Drop Support**: Drop images or videos directly onto the node
 - **Image Preview**: Built-in preview with click-to-enlarge modal for images and videos
-- **Mask Editor Support**: Right-click to open ComfyUI's MaskEditor, painted masks are displayed in the preview
+- **Mask Editor Support**: Painted masks can be drawn directly in-node and are displayed live in the preview
+- **Quick Crop + Flip Controls**: Optional in-node crop box plus Flip X / Flip Y toggles for fast framing adjustments without leaving the loader.  For more advanced controls use the Crop + node.
 - **IMAGE + MASK Output**: Outputs both IMAGE and MASK tensors, with alpha channel extraction from images
 
 ### Load Video+
