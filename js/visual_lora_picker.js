@@ -189,6 +189,24 @@ app.registerExtension({
                 border: 1px solid rgba(78, 90, 108, 0.72);
                 overflow: hidden;
                 box-sizing: border-box;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                padding: 4px;
+            `;
+
+            const portraitFrame = document.createElement("div");
+            portraitFrame.style.cssText = `
+                position: relative;
+                height: 100%;
+                width: auto;
+                max-width: 100%;
+                max-height: 100%;
+                aspect-ratio: 3 / 4;
+                border-radius: 8px;
+                overflow: hidden;
+                background: rgba(0, 0, 0, 0.5);
+                flex: 0 1 auto;
             `;
 
             const img = document.createElement("img");
@@ -199,7 +217,7 @@ app.registerExtension({
                 inset: 0;
                 width: 100%;
                 height: 100%;
-                object-fit: contain;
+                object-fit: cover;
                 object-position: center center;
                 display: block;
                 user-select: none;
@@ -223,8 +241,9 @@ app.registerExtension({
                 pointer-events: none;
             `;
 
-            previewBox.appendChild(img);
-            previewBox.appendChild(emptyLabel);
+            portraitFrame.appendChild(img);
+            portraitFrame.appendChild(emptyLabel);
+            previewBox.appendChild(portraitFrame);
 
             // Click catcher overlay: transparent, captures clicks to open the browser.
             const clickCatcher = document.createElement("div");
