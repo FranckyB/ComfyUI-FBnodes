@@ -9,12 +9,46 @@ import re
 
 def _coerce_bool(value):
     """Normalize booleans from UI/runtime values (bool/int/str)."""
+    if value is None:
+        return False
     if isinstance(value, bool):
         return value
     if isinstance(value, (int, float)):
         return value != 0
     if isinstance(value, str):
         return value.strip().lower() in {"1", "true", "yes", "on"}
+    if isinstance(value, (list, tuple, set, dict)):
+        return len(value) > 0
+
+    numel = getattr(value, "numel", None)
+    if callable(numel):
+        try:
+            return int(numel()) > 0
+        except Exception:
+            return True
+
+    size = getattr(value, "size", None)
+    if callable(size):
+        try:
+            sized = size()
+            if isinstance(sized, tuple):
+                total = 1
+                for dim in sized:
+                    total *= int(dim)
+                return total > 0
+        except Exception:
+            return True
+
+    shape = getattr(value, "shape", None)
+    if shape is not None:
+        try:
+            total = 1
+            for dim in shape:
+                total *= int(dim)
+            return total > 0
+        except Exception:
+            return True
+
     return bool(value)
 
 
@@ -120,7 +154,7 @@ class SwitchAnyBool:
     def VALIDATE_INPUTS(cls, **kwargs):
         return True
 
-    def check_lazy_status(self, condition, on_true=None, on_false=None):
+    def check_lazy_status(self, condition, on_true=None, on_false=None, **kwargs):
         condition = _coerce_bool(condition)
         if condition and on_true is None:
             return ["on_true"]
@@ -128,10 +162,39 @@ class SwitchAnyBool:
             return ["on_false"]
         return []
 
-    def switch(self, condition, on_true=None, on_false=None):
+    def switch(self, condition, on_true=None, on_false=None, **kwargs):
         condition = _coerce_bool(condition)
         # Explicitly force the inactive branch to None.
         on_true = on_true if condition else None
         on_false = on_false if not condition else None
         value = on_true if condition else on_false
         return (value, condition)
+
+
+class IfAny:
+    """Return a boolean based on whether an optional any-type input is truthy."""
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "optional": {
+                "value": ("*", {
+                    "forceInput": True,
+                    "tooltip": "Any optional input. Returns true for truthy values and false for empty, None, 0, or disconnected input."
+                }),
+            },
+        }
+
+    CATEGORY = "FBnodes"
+    DESCRIPTION = "Return a boolean based on whether an any-type input is present/truthy. Useful for checking whether an image, latent, text, or other value is connected."
+    RETURN_TYPES = ("BOOLEAN",)
+    RETURN_NAMES = ("bool",)
+    FUNCTION = "check"
+    OUTPUT_NODE = False
+
+    @classmethod
+    def VALIDATE_INPUTS(cls, **kwargs):
+        return True
+
+    def check(self, value=None):
+        return (_coerce_bool(value),)

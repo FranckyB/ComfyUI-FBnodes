@@ -2,7 +2,7 @@
 ComfyUI-FBnodes - Utility nodes for ComfyUI
 """
 
-__version__ = "1.4.6"
+__version__ = "1.4.7"
 __author__ = "François Beaudry"
 __license__ = "GPL-3.0"
 
@@ -14,6 +14,7 @@ from .nodes import (
     LoadAudioPlus,
     MonoToStereo,
     GetVideoComponentsPlus,
+    IfAny,
     CropImagePlus,
     LoraListPlus,
     LTXReview,
@@ -49,6 +50,7 @@ NODE_CLASS_MAPPINGS = {
     "LoadAudioPlus": LoadAudioPlus,
     "AudioMonoToStereo": MonoToStereo,
     "GetVideoComponentsPlus": GetVideoComponentsPlus,
+    "IfAny": IfAny,
     "CropImagePlus": CropImagePlus,
     "LoraListPlus": LoraListPlus,
     "LTXReview": LTXReview,
@@ -79,6 +81,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "LoadAudioPlus": "Load Audio+",
     "AudioMonoToStereo": "Audio Mono to Stereo",
     "GetVideoComponentsPlus": "Get Video Components+",
+    "IfAny": "If Any",
     "CropImagePlus": "Crop Image+",
     "LoraListPlus": "LoRA List+",
     "LTXReview": "LTX Review",

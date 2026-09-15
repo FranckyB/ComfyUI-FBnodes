@@ -76,6 +76,33 @@ def _exts_for_kind(kind: str) -> set:
     return IMAGE_EXTS | VIDEO_EXTS
 
 
+def _load_hidden_names(directory: str) -> set[str]:
+    hidden_names: set[str] = set()
+    hidden_file = os.path.join(directory, ".hidden")
+
+    try:
+        with open(hidden_file, "r", encoding="utf-8") as handle:
+            for raw_line in handle:
+                line = raw_line.strip()
+                if not line or line.startswith("#"):
+                    continue
+
+                normalized = line.replace("\\", "/")
+                while normalized.startswith("./"):
+                    normalized = normalized[2:]
+                normalized = normalized.strip("/")
+                if not normalized:
+                    continue
+
+                direct_child = normalized.split("/", 1)[0]
+                if direct_child and direct_child not in {".", ".."}:
+                    hidden_names.add(direct_child)
+    except OSError:
+        pass
+
+    return hidden_names
+
+
 def _probe_media_meta(file_path: str, ext: str) -> dict:
     """Probe media metadata (duration, width, height) for audio/video files."""
     if ext not in VIDEO_EXTS and ext not in AUDIO_EXTS:
@@ -152,6 +179,7 @@ async def path_browser_list(request):
 
         dirs = []
         files = []
+        hidden_names = _load_hidden_names(current)
 
         try:
             entries = list(os.scandir(current))
@@ -162,7 +190,7 @@ async def path_browser_list(request):
 
         for entry in entries:
             name = entry.name
-            if name.startswith("."):
+            if name.startswith(".") or name in hidden_names:
                 continue
             try:
                 if entry.is_dir(follow_symlinks=False):

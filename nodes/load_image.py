@@ -33,6 +33,33 @@ _media_meta_cache = {}
 _SOURCE_ANNOTATION_RE = re.compile(r"^(.*)\s+\[(input|output|temp)\]$")
 
 
+def _load_hidden_names(directory: str) -> set[str]:
+    hidden_names: set[str] = set()
+    hidden_file = os.path.join(directory, '.hidden')
+
+    try:
+        with open(hidden_file, 'r', encoding='utf-8') as handle:
+            for raw_line in handle:
+                line = raw_line.strip()
+                if not line or line.startswith('#'):
+                    continue
+
+                normalized = line.replace('\\', '/')
+                while normalized.startswith('./'):
+                    normalized = normalized[2:]
+                normalized = normalized.strip('/')
+                if not normalized:
+                    continue
+
+                direct_child = normalized.split('/', 1)[0]
+                if direct_child and direct_child not in {'.', '..'}:
+                    hidden_names.add(direct_child)
+    except OSError:
+        pass
+
+    return hidden_names
+
+
 def _strip_source_annotation(path: str) -> str:
     """Strip only Comfy source suffixes like ' [input]' from a selected path."""
     if not path:
@@ -506,7 +533,11 @@ async def list_files(request):
 
         if os.path.exists(base_dir):
             for root, dirs, filenames in os.walk(base_dir):
+                hidden_names = _load_hidden_names(root)
+                dirs[:] = [d for d in dirs if not d.startswith('.') and d not in hidden_names]
                 for filename in filenames:
+                    if filename.startswith('.') or filename in hidden_names:
+                        continue
                     ext = os.path.splitext(filename)[1].lower()
                     if ext in supported_extensions:
                         full_path = os.path.join(root, filename)

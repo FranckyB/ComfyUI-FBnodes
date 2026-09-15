@@ -2,7 +2,7 @@
 ComfyUI-FBnodes - nodes subpackage
 """
 from .save_video import SaveVideoPlus, LoadLatentFile, LoadLTXLatentFile, MonoToStereo, GetVideoComponentsPlus
-from .switch_any import SwitchAny, SwitchAnyBool
+from .switch_any import IfAny, SwitchAny, SwitchAnyBool
 from .apply_lora import ApplyLoraPlus, ApplyLTXLoraPlus
 from .load_image import LoadImagePlus
 from .visual_lora_picker import VisualLoraPicker

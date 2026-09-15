@@ -197,6 +197,16 @@ Universal switch with up to 10 named inputs. True lazy evaluation — only the s
 ### Switch Any (Boolean)
 Boolean switch — passes through `on_true` or `on_false` based on a condition toggle. Only the active branch is evaluated.
 
+- Uses a normal boolean `condition` input
+
+### If Any
+Returns a boolean based on whether an optional any-type input is truthy.
+
+- Accepts any connected value on `value`
+- Returns `false` for disconnected input, `None`, empty values, and `0`
+- Returns `true` for truthy connected values
+- Useful for checking whether an image, latent, text, or other value is present
+
 ### Apply LoRA+
 Apply a LORA_STACK (list of LoRA tuples) to a model and optional CLIP. Works with Prompt Manager Advanced's LoRA stack output.
 

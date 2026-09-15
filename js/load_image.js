@@ -50,6 +50,30 @@ function hideWidget(widget) {
     if (widget.inputEl) widget.inputEl.style.display = "none";
 }
 
+function forwardWheelToCanvas(element) {
+    if (!element) return;
+    element.addEventListener("wheel", (event) => {
+        const canvas = app.canvas?.canvas || document.querySelector("canvas.lgraphcanvas");
+        if (!canvas) return;
+
+        const forwarded = new WheelEvent("wheel", {
+            bubbles: true,
+            cancelable: true,
+            clientX: event.clientX,
+            clientY: event.clientY,
+            deltaX: event.deltaX,
+            deltaY: event.deltaY,
+            deltaZ: event.deltaZ,
+            deltaMode: event.deltaMode,
+            ctrlKey: event.ctrlKey,
+            shiftKey: event.shiftKey,
+            altKey: event.altKey,
+            metaKey: event.metaKey,
+        });
+        canvas.dispatchEvent(forwarded);
+    }, { passive: true });
+}
+
 function isNodeBypassed(node) {
     return !!(node?.mode === 4 || node?.flags?.bypass || node?.flags?.bypassed);
 }
@@ -961,6 +985,7 @@ function updatePreviewChrome(node) {
     const transformVisible = hasImage;
     const toolbarVisible = hasImage && maskState.enabled && !cropState.enabled;
     const cropInteractive = hasImage && cropState.enabled;
+    const browseClickable = !!node._browseFilesButton && !maskState.enabled && !cropState.enabled;
 
     dom.transformFrame.style.display = transformVisible ? "block" : "none";
     dom.toolbarFrame.style.display = toolbarVisible ? "block" : "none";
@@ -974,6 +999,7 @@ function updatePreviewChrome(node) {
     dom.canvas.style.pointerEvents = hasImage && maskState.enabled && !cropState.enabled ? "auto" : "none";
     dom.canvas.style.cursor = hasImage && maskState.enabled && !cropState.enabled ? "crosshair" : "default";
     dom.cropLayer.style.display = cropInteractive ? "block" : "none";
+    dom.preview.style.cursor = browseClickable ? "pointer" : "default";
     if (!(hasImage && maskState.enabled && !cropState.enabled)) {
         dom.cursor.style.display = "none";
     }
@@ -1940,6 +1966,25 @@ function createMaskDomUI(node, imageWidget, refreshImageOptionsForSource) {
         ]);
     });
 
+    preview.addEventListener("click", async (event) => {
+        if (event.button !== 0) return;
+        const maskState = ensureMaskState(node);
+        const cropState = ensureCropState(node);
+        if (maskState.enabled || cropState.enabled) return;
+
+        const browseButton = node._browseFilesButton;
+        if (!browseButton || typeof browseButton.callback !== "function") return;
+
+        event.preventDefault();
+        event.stopPropagation();
+
+        try {
+            await browseButton.callback();
+        } catch (err) {
+            console.error("[LoadImagePlus] Error opening browser from preview:", err);
+        }
+    });
+
     preview.append(imgWrap);
     previewFrame.append(preview);
     root.append(transformFrame, toolbarFrame, previewFrame, footer);
@@ -2215,6 +2260,7 @@ function createMaskDomUI(node, imageWidget, refreshImageOptionsForSource) {
         widget.element.style.pointerEvents = "auto";
         widget.element.style.background = "transparent";
         widget.element.style.overflow = "hidden";
+        forwardWheelToCanvas(widget.element);
 
         // The DOM preview overlay can block LiteGraph's node mouse tracking,
         // so mirror hover state explicitly from the DOM element.
@@ -2845,6 +2891,7 @@ app.registerExtension({
                 };
                 this.widgets.splice(imageWidgetIndex + 2, 0, browseButton);
                 Object.defineProperty(browseButton, "node", { value: node });
+                node._browseFilesButton = browseButton;
 
                 const maskButton = {
                     type: "button",
