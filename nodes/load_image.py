@@ -698,7 +698,7 @@ def load_image_as_tensor(file_path):
                 mask = np.array(i.convert('RGBA').getchannel('A')).astype(np.float32) / 255.0
                 mask = 1. - torch.from_numpy(mask)
             else:
-                mask = torch.zeros((64, 64), dtype=torch.float32, device="cpu")
+                mask = torch.ones((h, w), dtype=torch.float32, device="cpu")
 
             output_images.append(image_tensor)
             output_masks.append(mask.unsqueeze(0))
@@ -925,6 +925,16 @@ def get_placeholder_image_tensor():
     return torch.zeros((1, 64, 64, 3), dtype=torch.float32)
 
 
+def get_full_mask_tensor(image_tensor=None):
+    """Return a full-strength white mask matching the image batch/size."""
+    if image_tensor is not None and hasattr(image_tensor, 'shape') and len(image_tensor.shape) >= 4:
+        batch = int(image_tensor.shape[0])
+        height = int(image_tensor.shape[1])
+        width = int(image_tensor.shape[2])
+        return torch.ones((batch, height, width), dtype=torch.float32, device="cpu")
+    return torch.ones((1, 64, 64), dtype=torch.float32, device="cpu")
+
+
 # ---------------------------------------------------------------------------
 # Node class
 # ---------------------------------------------------------------------------
@@ -1076,7 +1086,7 @@ class LoadImagePlus:
             image_tensor = get_placeholder_image_tensor()
 
         if mask_tensor is None:
-            mask_tensor = torch.zeros((64, 64), dtype=torch.float32, device="cpu").unsqueeze(0)
+            mask_tensor = get_full_mask_tensor(image_tensor)
 
         if image_tensor is not None:
             _, height, width, _ = image_tensor.shape
@@ -1093,7 +1103,7 @@ class LoadImagePlus:
         )
 
         if is_blank and not preview_images:
-            preview_images = self._save_preview_images(image_tensor, mask_tensor)
+            preview_images = self._save_preview_images(image_tensor, None)
 
         return {
             "ui": {"images": preview_images},

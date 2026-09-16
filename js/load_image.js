@@ -53,6 +53,16 @@ function hideWidget(widget) {
 function forwardWheelToCanvas(element) {
     if (!element) return;
     element.addEventListener("wheel", (event) => {
+        if (event.defaultPrevented) return;
+
+        const target = event.target;
+        if (target instanceof Element) {
+            const interactiveTarget = target.closest(
+                'input, select, textarea, button, [contenteditable="true"], [data-fb-ignore-wheel-passthrough="1"]'
+            );
+            if (interactiveTarget) return;
+        }
+
         const canvas = app.canvas?.canvas || document.querySelector("canvas.lgraphcanvas");
         if (!canvas) return;
 
@@ -492,7 +502,7 @@ function showBlankPreview(node, requestId = null) {
             dom.previewFrame.style.display = "block";
             dom.footer.style.display = "block";
             dom.footerText.textContent = "\u2014";
-            updatePreviewChrome(node);
+                refreshPreviewLayout(node);
         }
 
         node.setDirtyCanvas(true, true);
@@ -715,6 +725,10 @@ function getFlipWidget(node, axis) {
     return node.widgets?.find(w => w.name === axis) || null;
 }
 
+function getWidgetStringValue(widget) {
+    return typeof widget?.value === "string" ? widget.value.trim() : "";
+}
+
 function normalizeBoolValue(value) {
     if (typeof value === "string") {
         const normalized = value.trim().toLowerCase();
@@ -872,7 +886,42 @@ function parseMaskData(value) {
 }
 
 function isMaskEnabled(node) {
-    return normalizeBoolValue(node?.properties?._maskEnabled);
+    const persisted = node?.properties?._maskEnabled;
+    if (typeof persisted !== "undefined") {
+        return normalizeBoolValue(persisted);
+    }
+    return getWidgetStringValue(getMaskDataWidget(node)).length > 0;
+}
+
+function restorePersistedMaskState(node) {
+    if (!node) return;
+    if (!node.properties) node.properties = {};
+
+    const widget = getMaskDataWidget(node);
+    const maskWidgetValue = getWidgetStringValue(widget);
+    const storedMaskValue = typeof node.properties._maskData === "string" ? node.properties._maskData.trim() : "";
+    const storedStrokeValue = typeof node.properties._maskStrokes === "string" ? node.properties._maskStrokes.trim() : "";
+    const persistedMaskValue = maskWidgetValue || storedMaskValue || storedStrokeValue;
+
+    if (widget && !maskWidgetValue && persistedMaskValue) {
+        widget.value = persistedMaskValue;
+    }
+    if (!storedMaskValue && persistedMaskValue) {
+        node.properties._maskData = persistedMaskValue;
+    }
+    if (typeof node.properties._maskEnabled === "undefined" && persistedMaskValue) {
+        node.properties._maskEnabled = true;
+    }
+}
+
+function restorePersistedCropState(node) {
+    if (!node) return;
+    if (!node.properties) node.properties = {};
+
+    const cropWidgetValue = getWidgetStringValue(getCropDataWidget(node));
+    if (!node.properties._cropData && cropWidgetValue) {
+        node.properties._cropData = cropWidgetValue;
+    }
 }
 
 function ensureMaskState(node) {
@@ -975,15 +1024,16 @@ function updateCropOverlay(node) {
     }
 }
 
-function updatePreviewChrome(node) {
+function updatePreviewChrome(node, options = {}) {
     const dom = node._maskDom;
     if (!dom) return;
 
     const hasImage = !!dom.hasImage;
     const maskState = ensureMaskState(node);
     const cropState = ensureCropState(node);
+    const maskControlsSuppressed = !!node._maskControlsSuppressed;
     const transformVisible = hasImage;
-    const toolbarVisible = hasImage && maskState.enabled && !cropState.enabled;
+    const toolbarVisible = hasImage && maskState.enabled && !cropState.enabled && !maskControlsSuppressed;
     const cropInteractive = hasImage && cropState.enabled;
     const browseClickable = !!node._browseFilesButton && !maskState.enabled && !cropState.enabled;
 
@@ -996,15 +1046,19 @@ function updatePreviewChrome(node) {
     if (toolbarVisible) topInset += MASK_TOOLBAR_FRAME_HEIGHT + MASK_SECTION_GAP;
     dom.previewFrame.style.top = `${topInset}px`;
 
-    dom.canvas.style.pointerEvents = hasImage && maskState.enabled && !cropState.enabled ? "auto" : "none";
-    dom.canvas.style.cursor = hasImage && maskState.enabled && !cropState.enabled ? "crosshair" : "default";
-    dom.cropLayer.style.display = cropInteractive ? "block" : "none";
+    dom.canvas.style.pointerEvents = hasImage && maskState.enabled && !cropState.enabled && !maskControlsSuppressed ? "auto" : "none";
+    dom.canvas.style.cursor = hasImage && maskState.enabled && !cropState.enabled && !maskControlsSuppressed ? "crosshair" : "default";
     dom.preview.style.cursor = browseClickable ? "pointer" : "default";
-    if (!(hasImage && maskState.enabled && !cropState.enabled)) {
+    if (!(hasImage && maskState.enabled && !cropState.enabled && !maskControlsSuppressed)) {
         dom.cursor.style.display = "none";
     }
 
     applyPreviewTransforms(node);
+    if (options.deferOverlay) {
+        dom.cropLayer.style.display = "none";
+        return;
+    }
+    dom.cropLayer.style.display = cropInteractive ? "block" : "none";
     updateCropOverlay(node);
 }
 
@@ -1031,16 +1085,42 @@ function buildMaskDataURL(node) {
     return canvas.toDataURL("image/png");
 }
 
+function buildSerializedMaskValue(node) {
+    const state = ensureMaskState(node);
+    if (!state.enabled) return "";
+
+    const strokePayload = JSON.stringify({
+        version: 1,
+        enabled: true,
+        brushSize: Math.max(1, Number(state.brushSize) || 64),
+        erasing: !!state.erasing,
+        strokes: Array.isArray(state.strokes) ? state.strokes : [],
+    });
+
+    const previewImage = getCurrentPreviewImage(node);
+    const hasPreviewImage = !!(previewImage?.naturalWidth || previewImage?.width);
+    if (hasPreviewImage) {
+        const rasterized = buildMaskDataURL(node);
+        if (rasterized) return rasterized;
+    }
+
+    return strokePayload;
+}
+
 function syncMaskData(node) {
     const state = ensureMaskState(node);
     // Backend consumes a rasterized PNG data URL (TrixLoader style). When Mask is
     // turned off we output NOTHING (empty value) so the node returns no mask,
     // while still keeping the strokes below so they come back if re-enabled.
+    // When Mask is on but blank, keep a tiny JSON sentinel so workflow reload can
+    // restore the enabled state even though there is no raster payload yet.
     const widget = getMaskDataWidget(node);
-    if (widget) widget.value = state.enabled ? buildMaskDataURL(node) : "";
+    const serializedValue = buildSerializedMaskValue(node);
+    if (widget) widget.value = serializedValue;
     // Editable vector strokes persist separately so undo/redo survives reloads.
     if (!node.properties) node.properties = {};
     node.properties._maskEnabled = !!state.enabled;
+    node.properties._maskData = serializedValue;
     node.properties._maskStrokes = state.strokes.length > 0 ? JSON.stringify({
         version: 1,
         brushSize: state.brushSize,
@@ -1415,7 +1495,6 @@ function updateMaskDomImage(node) {
     dom.previewFrame.style.display = "block";
     dom.footer.style.display = "block";
     updateMaskFooter(dom, node);
-    updatePreviewChrome(node);
     if (changed) resizeMaskNodeToFit(node);
 }
 
@@ -1464,9 +1543,62 @@ function setMaskDomVisible(node, editing) {
     if (!editing) dom.cursor.style.display = "none";
     updateMaskDomImage(node);
     renderMaskDomCanvas(node);
-    updatePreviewChrome(node);
+    refreshPreviewLayout(node);
     node.setDirtyCanvas(true, true);
     app.graph?.setDirtyCanvas(true, true);
+}
+
+function refreshPreviewLayout(node) {
+    const dom = node?._maskDom;
+    if (!dom) return;
+    updatePreviewChrome(node, { deferOverlay: true });
+    if (dom._layoutRefreshFrame) {
+        cancelAnimationFrame(dom._layoutRefreshFrame);
+    }
+    dom._layoutRefreshFrame = requestAnimationFrame(() => {
+        dom._layoutRefreshFrame = 0;
+        if (typeof dom.fitCanvas === "function") {
+            dom.fitCanvas();
+        }
+    });
+}
+
+const MASK_TO_CROP_DELAY_MS = 40;
+
+function transitionFromMaskToCrop(node, cropButton) {
+    const dom = node?._maskDom;
+    const cropState = ensureCropState(node);
+
+    if (!dom || cropState.enabled || !ensureMaskState(node).enabled) {
+        cropState.enabled = !cropState.enabled;
+        syncCropData(node);
+        refreshPreviewLayout(node);
+        if (cropButton) cropButton.name = cropState.enabled ? "Crop: On" : "Crop";
+        node.setDirtyCanvas(true, true);
+        app.graph?.setDirtyCanvas(true, true);
+        return;
+    }
+
+    node._maskControlsSuppressed = true;
+    updatePreviewChrome(node, { deferOverlay: true });
+    node.setDirtyCanvas(true, true);
+    app.graph?.setDirtyCanvas(true, true);
+
+    if (dom._maskToCropTimer) {
+        clearTimeout(dom._maskToCropTimer);
+    }
+    dom._maskToCropTimer = setTimeout(() => {
+        dom._maskToCropTimer = 0;
+        requestAnimationFrame(() => {
+            cropState.enabled = true;
+            node._maskControlsSuppressed = false;
+            syncCropData(node);
+            refreshPreviewLayout(node);
+            if (cropButton) cropButton.name = "Crop: On";
+            node.setDirtyCanvas(true, true);
+            app.graph?.setDirtyCanvas(true, true);
+        });
+    }, MASK_TO_CROP_DELAY_MS);
 }
 
 /**
@@ -2237,6 +2369,7 @@ function createMaskDomUI(node, imageWidget, refreshImageOptionsForSource) {
         slider, eraseBtn, flipXBtn, flipYBtn,
         hasImage: false,
         observer,
+        fitCanvas,
         // Aspect-fit height used ONCE to pick a sensible default node size on the
         // first image load. After that the widget just fills the user's node size.
         getDefaultHeight: (width) => {
@@ -2558,6 +2691,8 @@ app.registerExtension({
             if (cropDataWidget) {
                 hideWidget(cropDataWidget);
             }
+            restorePersistedMaskState(node);
+            restorePersistedCropState(node);
             const flipXWidget = this.widgets?.find(w => w.name === "flip_x");
             if (flipXWidget) {
                 hideWidget(flipXWidget);
@@ -2922,13 +3057,7 @@ app.registerExtension({
                     name: "Crop",
                     value: null,
                     callback: () => {
-                        const state = ensureCropState(node);
-                        state.enabled = !state.enabled;
-                        syncCropData(node);
-                        updatePreviewChrome(node);
-                        cropButton.name = state.enabled ? "Crop: On" : "Crop";
-                        node.setDirtyCanvas(true, true);
-                        app.graph?.setDirtyCanvas(true, true);
+                        transitionFromMaskToCrop(node, cropButton);
                     },
                     serialize: false
                 };
@@ -2948,12 +3077,15 @@ app.registerExtension({
                 const originalOnResize = node.onResize;
                 node.onResize = function(size) {
                     // Clamp minimums so the toolbar/image are never cut off. The
-                    // image itself re-fits via the preview ResizeObserver.
+                    // DOM layout settles after LiteGraph applies the new node size,
+                    // so schedule one shared refit for both crop and mask overlays.
                     if (size) {
                         if (size[0] < MASK_TOOLBAR_MIN_WIDTH) size[0] = MASK_TOOLBAR_MIN_WIDTH;
                         if (size[1] < MASK_MIN_HEIGHT) size[1] = MASK_MIN_HEIGHT;
                     }
-                    return originalOnResize ? originalOnResize.apply(this, arguments) : undefined;
+                    const resized = originalOnResize ? originalOnResize.apply(this, arguments) : undefined;
+                    refreshPreviewLayout(this);
+                    return resized;
                 };
 
                 node._isVideoFile = false;
@@ -3026,12 +3158,16 @@ app.registerExtension({
                 if (maskWidget && !maskWidget.value && node.properties?._maskData) {
                     maskWidget.value = node.properties._maskData;
                 }
+                restorePersistedMaskState(node);
                 ensureMaskState(node);
+                syncMaskData(node);
                 const cropWidget = getCropDataWidget(node);
                 if (cropWidget && !cropWidget.value && node.properties?._cropData) {
                     cropWidget.value = node.properties._cropData;
                 }
+                restorePersistedCropState(node);
                 ensureCropState(node);
+                syncCropData(node);
                 if (flipXWidget && typeof node.properties?.flip_x !== "undefined") {
                     flipXWidget.value = !!node.properties.flip_x;
                 }
@@ -3040,7 +3176,7 @@ app.registerExtension({
                 }
                 if (node._maskDom) {
                     applyPreviewTransforms(node);
-                    updatePreviewChrome(node);
+                    refreshPreviewLayout(node);
                 }
 
                 // Restore persisted display state from properties (survives tab switches)
