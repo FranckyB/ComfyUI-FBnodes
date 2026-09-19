@@ -18,6 +18,8 @@ from typing import List
 import folder_paths
 import server
 
+from ..py.lora_utils import LORA_EXTENSIONS
+
 
 _WIN = os.name == "nt"
 
@@ -72,6 +74,8 @@ def _exts_for_kind(kind: str) -> set:
         return AUDIO_EXTS | VIDEO_EXTS
     if kind == "all":
         return ALL_MEDIA_EXTS
+    if kind == "lora":
+        return set(LORA_EXTENSIONS)
     # Default "media" = images + videos.
     return IMAGE_EXTS | VIDEO_EXTS
 

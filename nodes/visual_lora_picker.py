@@ -8,6 +8,16 @@ import os
 
 import folder_paths
 import server
+import torch
+
+try:
+    import numpy as np
+    from PIL import Image
+    IMAGE_SUPPORT = True
+except ImportError:
+    IMAGE_SUPPORT = False
+    np = None
+    Image = None
 
 from ..py.lora_utils import LORA_EXTENSIONS
 
@@ -28,7 +38,7 @@ class VisualLoraPicker:
                     "STRING",
                     {
                         "default": "",
-                        "tooltip": "Selected LoRA thumbnail image path (same folder/name as the LoRA file).",
+                        "tooltip": "Selected LoRA file path. A matching thumbnail image with the same base name is shown when available.",
                     },
                 ),
                 "strength_model": (
@@ -47,13 +57,14 @@ class VisualLoraPicker:
             },
         }
 
-    RETURN_TYPES = ("LORA_STACK",)
-    RETURN_NAMES = ("lora_stack",)
+    RETURN_TYPES = ("LORA_STACK", "IMAGE")
+    RETURN_NAMES = ("lora_stack", "image")
     FUNCTION = "pick_lora"
     DESCRIPTION = (
-        "Pick a LoRA by selecting its thumbnail image. "
-        "The LoRA file is derived from the image path by swapping the extension. "
-        "Appends the LoRA to an incoming LORA_STACK or returns a new stack."
+        "Pick a LoRA from the loras folder. "
+        "If a thumbnail image with the same base name exists it is shown; otherwise a placeholder is used. "
+        "Appends the LoRA to an incoming LORA_STACK or returns a new stack, "
+        "plus the preview image as an IMAGE output."
     )
 
     @classmethod
@@ -61,18 +72,49 @@ class VisualLoraPicker:
         return True
 
     @staticmethod
-    def _derive_lora_path(image_path: str) -> tuple[str, bool]:
+    def _derive_lora_path(lora_path: str) -> tuple[str, bool]:
         """Find a LoRA file with the same base name as the selected image."""
-        if not image_path:
+        if not lora_path:
             return "", False
 
-        base, _ = os.path.splitext(image_path)
+        base, _ = os.path.splitext(lora_path)
         for ext in LORA_EXTENSIONS:
             candidate = base + ext
             if os.path.isfile(candidate):
                 return candidate, True
 
         return "", False
+
+    @staticmethod
+    def _find_preview_image(lora_path: str) -> str:
+        """Return the first matching preview image for a LoRA path, or empty string."""
+        if not lora_path:
+            return ""
+
+        base, _ = os.path.splitext(lora_path)
+        for ext in VisualLoraPicker.IMAGE_EXTENSIONS:
+            candidate = base + ext
+            if os.path.isfile(candidate):
+                return candidate
+
+        return ""
+
+    @staticmethod
+    def _load_image_tensor(image_path: str):
+        """Load an image file as a ComfyUI IMAGE tensor."""
+        if not IMAGE_SUPPORT:
+            raise RuntimeError("PIL/numpy not available, cannot load preview image")
+
+        img = Image.open(image_path)
+        if img.mode != "RGB":
+            img = img.convert("RGB")
+        img_array = np.array(img).astype(np.float32) / 255.0
+        return torch.from_numpy(img_array).unsqueeze(0)
+
+    @staticmethod
+    def _blank_image_tensor():
+        """Return a small black image tensor for empty selections."""
+        return torch.zeros((1, 64, 64, 3), dtype=torch.float32)
 
     @staticmethod
     def _relative_lora_path(abs_lora_path: str) -> str:
@@ -107,13 +149,20 @@ class VisualLoraPicker:
                         model_strength = float(item[1]) if len(item) >= 2 else 1.0
                         clip_strength = float(item[2]) if len(item) >= 3 else 0.0
                         stack.append((path, model_strength, clip_strength))
-            return (stack,)
+            return (stack, self._blank_image_tensor())
 
         lora_path, found = self._derive_lora_path(image)
         if not found:
             raise FileNotFoundError(f"Matching LoRA not found for image: {image}")
 
         lora_path = self._relative_lora_path(lora_path)
+
+        preview_path = self._find_preview_image(lora_path)
+        image_tensor = (
+            self._load_image_tensor(preview_path)
+            if preview_path
+            else self._blank_image_tensor()
+        )
 
         stack = []
         if lora_stack is not None and isinstance(lora_stack, (list, tuple)):
@@ -127,7 +176,7 @@ class VisualLoraPicker:
                     stack.append((path, model_strength, clip_strength))
 
         stack.append((lora_path, float(strength_model), float(strength_model)))
-        return (stack,)
+        return (stack, image_tensor)
 
 
 NODE_CLASS_MAPPINGS = {"VisualLoraPicker": VisualLoraPicker}

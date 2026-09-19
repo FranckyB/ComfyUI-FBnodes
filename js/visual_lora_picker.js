@@ -13,6 +13,30 @@ import { createFileBrowserModal } from "./file_browser.js";
 import { mediaFileUrl } from "./path_browser.js";
 
 const PLACEHOLDER_IMAGE_PATH = new URL("./placeholder.png", import.meta.url).href;
+const LORA_FILE_EXTS = [".safetensors", ".ckpt", ".pt", ".bin", ".pth"];
+const PREVIEW_IMAGE_EXTS = [".png", ".jpg", ".jpeg", ".webp"];
+
+async function resolvePreviewImage(loraPath) {
+    if (!loraPath || loraPath === "(none)") return "";
+    const lower = loraPath.toLowerCase();
+    const loraExt = LORA_FILE_EXTS.find((e) => lower.endsWith(e));
+    const base = loraExt ? loraPath.slice(0, -loraExt.length) : loraPath.replace(/\.[^.]+$/, "");
+    for (const ext of PREVIEW_IMAGE_EXTS) {
+        const candidate = base + ext;
+        try {
+            await new Promise((resolve, reject) => {
+                const probe = new Image();
+                probe.onload = () => resolve(true);
+                probe.onerror = () => reject(new Error("not found"));
+                probe.src = isAbsolutePath(candidate) ? mediaFileUrl(candidate) : "";
+            });
+            return candidate;
+        } catch {
+            // try next extension
+        }
+    }
+    return "";
+}
 
 function isAbsolutePath(value) {
     if (!value) return false;
@@ -123,11 +147,11 @@ async function resolveLoraDir(preferredDir) {
     return getLorasRoot();
 }
 
-async function listImagesInFolder(folderPath) {
+async function listLorasInFolder(folderPath) {
     if (!folderPath) return [];
     try {
         const resp = await api.fetchApi(
-            `/fbnodes/path-browser/list?path=${encodeURIComponent(folderPath)}&kind=image`
+            `/fbnodes/path-browser/list?path=${encodeURIComponent(folderPath)}&kind=lora`
         );
         if (!resp.ok) return [];
         const data = await resp.json();
@@ -136,7 +160,7 @@ async function listImagesInFolder(folderPath) {
             .map((f) => (typeof f === "string" ? f : f?.path))
             .filter(Boolean);
     } catch (err) {
-        console.warn("[VisualLoraPicker] Could not list images:", err);
+        console.warn("[VisualLoraPicker] Could not list LoRAs:", err);
         return [];
     }
 }
@@ -432,8 +456,8 @@ app.registerExtension({
                 node.setDirtyCanvas(true, true);
             };
 
-            const loadPreview = (imagePath) => {
-                if (!imagePath || imagePath === "(none)") {
+            const loadPreview = async (loraPath) => {
+                if (!loraPath || loraPath === "(none)") {
                     img.removeAttribute("src");
                     img.style.display = "none";
                     emptyLabel.style.display = "flex";
@@ -441,18 +465,21 @@ app.registerExtension({
                 }
                 img.style.display = "block";
                 emptyLabel.style.display = "none";
-                img.src = `${buildPreviewUrl(imagePath)}&${Date.now()}`;
+                const previewImage = await resolvePreviewImage(loraPath);
+                img.src = previewImage
+                    ? `${buildPreviewUrl(previewImage)}&${Date.now()}`
+                    : PLACEHOLDER_IMAGE_PATH;
             };
 
             const refreshPickerOptions = async (folderPath, preferredValue = null) => {
                 if (!folderPath) return;
-                const images = await listImagesInFolder(folderPath);
+                const loras = await listLorasInFolder(folderPath);
 
                 const labels = ["(none)"];
                 const map = { "(none)": "(none)" };
                 const used = new Set(["(none)"]);
 
-                for (const absPath of images) {
+                for (const absPath of loras) {
                     const base = basenameForDisplay(absPath) || absPath;
                     let label = base;
                     let idx = 2;
@@ -500,8 +527,10 @@ app.registerExtension({
                             enableNavigation: true,
                             initialPath: initialPath,
                             selectedAbsPath: current,
-                            navKind: "image",
-                            allowedTypes: ["image"],
+                            navKind: "lora",
+                            allowedTypes: ["other"],
+                            filterTypeOptions: ["all", "other"],
+                            defaultFilter: "other",
                         }
                     );
                 },

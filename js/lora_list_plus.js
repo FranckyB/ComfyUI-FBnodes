@@ -1,11 +1,23 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 
-const SETTING_DEFAULT_PATH = "FBnodes.LoraListDefaultPath";
+const SETTING_CUSTOM_PATH = "FBnodes.LoraListDefaultPath";
 
 function getPreferredPath() {
-    const pref = app.ui?.settings?.getSettingValue(SETTING_DEFAULT_PATH) || "";
+    const pref = app.ui?.settings?.getSettingValue(SETTING_CUSTOM_PATH) || "";
     return typeof pref === "string" ? pref.trim() : "";
+}
+
+function getComfyRoot(roots) {
+    return Array.isArray(roots) ? String(roots[0] || "").trim() : "";
+}
+
+async function resolveCustomPath(roots) {
+    const preferredPath = getPreferredPath();
+    if (preferredPath && await isValidBrowserPath(preferredPath)) {
+        return preferredPath;
+    }
+    return getComfyRoot(roots);
 }
 
 async function getBrowserRoots() {
@@ -36,7 +48,7 @@ async function resolveInitialPath(savedPath) {
     const trimmedSaved = String(savedPath || "").trim();
     const pref = getPreferredPath();
     const roots = await getBrowserRoots();
-    const comfyRoot = roots[0] || "";
+    const comfyRoot = getComfyRoot(roots);
 
     // Prefer per-node path, but only when it still exists.
     if (trimmedSaved && await isValidBrowserPath(trimmedSaved)) {
@@ -161,8 +173,20 @@ function openLoraBrowserModal(initialPath, onDone) {
     refreshBtn.textContent = "Refresh";
     refreshBtn.style.cssText = "background:#2e3b4a;border:1px solid rgba(255,255,255,0.2);border-radius:6px;color:#dce6f2;padding:6px 10px;cursor:pointer;";
 
+    const comfyBtn = document.createElement("button");
+    comfyBtn.textContent = "Comfy";
+    comfyBtn.title = "Jump to ComfyUI's LoRA folder";
+    comfyBtn.style.cssText = "background:#2e3b4a;border:1px solid rgba(255,255,255,0.2);border-radius:6px;color:#dce6f2;padding:6px 10px;cursor:pointer;";
+
+    const customBtn = document.createElement("button");
+    customBtn.textContent = "Custom";
+    customBtn.title = "Jump to the Custom LoRA List Path preference";
+    customBtn.style.cssText = "background:#2e3b4a;border:1px solid rgba(255,255,255,0.2);border-radius:6px;color:#dce6f2;padding:6px 10px;cursor:pointer;";
+
     controls.appendChild(upBtn);
     controls.appendChild(refreshBtn);
+    controls.appendChild(comfyBtn);
+    controls.appendChild(customBtn);
     pathWrap.appendChild(rootPathInput);
     pathWrap.appendChild(pathDropdownBtn);
     pathWrap.appendChild(pathDropdown);
@@ -230,7 +254,7 @@ function openLoraBrowserModal(initialPath, onDone) {
 
     function renderPathDropdown() {
         const preferredPath = getPreferredPath();
-        const comfyRoot = roots[0] || "";
+        const comfyRoot = getComfyRoot(roots);
 
         pathDropdown.innerHTML = "";
         if (!pathSuggestions.length) {
@@ -246,7 +270,7 @@ function openLoraBrowserModal(initialPath, onDone) {
             item.type = "button";
 
             let tag = "";
-            if (path === preferredPath) tag = "Preferred";
+            if (path === preferredPath) tag = "Custom";
             else if (path === comfyRoot) tag = "Comfy LoRA";
 
             item.style.cssText = "width:100%;padding:8px 10px;border:none;background:transparent;color:#dce6f2;font-size:12px;text-align:left;display:flex;align-items:center;justify-content:space-between;gap:10px;cursor:pointer;";
@@ -345,7 +369,7 @@ function openLoraBrowserModal(initialPath, onDone) {
 
     function renderRootsSelect() {
         const preferredPath = getPreferredPath();
-        const comfyRoot = roots[0] || "";
+        const comfyRoot = getComfyRoot(roots);
 
         const suggestions = [];
         const addSuggestion = (value) => {
@@ -511,6 +535,14 @@ function openLoraBrowserModal(initialPath, onDone) {
     };
 
     refreshBtn.onclick = () => loadPath(currentPath);
+    comfyBtn.onclick = () => {
+        const comfyRoot = getComfyRoot(roots);
+        if (comfyRoot) loadPath(comfyRoot);
+    };
+    customBtn.onclick = async () => {
+        const targetPath = await resolveCustomPath(roots);
+        if (targetPath) loadPath(targetPath);
+    };
 
     closeBtn.onclick = cleanup;
     cancelBtn.onclick = cleanup;
@@ -913,10 +945,10 @@ app.registerExtension({
     name: "FBnodes.LoraListPlus",
     settings: [
         {
-            id: SETTING_DEFAULT_PATH,
-            category: ["FBnodes", "2. LoRA List", "1. Default LoRA Path"],
-            name: "Default LoRA List Path",
-            tooltip: "Starting folder for the LoRA browser. Leave empty to use ComfyUI's default LoRA folder.",
+            id: SETTING_CUSTOM_PATH,
+            category: ["FBnodes", "2. LoRA List", "1. Custom LoRA Path"],
+            name: "Custom LoRA List Path",
+            tooltip: "Optional custom folder for the LoRA browser. Leave empty to use ComfyUI's default LoRA folder.",
             type: "text",
             defaultValue: "",
         },

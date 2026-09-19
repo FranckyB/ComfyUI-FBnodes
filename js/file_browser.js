@@ -135,7 +135,7 @@ function normalizeAllowedTypes(types) {
 }
 
 function normalizeFilterTypeOptions(types, fallback) {
-    const allowed = ['all', 'image', 'video', 'audio', 'json'];
+    const allowed = ['all', 'image', 'video', 'audio', 'json', 'other'];
     if (!Array.isArray(types) || types.length === 0) return fallback;
 
     const normalized = [];
@@ -978,6 +978,7 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder, 
         video: 'Videos',
         audio: 'Audio',
         json: 'JSON',
+        other: 'Other Files',
     };
     const typeFilterOptions = filterValues
         .map(value => `<option value="${value}">${filterLabels[value] || value}</option>`)
@@ -1917,11 +1918,44 @@ function createThumbnailItem(fileEntryInput, currentFile, onFileSelect, overlay,
         img.style.cssText = 'max-width: 100%; max-height: 100%; object-fit: contain;';
         preview.appendChild(img);
     } else {
-        // Use placeholder for unknown types
-        const img = document.createElement('img');
-        img.src = new URL("./placeholder.png", import.meta.url).href;
-        img.style.cssText = 'max-width: 100%; max-height: 100%; object-fit: contain;';
-        preview.appendChild(img);
+        // For LoRA files, try to show a matching preview image with the same base name.
+        const loraExts = ['safetensors', 'ckpt', 'pt', 'bin', 'pth'];
+        if (loraExts.includes(ext)) {
+            const base = filename.substring(0, filename.length - ext.length - 1);
+            const img = document.createElement('img');
+            img.style.cssText = 'max-width: 100%; max-height: 100%; object-fit: contain;';
+            const placeholder = new URL('./placeholder.png', import.meta.url).href;
+
+            const tryNextImage = (idx) => {
+                if (idx >= imageExts.length) {
+                    img.src = placeholder;
+                    return;
+                }
+                const candidate = `${base}.${imageExts[idx]}`;
+                if (isAbsBrowserPath(candidate)) {
+                    img.src = mediaFileUrl(candidate);
+                } else {
+                    let subfolder = '';
+                    let basename = candidate;
+                    if (candidate.includes('/')) {
+                        const lastSlash = candidate.lastIndexOf('/');
+                        subfolder = candidate.substring(0, lastSlash);
+                        basename = candidate.substring(lastSlash + 1);
+                    }
+                    img.src = `/view?filename=${encodeURIComponent(basename)}&type=${currentSourceFolder}&subfolder=${encodeURIComponent(subfolder)}`;
+                }
+                img.onerror = () => tryNextImage(idx + 1);
+            };
+
+            tryNextImage(0);
+            preview.appendChild(img);
+        } else {
+            // Use placeholder for unknown types
+            const img = document.createElement('img');
+            img.src = new URL('./placeholder.png', import.meta.url).href;
+            img.style.cssText = 'max-width: 100%; max-height: 100%; object-fit: contain;';
+            preview.appendChild(img);
+        }
     }
 
     item.appendChild(preview);
