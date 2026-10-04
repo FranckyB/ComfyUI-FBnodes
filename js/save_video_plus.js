@@ -147,6 +147,13 @@ function setResultData(node, message) {
         node.properties._lastSavedVideoPath = savedPath;
     }
 
+    const preview = firstValue(payload?.images);
+    node.properties._lastVideoPreview = preview?.filename ? {
+        filename: preview.filename,
+        subfolder: preview.subfolder || "",
+        type: preview.type || "output",
+    } : null;
+
     const needsExternal = firstValue(payload?.needs_external_player);
     if (typeof needsExternal !== "undefined") {
         node.properties._needsExternalPlayer = normalizeBool(needsExternal);
@@ -175,6 +182,7 @@ function persistLastResultWidget(node) {
         widget.value = JSON.stringify({
             path,
             needsExternal: !!node.properties?._needsExternalPlayer,
+            preview: node.properties?._lastVideoPreview,
         });
     } else {
         widget.value = "";
@@ -197,6 +205,7 @@ function restoreLastResultFromWidget(node) {
     if (!node.properties) node.properties = {};
     node.properties._lastSavedVideoPath = parsed.path;
     node.properties._needsExternalPlayer = !!parsed.needsExternal;
+    node.properties._lastVideoPreview = parsed.preview || null;
     updateDisplayState(node);
     return true;
 }
@@ -223,9 +232,15 @@ function ensureLastResultWidget(node) {
     else setTimeout(hideInput, 0);
 }
 
-// Builds the /view URL used to re-render the video element from the persisted
-// saved path. Absolute and output-rooted paths both resolve via type=output.
-function buildSavedVideoViewUrl(savedPath) {
+function buildSavedVideoViewUrl(savedPath, preview) {
+    if (preview?.filename) {
+        const params = new URLSearchParams({
+            filename: preview.filename,
+            type: preview.type || "output",
+        });
+        if (preview.subfolder) params.set("subfolder", preview.subfolder);
+        return `/view?${params}`;
+    }
     if (!savedPath) return null;
     const normalized = String(savedPath).replace(/\\/g, "/");
     const lastSlash = normalized.lastIndexOf("/");
@@ -245,7 +260,7 @@ function ensureRestoredVideoPreview(node) {
     if (!container) return false;
     if (container.querySelector("video")) return true;
 
-    const url = buildSavedVideoViewUrl(node.properties?._lastSavedVideoPath);
+    const url = buildSavedVideoViewUrl(node.properties?._lastSavedVideoPath, node.properties?._lastVideoPreview);
     if (!url) return false;
 
     ensurePreviewFrame(container);
@@ -284,7 +299,7 @@ function syncRestoredPreviewUrl(node) {
     const vid = container?.querySelector("video") || null;
     if (!vid || !container?._previewMediaHost || vid.parentElement !== container._previewMediaHost) return;
 
-    const url = buildSavedVideoViewUrl(node.properties?._lastSavedVideoPath);
+    const url = buildSavedVideoViewUrl(node.properties?._lastSavedVideoPath, node.properties?._lastVideoPreview);
     if (!url || url === node._saveVideoRestoredUrl) return;
 
     try { vid.pause(); } catch { /* ignore */ }

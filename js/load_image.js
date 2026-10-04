@@ -2122,6 +2122,7 @@ function createMaskDomUI(node, imageWidget, refreshImageOptionsForSource) {
     root.append(transformFrame, toolbarFrame, previewFrame, footer);
 
     const fitCanvas = () => {
+        updatePreviewChrome(node, { deferOverlay: true });
         const naturalW = img.naturalWidth || 1;
         const naturalH = img.naturalHeight || 1;
         // Use layout box (clientWidth/Height) which is NOT affected by LiteGraph
