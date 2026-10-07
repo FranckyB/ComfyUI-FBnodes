@@ -14,6 +14,17 @@ If yuv444 is selected, will generate a preview clip, so it can still be seen in 
 - **Preview mode**: Toggle save off for fast preview-only encoding
 - **Latent saving**: Optionally save the latent alongside the video for easy re-generation
 
+### Save Image+
+Save images with date-token filenames, output/temp switching, and an optional Compare image input. Settings are hidden by default under **Controls**, matching Save Video+.
+
+- **PNG**: 8-bit (default) or 16-bit, sRGB input
+- **EXR**: 16-bit or 32-bit float; sRGB, HDR (HLG), or linear input. Files are stored scene-linear.
+- **AVIF**: Auto, 8-bit YUV420, or 10-bit YUV420; sRGB, HDR (HLG), or HDR PQ input, with CRF quality control. Saves one still image per batch item; RGBA inputs have alpha stripped for saving and preview, without compositing.
+- **Metadata**: Uses ComfyUI's advanced image encoders and metadata writers for the new formats. Requires a ComfyUI version with Save Image (Advanced); the original 8-bit PNG path remains available on older versions.
+- **Preview**: EXR and AVIF use separate 8-bit PNG input-tensor previews in temp. These are not color-managed HDR previews and do not alter the saved files.
+- **Workflow compatibility**: Existing filename/save widget positions and PNG defaults are unchanged. New settings are appended, with the nonserialized Controls toggle last.
+- **EXR workflow import**: Drop an EXR containing `workflow` or `prompt` header metadata onto ComfyUI to restore it through the normal JSON importer. FBnodes adds this reader because the core file-drop metadata reader does not currently handle EXR.
+
 ### Load Image+:
 - **Image/Video Screenshot Loading**: Image loader, based on Prompt Extractor from [Prompt Manager](https://github.com/FranckyB/ComfyUI-Prompt-Manager)
 - **Input/Output Folder Switching**: Toggle between browsing your input or output folder directly from the node

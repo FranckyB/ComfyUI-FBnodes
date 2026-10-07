@@ -1,36 +1,69 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 
-function applyJpgQualityVisibility(node) {
-    const formatWidget = node.widgets?.find((w) => w?.name === "format");
-    const qualityWidget = node.widgets?.find((w) => w?.name === "jpg_quality");
-    if (!formatWidget || !qualityWidget) {
-        return;
-    }
+const CONTROLS_TOGGLE_WIDGET_KEY = "__fb_save_image_controls_toggle";
+const CONTROLS_EXPANDED_PROP = "_saveImageControlsExpanded";
+const IMAGE_FORMAT_OPTIONS = {
+    png: { bit_depth: ["8-bit", "16-bit"], input_color_space: ["sRGB"] },
+    exr: { bit_depth: ["16-bit float", "32-bit float"], input_color_space: ["sRGB", "HDR", "linear"] },
+    avif: { bit_depth: ["auto", "8-bit YUV420", "10-bit YUV420"], input_color_space: ["sRGB", "HDR", "HDR PQ"] },
+};
 
-    const shouldHide = String(formatWidget.value || "").toLowerCase() !== "jpg";
+function getSettingsWidgets(node) {
+    return (node.widgets || []).filter(widget => widget.name !== CONTROLS_TOGGLE_WIDGET_KEY);
+}
 
-    if (!qualityWidget._fbnodesOriginalComputeSize && typeof qualityWidget.computeSize === "function") {
-        qualityWidget._fbnodesOriginalComputeSize = qualityWidget.computeSize;
-    }
+function getSettingsHeight(node) {
+    return getSettingsWidgets(node).reduce((height, widget) => height + (widget.hidden ? 0 : getWidgetHeight(node, widget) + 4), 0);
+}
 
-    qualityWidget.hidden = shouldHide;
-
-    if (shouldHide) {
-        qualityWidget.computeSize = () => [0, -4];
-        if (qualityWidget.inputEl) {
-            qualityWidget.inputEl.style.display = "none";
+function applySaveImageControls(node, { skipSize = false } = {}) {
+    const previousHeight = getSettingsHeight(node);
+    const format = node.widgets?.find(widget => widget.name === "format")?.value || "png";
+    const options = IMAGE_FORMAT_OPTIONS[format];
+    if (options) {
+        for (const name of ["bit_depth", "input_color_space"]) {
+            const widget = node.widgets?.find(widget => widget.name === name);
+            if (!widget) continue;
+            widget.options.values = [...options[name]];
+            if (!options[name].includes(widget.value)) widget.value = options[name][0];
         }
-    } else {
-        if (qualityWidget._fbnodesOriginalComputeSize) {
-            qualityWidget.computeSize = qualityWidget._fbnodesOriginalComputeSize;
-        }
-        if (qualityWidget.inputEl) {
-            qualityWidget.inputEl.style.display = "";
-        }
     }
-
+    const expanded = !!node.properties?.[CONTROLS_EXPANDED_PROP];
+    for (const widget of getSettingsWidgets(node)) {
+        if (!widget._fbSaveImageSizeSaved) {
+            widget._fbSaveImageComputeSize = widget.computeSize;
+            widget._fbSaveImageSizeSaved = true;
+        }
+        const hidden = !expanded || (widget.name === "crf" && format !== "avif");
+        widget.hidden = hidden;
+        if (hidden) widget.computeSize = () => [0, -4];
+        else if (widget._fbSaveImageComputeSize) widget.computeSize = widget._fbSaveImageComputeSize;
+        else delete widget.computeSize;
+        if (widget.inputEl) widget.inputEl.style.display = hidden ? "none" : "";
+    }
+    const toggle = node.widgets?.find(widget => widget.name === CONTROLS_TOGGLE_WIDGET_KEY);
+    if (toggle) toggle.label = expanded ? "\u25B2 Controls" : "\u25B6 Controls";
+    if (!skipSize) {
+        const height = Math.max(1, Number(node.size?.[1] || 240) + getSettingsHeight(node) - previousHeight);
+        node.setSize?.([Number(node.size?.[0] || 320), height]);
+    }
     node.setDirtyCanvas?.(true, true);
+}
+
+function ensureControlsToggleWidget(node, { skipSize = false } = {}) {
+    node.properties ||= {};
+    if (node.properties[CONTROLS_EXPANDED_PROP] === undefined) node.properties[CONTROLS_EXPANDED_PROP] = false;
+    let toggle = node.widgets?.find(widget => widget.name === CONTROLS_TOGGLE_WIDGET_KEY);
+    if (!toggle) {
+        toggle = node.addWidget("button", CONTROLS_TOGGLE_WIDGET_KEY, null, () => {
+            node.properties[CONTROLS_EXPANDED_PROP] = !node.properties[CONTROLS_EXPANDED_PROP];
+            applySaveImageControls(node);
+            ensureMinDisplaySize(node);
+        }, { serialize: false });
+        toggle.serialize = false;
+    }
+    applySaveImageControls(node, { skipSize });
 }
 
 function imageInfoToUrl(imageInfo) {
@@ -38,9 +71,10 @@ function imageInfoToUrl(imageInfo) {
         return "";
     }
 
-    let url = `/view?filename=${encodeURIComponent(imageInfo.filename)}&type=${encodeURIComponent(imageInfo.type || "output")}`;
-    if (imageInfo.subfolder) {
-        url += `&subfolder=${encodeURIComponent(imageInfo.subfolder)}`;
+    const preview = imageInfo.preview || imageInfo;
+    let url = `/view?filename=${encodeURIComponent(preview.filename)}&type=${encodeURIComponent(preview.type || "output")}`;
+    if (preview.subfolder) {
+        url += `&subfolder=${encodeURIComponent(preview.subfolder)}`;
     }
     return url;
 }
@@ -186,6 +220,7 @@ function getContentStartY(node) {
     let y = titleH + 6;
 
     for (const widget of node.widgets || []) {
+        if (widget.hidden) continue;
         y += getWidgetHeight(node, widget) + 4;
     }
 
@@ -1174,20 +1209,22 @@ app.registerExtension({
         const onNodeCreated = nodeType.prototype.onNodeCreated;
         nodeType.prototype.onNodeCreated = function () {
             const result = onNodeCreated?.apply(this, arguments);
+            const node = this;
 
             const formatWidget = this.widgets?.find((w) => w?.name === "format");
             if (formatWidget && !formatWidget._fbnodesSaveImagePlusWrapped) {
                 const originalCallback = formatWidget.callback;
                 formatWidget.callback = function () {
                     originalCallback?.apply(this, arguments);
-                    applyJpgQualityVisibility(this.node);
+                    applySaveImageControls(node);
+                    ensureMinDisplaySize(node);
                 };
                 formatWidget._fbnodesSaveImagePlusWrapped = true;
             }
 
             ensureCompareState(this);
             this.imgs = [];
-            applyJpgQualityVisibility(this);
+            ensureControlsToggleWidget(this);
             installKeyNavigation();
             installExecutedSync();
             restoreFromExecutedCache(this);
@@ -1213,7 +1250,7 @@ app.registerExtension({
             restoreCompareData(this, state);
 
             this.imgs = [];
-            applyJpgQualityVisibility(this);
+            ensureControlsToggleWidget(this, { skipSize: true });
             restoreFromExecutedCache(this);
             ensureMinDisplaySize(this);
             return result;

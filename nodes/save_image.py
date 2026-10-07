@@ -1,6 +1,6 @@
 """
 Save Image+ Node
-Save IMAGE tensors as PNG with date-token path expansion.
+Save IMAGE tensors with date-token path expansion and advanced image formats.
 """
 
 from __future__ import annotations
@@ -16,6 +16,18 @@ from PIL.PngImagePlugin import PngInfo
 
 import folder_paths
 from comfy.cli_args import args
+
+try:
+    from comfy_extras.nodes_images import _encode_image, _save_avif, inject_exr_metadata, inject_png_metadata
+except ImportError:
+    _encode_image = _save_avif = inject_exr_metadata = inject_png_metadata = None
+
+
+IMAGE_FORMAT_OPTIONS = {
+    "png": {"bit_depth": ["8-bit", "16-bit"], "input_color_space": ["sRGB"]},
+    "exr": {"bit_depth": ["16-bit float", "32-bit float"], "input_color_space": ["sRGB", "HDR", "linear"]},
+    "avif": {"bit_depth": ["auto", "8-bit YUV420", "10-bit YUV420"], "input_color_space": ["sRGB", "HDR", "HDR PQ"]},
+}
 
 
 def _expand_date_format(text: str) -> str:
@@ -63,6 +75,16 @@ class SaveImagePlus:
             },
             "optional": {
                 "Compare": ("IMAGE",),
+                "format": (["png", "exr", "avif"], {"default": "png"}),
+                "bit_depth": (
+                    ["8-bit", "16-bit", "16-bit float", "32-bit float", "auto", "8-bit YUV420", "10-bit YUV420"],
+                    {"default": "8-bit"},
+                ),
+                "input_color_space": (
+                    ["sRGB", "HDR", "linear", "HDR PQ"],
+                    {"default": "sRGB", "tooltip": "Input tensor color space. EXR is stored scene-linear; AVIF HDR uses BT.2020."},
+                ),
+                "crf": ("INT", {"default": 18, "min": 1, "max": 63, "tooltip": "AVIF quality. Lower values give higher quality and larger files."}),
             },
             "hidden": {
                 "prompt": "PROMPT",
@@ -75,14 +97,21 @@ class SaveImagePlus:
     FUNCTION = "save_images"
     OUTPUT_NODE = True
     CATEGORY = "FBnodes"
-    DESCRIPTION = "Save images as PNG with date-token filename support."
+    DESCRIPTION = "Save PNG, EXR, or AVIF images with bit-depth, input color-space, and date-token filename support."
 
-    def save_images(self, images, filename_prefix, save=True, Compare=None, prompt=None, extra_pnginfo=None):
+    def save_images(self, images, filename_prefix, save=True, Compare=None, prompt=None, extra_pnginfo=None,
+                    format="png", bit_depth="8-bit", input_color_space="sRGB", crf=18):
         if images is None or len(images) == 0:
             return ("",)
 
+        options = IMAGE_FORMAT_OPTIONS.get(format)
+        if options is None or bit_depth not in options["bit_depth"] or input_color_space not in options["input_color_space"]:
+            raise ValueError(f"Unsupported image settings: {format}, {bit_depth}, {input_color_space}")
+        if (format != "png" or bit_depth != "8-bit") and _encode_image is None:
+            raise RuntimeError("Advanced image saving requires a ComfyUI version with Save Image (Advanced).")
+
         filename_prefix = _expand_date_format(filename_prefix)
-        ext = "png"
+        ext = format
 
         first = images[0]
         height = first.shape[0]
@@ -128,8 +157,8 @@ class SaveImagePlus:
         last_file = ""
 
         for image in images:
-            pil_image = _tensor_to_pil(image)
-
+            if format == "avif" and len(image.shape) == 3 and image.shape[-1] == 4:
+                image = image[..., :3]
             if not save and use_plain_basename:
                 file_name = f"{filename}.{ext}"
                 use_plain_basename = False
@@ -139,21 +168,45 @@ class SaveImagePlus:
                 file_name = f"{filename}_{counter:05}.{ext}"
             file_path = os.path.join(full_output_folder, file_name)
 
-            pnginfo = None
-            if not args.disable_metadata:
-                pnginfo = PngInfo()
-                if prompt is not None:
-                    pnginfo.add_text("prompt", json.dumps(prompt))
-                if extra_pnginfo is not None:
-                    for k, v in extra_pnginfo.items():
-                        pnginfo.add_text(k, json.dumps(v))
-            pil_image.save(file_path, pnginfo=pnginfo, compress_level=4)
+            if format == "png" and bit_depth == "8-bit":
+                pil_image = _tensor_to_pil(image)
+                pnginfo = None
+                if not args.disable_metadata:
+                    pnginfo = PngInfo()
+                    if prompt is not None:
+                        pnginfo.add_text("prompt", json.dumps(prompt))
+                    if extra_pnginfo is not None:
+                        for key, value in extra_pnginfo.items():
+                            pnginfo.add_text(key, json.dumps(value))
+                pil_image.save(file_path, pnginfo=pnginfo, compress_level=4)
+            elif format == "avif":
+                metadata = None
+                if not args.disable_metadata:
+                    metadata = dict(extra_pnginfo or {})
+                    if prompt is not None:
+                        metadata["prompt"] = prompt
+                _save_avif(image.unsqueeze(0), file_path, bit_depth, input_color_space, crf, metadata=metadata)
+            else:
+                encoded = _encode_image(image, format, bit_depth, input_color_space)
+                if not args.disable_metadata:
+                    if format == "png":
+                        encoded = inject_png_metadata(encoded, prompt, extra_pnginfo)
+                    else:
+                        encoded = inject_exr_metadata(encoded, prompt, extra_pnginfo, input_color_space)
+                with open(file_path, "wb") as output:
+                    output.write(encoded)
 
-            ui_images.append({
+            image_info = {
                 "filename": file_name,
                 "subfolder": ui_subfolder,
                 "type": output_type,
-            })
+            }
+            if format in ("exr", "avif"):
+                preview_name = f"fbnodes_preview_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}.png"
+                preview_path = os.path.join(folder_paths.get_temp_directory(), preview_name)
+                _tensor_to_pil(image).save(preview_path, compress_level=4)
+                image_info["preview"] = {"filename": preview_name, "subfolder": "", "type": "temp"}
+            ui_images.append(image_info)
 
             last_file = file_name
             counter += 1
