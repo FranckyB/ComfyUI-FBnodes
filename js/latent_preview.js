@@ -343,6 +343,22 @@ app.registerExtension({
             attrs: { min: 128, max: 1024, step: 16 },
         },
         {
+            id: "FBnodes.InjectKrea2File",
+            category: ["FBnodes", "Preview Injection", "Krea2"],
+            name: "Krea2 TAESD filename",
+            tooltip: "The vae_approx file used for Krea2 true-color previews.\nLeave blank to use the default (TAE_Krea2_AcademiaSD.safetensors).",
+            type: "text",
+            defaultValue: "",
+        },
+        {
+            id: "FBnodes.InjectKrea2",
+            category: ["FBnodes", "Preview Injection", "Krea2 Enable"],
+            name: "Enable Krea2 latent preview injection",
+            tooltip: "Enables true-color (TAESD) previews for Krea2 image models.\nPlace TAE_Krea2_AcademiaSD.safetensors in models/vae_approx.\nRequires FBnodes animated or subgraph previews and ComfyUI's TAESD or Auto preview method.",
+            type: "boolean",
+            defaultValue: true,
+        },
+        {
             id: "FBnodes.InjectLtxFile",
             category: ["FBnodes", "Preview Injection", "LTX"],
             name: "LTX TAESD filename",
@@ -426,6 +442,8 @@ app.registerExtension({
                 res.workflow.extra['FB_inject_minimax_file'] = app.ui.settings.getSettingValue("FBnodes.InjectMinimaxFile");
                 res.workflow.extra['FB_inject_ltx'] = app.ui.settings.getSettingValue("FBnodes.InjectLtx");
                 res.workflow.extra['FB_inject_ltx_file'] = app.ui.settings.getSettingValue("FBnodes.InjectLtxFile");
+                res.workflow.extra['FB_inject_krea2'] = app.ui.settings.getSettingValue("FBnodes.InjectKrea2");
+                res.workflow.extra['FB_inject_krea2_file'] = app.ui.settings.getSettingValue("FBnodes.InjectKrea2File");
                 res.workflow.extra['FB_preview_max_res'] = app.ui.settings.getSettingValue("FBnodes.PreviewMaxRes");
             }
             

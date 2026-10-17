@@ -274,15 +274,18 @@ The preview shows a configurable leading slice of the video, re-decoded every sa
 
 Enable in ComfyUI Settings: **FBnodes > Video Sampling > Animated Latent Preview**
 
-### True-color preview injection (MiniMax / LTX)
+### True-color preview injection (MiniMax / LTX / Krea2)
 ComfyUI's latent previewer doesn't have a TAESD decoder mapped for some models, so they fall back to the lower-quality Latent2RGB approximation. FBnodes injects TAESD support for those models so they show true-color previews. You can toggle each model's injection or set a custom TAESD filename in ComfyUI Settings: **FBnodes > Preview Injection**
 
 Download the TAESD file for each model you use and place it in `ComfyUI/models/vae_approx/`:
 
 - **MiniMax H3** — [taeh3.safetensors](https://huggingface.co/Kijai/MiniMax-H3-TAE/tree/main/vae_approx)
 - **LTX** — [taeltx2_3.safetensors](https://huggingface.co/Kijai/LTX2.3_comfy/tree/main/vae)
+- **Krea2** — [TAE_Krea2_AcademiaSD.safetensors](https://huggingface.co/AcademiaSD/TAE-Krea-2)
 
 Then refresh ComfyUI. If a file is missing, that model keeps the standard preview and a message with the download link is printed to the console.
+
+For Krea2 image previews, enable **Display animated or subgraph previews when sampling** and use ComfyUI's **TAESD** or **Auto** preview method. Under **FBnodes > Preview Injection**, leave **Krea2 TAESD filename** blank for the default, or enter another compatible checkpoint's filename (including any subfolder under `models/vae_approx`). Krea2 injection does not change Wan previews. Restart ComfyUI after installing this extension update.
 
 ## Installation
 

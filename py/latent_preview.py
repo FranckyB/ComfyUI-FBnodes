@@ -58,6 +58,15 @@ TAESD_INJECTIONS = {
         'file_key': 'FB_inject_ltx_file',
         'url': 'https://huggingface.co/Kijai/LTX2.3_comfy/tree/main/vae',
     },
+    'krea2': {
+        'label': 'Krea2',
+        'formats': ['Krea2PreviewFormat'],
+        'default_file': 'TAE_Krea2_AcademiaSD.safetensors',
+        'kind': 'custom',
+        'enable_key': 'FB_inject_krea2',
+        'file_key': 'FB_inject_krea2_file',
+        'url': 'https://huggingface.co/AcademiaSD/TAE-Krea-2/tree/main',
+    },
 }
 
 # format class name -> injection family key (for O(1) lookup at preview time)
@@ -672,6 +681,23 @@ def is_vhs_installed():
         return False
 
 
+def _register_krea2_preview_format():
+    """Distinguish Krea2 previews without changing the shared Wan latent format."""
+    import comfy.supported_models
+
+    model_class = getattr(comfy.supported_models, 'Krea2', None)
+    if model_class is None:
+        return
+    base_format = model_class.latent_format
+    if base_format.__name__ == 'Krea2PreviewFormat':
+        return
+
+    class Krea2PreviewFormat(base_format):
+        pass
+
+    model_class.latent_format = Krea2PreviewFormat
+
+
 def install_latent_preview_hook():
     """
     Install the latent preview hook if:
@@ -696,6 +722,8 @@ def install_latent_preview_hook():
     try:
         import server
         serv = server.PromptServer.instance
+
+        _register_krea2_preview_format()
 
         # Store original function
         _original_get_previewer = _latent_preview_module.get_previewer
