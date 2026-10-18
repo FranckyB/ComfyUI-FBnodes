@@ -132,8 +132,7 @@ class WrappedPreviewer(_latent_preview_module.LatentPreviewer):
         override = self._load_override_decoder(model_name)
         if override is not None:
             self.taesd = override
-            # Core TAESD instances take the same per-frame path as core's TAESDPreviewerImpl.
-            self.is_video_taesd = not hasattr(override, 'taesd_decoder')
+            self.is_video_taesd = True
         elif hasattr(previewer, 'taesd'):
             self.taesd = previewer.taesd
             # Detect if this is a video TAESD (VAE-based) vs regular TAESD
@@ -588,15 +587,6 @@ def _load_custom_taesd(taesd_name):
         sd = comfy.utils.load_torch_file(full_path, safe_load=True)
         if _is_taehv_state_dict(sd):
             return _TAEHVDecoder(sd)
-        try:
-            # Same as core get_previewer: core TAESD, fp32, on the torch device.
-            from comfy.taesd.taesd import TAESD
-            import comfy.model_management
-            taesd = TAESD(None, None, latent_channels=sd['1.weight'].shape[1])
-            taesd.taesd_decoder.load_state_dict(sd)
-            return taesd.to(comfy.model_management.get_torch_device())
-        except Exception:
-            pass  # layout core's TAESD can't build (e.g. 2D taeh3)
         return _FlatTAEDecoder(sd)
 
     except Exception as e:
