@@ -745,9 +745,7 @@ def install_latent_preview_hook():
 
             model_name = latent_format.__class__.__name__
 
-            # Per-model injection toggle + custom TAESD filename. If injection is
-            # disabled for this model, bypass our wrapper entirely and let ComfyUI's
-            # original previewer handle it (no time limit, no custom resolution).
+            # Per-model toggle only disables the custom decoder; the animated wrapper stays.
             family_key = _FORMAT_TO_INJECTION.get(model_name)
             injection_file = None
             inject_enabled = True
@@ -756,9 +754,6 @@ def install_latent_preview_hook():
                 inject_enabled = extra_info.get(cfg['enable_key'], True)
                 if inject_enabled:
                     injection_file = extra_info.get(cfg['file_key']) or None
-
-            if not inject_enabled:
-                return previewer
 
             max_seconds = extra_info.get('FB_preview_seconds', 5)
             max_res = extra_info.get('FB_preview_max_res', 512)
