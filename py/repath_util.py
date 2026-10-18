@@ -279,6 +279,9 @@ def _infer_category(widget_name, node_type, value=None, value_field=None):
         return "loras"
 
     direct = DIRECT_WIDGET_CATEGORY.get(widget_key)
+    if not direct:
+        # Promoted subgraph inputs get "_N" suffixes on duplicate names (e.g. vae_name_1).
+        direct = DIRECT_WIDGET_CATEGORY.get(re.sub(r"_\d+$", "", widget_key))
     if direct:
         return direct
 
