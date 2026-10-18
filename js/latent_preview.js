@@ -243,9 +243,27 @@ function getLatentPreviewCtx(id, width, height) {
         canvasEl.width = width;
         canvasEl.height = height;
         fitHeight(node);
+        previewWidget.ctx = canvasEl.getContext("2d");
     }
     
-    return canvasEl.getContext("2d");
+    return previewWidget.ctx;
+}
+
+function clearLatentPreview(id) {
+    const widget = getNodeById(id)?.widgets?.find((w) => w.name === "pmlatentpreview");
+    const canvasEl = widget?.element;
+    canvasEl?.getContext("2d")?.clearRect(0, 0, canvasEl.width, canvasEl.height);
+}
+
+function resetLatentPreviews() {
+    for (const id of Object.keys(animateIntervals)) {
+        clearInterval(animateIntervals[id]);
+        delete animateIntervals[id];
+    }
+    previewImagesDict = {};
+    for (const id of latentPreviewNodes) {
+        clearLatentPreview(id);
+    }
 }
 
 /**
@@ -454,6 +472,8 @@ app.registerExtension({
     },
     
     async init() {
+        api.addEventListener('execution_start', resetLatentPreviews);
+
         // Clear preview nodes on execution complete
         api.addEventListener('executing', ({ detail }) => {
             if (detail === null) {
@@ -485,6 +505,7 @@ app.registerExtension({
             const idParts = detail.id.split(':');
             for (let i = 1; i <= idParts.length; i++) {
                 const id = idParts.slice(0, i).join(':');
+                clearLatentPreview(id);
                 beginLatentPreview(id, previewImages, detail.rate);
             }
         }
