@@ -401,11 +401,8 @@ class WrappedPreviewer(_latent_preview_module.LatentPreviewer):
         if comfy.model_management.directml_enabled:
             latents_ubyte = latents_ubyte.to(dtype=torch.uint8)
 
-        latents_ubyte = latents_ubyte.to(
-            device="cpu",
-            dtype=torch.uint8,
-            non_blocking=comfy.model_management.device_supports_non_blocking(tensor.device)
-        )
+        # Blocking copy: we encode immediately, a non_blocking read returns stale/empty host memory.
+        latents_ubyte = latents_ubyte.to(device="cpu", dtype=torch.uint8)
 
         return Image.fromarray(latents_ubyte.numpy())
 
