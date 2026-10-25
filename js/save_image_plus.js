@@ -3,6 +3,9 @@ import { api } from "../../scripts/api.js";
 
 const CONTROLS_TOGGLE_WIDGET_KEY = "__fb_save_image_controls_toggle";
 const CONTROLS_EXPANDED_PROP = "_saveImageControlsExpanded";
+const VUE_VIEW_WIDGET_NAME = "__fb_save_image_vue_view";
+// Classic frame margin; the Nodes 2.0 widget column is already inset, so the view is drawn shifted by it.
+const VUE_VIEW_INSET = 10;
 const IMAGE_FORMAT_OPTIONS = {
     png: { bit_depth: ["8-bit", "16-bit"], input_color_space: ["sRGB"] },
     exr: { bit_depth: ["16-bit float", "32-bit float"], input_color_space: ["sRGB", "HDR", "linear"] },
@@ -10,7 +13,7 @@ const IMAGE_FORMAT_OPTIONS = {
 };
 
 function getSettingsWidgets(node) {
-    return (node.widgets || []).filter(widget => widget.name !== CONTROLS_TOGGLE_WIDGET_KEY);
+    return (node.widgets || []).filter(widget => widget.name !== CONTROLS_TOGGLE_WIDGET_KEY && widget.name !== VUE_VIEW_WIDGET_NAME);
 }
 
 function getSettingsHeight(node) {
@@ -220,7 +223,7 @@ function getContentStartY(node) {
     let y = titleH + 6;
 
     for (const widget of node.widgets || []) {
-        if (widget.hidden) continue;
+        if (widget.hidden || widget.name === VUE_VIEW_WIDGET_NAME) continue;
         y += getWidgetHeight(node, widget) + 4;
     }
 
@@ -622,7 +625,7 @@ function drawImageGrid(ctx, state, node, rect) {
     }
 }
 
-function drawCompareCanvas(ctx, node) {
+function drawCompareCanvas(ctx, node, layout = null) {
     const state = ensureCompareState(node);
     if (state.drawDisabled) {
         return;
@@ -635,19 +638,20 @@ function drawCompareCanvas(ctx, node) {
     state.selectedSaved = clampIndex(state.selectedSaved, state.savedItems.length);
     state.selectedCompare = clampIndex(state.selectedCompare, state.compareItems.length);
 
-    const contentTop = getContentStartY(node);
-    const contentBottom = Number(node.size?.[1] || 320) - 8;
+    const contentTop = layout ? layout.top : getContentStartY(node);
+    const contentBottom = layout ? layout.bottom : Number(node.size?.[1] || 320) - 8;
+    const width = layout ? layout.width : Number(node.size?.[0] || 320);
     if (contentBottom <= contentTop + 20) {
         return;
     }
 
-    const controlsH = drawSelectionRows(ctx, node, state, contentTop, Number(node.size?.[0] || 320));
+    const controlsH = drawSelectionRows(ctx, node, state, contentTop, width);
 
     const footerH = 24;
     const footerGap = 6;
     const frameX = 10;
     const frameY = contentTop + controlsH + COMPARE_FRAME_TOP_GAP;
-    const frameW = Math.max(40, Number(node.size?.[0] || 320) - 20);
+    const frameW = Math.max(40, width - 20);
     const frameH = Math.max(80, contentBottom - frameY - footerH - footerGap);
 
     ctx.save();
@@ -748,6 +752,115 @@ function drawCompareCanvas(ctx, node) {
     const tw = ctx.measureText(sizeText).width;
     ctx.fillText(sizeText, footerX + (footerW - tw) * 0.5, footerY + footerH * 0.5);
     ctx.restore();
+}
+
+function drawCompareSafely(ctx, node, layout = null) {
+    const state = ensureCompareState(node);
+    if (state.drawDisabled) {
+        return;
+    }
+    // Always restore so a leaked clip/transform can't corrupt the rest of Comfy's UI.
+    ctx.save();
+    try {
+        drawCompareCanvas(ctx, node, layout);
+    } catch (error) {
+        state.drawDisabled = true;
+        state.previewRect = null;
+        state.buttonZones = [];
+        if (!state.drawErrorLogged) {
+            state.drawErrorLogged = true;
+            console.error("[FBnodes SaveImagePlus] compare draw disabled after error:", error);
+        }
+    } finally {
+        ctx.restore();
+    }
+}
+
+function drawVueView(node) {
+    const canvas = node._fbSaveImageVueCanvas;
+    const cssW = canvas?.clientWidth || 0;
+    const cssH = canvas?.clientHeight || 0;
+    // Zero-sized on the classic canvas, where this widget is never shown.
+    if (!cssW || !cssH) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const scale = (rect.width / cssW || 1) * (window.devicePixelRatio || 1);
+    const pxW = Math.max(1, Math.round(cssW * scale));
+    const pxH = Math.max(1, Math.round(cssH * scale));
+    if (canvas.width !== pxW) canvas.width = pxW;
+    if (canvas.height !== pxH) canvas.height = pxH;
+
+    const ctx = canvas.getContext("2d");
+    ctx.setTransform(scale, 0, 0, scale, 0, 0);
+    ctx.clearRect(0, 0, cssW, cssH);
+    ctx.translate(-VUE_VIEW_INSET, 0);
+    drawCompareSafely(ctx, node, { top: 0, width: cssW + VUE_VIEW_INSET * 2, bottom: cssH });
+}
+
+function scheduleVueDraw(node) {
+    if (node._fbSaveImageVueDrawPending || !node._fbSaveImageVueCanvas) return;
+    node._fbSaveImageVueDrawPending = true;
+    requestAnimationFrame(() => {
+        node._fbSaveImageVueDrawPending = false;
+        drawVueView(node);
+    });
+}
+
+function vueViewLocalPos(node, event) {
+    const canvas = node._fbSaveImageVueCanvas;
+    const rect = canvas.getBoundingClientRect();
+    const k = canvas.clientWidth ? rect.width / canvas.clientWidth : 1;
+    return [(event.clientX - rect.left) / k + VUE_VIEW_INSET, (event.clientY - rect.top) / k];
+}
+
+// Nodes 2.0 never calls onDrawForeground or canvas mouse hooks, so it gets a DOM canvas using the same draw/hit-test code.
+function ensureVueView(node) {
+    if (node._fbSaveImageVueCanvas) return;
+
+    const host = document.createElement("div");
+    host.style.cssText = "position: relative; min-height: 200px;";
+    const canvas = document.createElement("canvas");
+    canvas.style.cssText = "position: absolute; inset: 0; width: 100%; height: 100%; display: block;";
+    host.appendChild(canvas);
+    node._fbSaveImageVueCanvas = canvas;
+
+    const widget = node.addDOMWidget(VUE_VIEW_WIDGET_NAME, "fb_save_image_view", host, {
+        serialize: false,
+        hideOnZoom: false,
+        surfaces: { canvas: "never", vueNode: "shown", panel: "never" },
+    });
+    widget.serialize = false;
+
+    const setDirtyCanvas = node.setDirtyCanvas;
+    node.setDirtyCanvas = function () {
+        scheduleVueDraw(this);
+        return setDirtyCanvas?.apply(this, arguments);
+    };
+    new ResizeObserver(() => scheduleVueDraw(node)).observe(host);
+    // Canvas zoom is a CSS transform (no resize event); re-render at the current zoom when the pointer arrives.
+    host.addEventListener("pointerenter", () => scheduleVueDraw(node));
+
+    host.addEventListener("pointermove", (event) => {
+        _fbHoveredSaveImageNode = node;
+        const localPos = vueViewLocalPos(node, event);
+        ensureCompareState(node).vueLocalPos = localPos;
+        host.style.cursor = handlePointer(node, localPos) ? "ew-resize" : "";
+    });
+    host.addEventListener("pointerleave", () => {
+        const state = ensureCompareState(node);
+        if (_fbHoveredSaveImageNode === node) _fbHoveredSaveImageNode = null;
+        if (state.hovering) {
+            state.hovering = false;
+            scheduleVueDraw(node);
+        }
+    });
+    host.addEventListener("pointerdown", (event) => {
+        if (event.button !== 0) return;
+        if (clickSelectionButton(node, vueViewLocalPos(node, event))) {
+            event.preventDefault();
+            event.stopPropagation();
+        }
+    });
 }
 
 function setResultData(node, message) {
@@ -1125,6 +1238,11 @@ function getHoveredImageForContextMenu(node, canvas) {
         return null;
     }
 
+    if (LiteGraph.vueNodesMode) {
+        const localPos = ensureCompareState(node).vueLocalPos;
+        return localPos ? findImageAtPosition(node, localPos) : null;
+    }
+
     const graphPos = canvas.graph_mouse;
     if (!Array.isArray(graphPos) || graphPos.length < 2) {
         return null;
@@ -1224,7 +1342,10 @@ app.registerExtension({
 
             ensureCompareState(this);
             this.imgs = [];
+            // Only read by Nodes 2.0: our view replaces core's output preview there.
+            this.hideOutputImages = true;
             ensureControlsToggleWidget(this);
+            ensureVueView(this);
             installKeyNavigation();
             installExecutedSync();
             restoreFromExecutedCache(this);
@@ -1281,28 +1402,7 @@ app.registerExtension({
         const onDrawForeground = nodeType.prototype.onDrawForeground;
         nodeType.prototype.onDrawForeground = function (ctx) {
             const result = onDrawForeground?.apply(this, arguments);
-            const state = ensureCompareState(this);
-            if (state.drawDisabled) {
-                return result;
-            }
-
-            // Save the full canvas state at the boundary and ALWAYS restore it, even
-            // if drawing throws. This prevents a leaked clip/transform from corrupting
-            // (and visually freezing) the rest of Comfy's UI.
-            ctx.save();
-            try {
-                drawCompareCanvas(ctx, this);
-            } catch (error) {
-                state.drawDisabled = true;
-                state.previewRect = null;
-                state.buttonZones = [];
-                if (!state.drawErrorLogged) {
-                    state.drawErrorLogged = true;
-                    console.error("[FBnodes SaveImagePlus] compare draw disabled after error:", error);
-                }
-            } finally {
-                ctx.restore();
-            }
+            drawCompareSafely(ctx, this);
             return result;
         };
 

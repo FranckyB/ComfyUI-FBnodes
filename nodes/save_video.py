@@ -732,6 +732,12 @@ class SaveVideoPlus:
                     # Trim audio to match video duration
                     waveform = waveform[:, :, :math.ceil((audio_sample_rate / float(frame_rate)) * images.shape[0])]
 
+                    # FFmpeg's AAC encoder fails with EINVAL on NaN/Inf/huge samples.
+                    waveform = waveform.float()
+                    if not torch.isfinite(waveform).all():
+                        _log("Audio contains NaN/Inf samples; replacing them so AAC encoding can proceed")
+                    waveform = torch.nan_to_num(waveform, nan=0.0, posinf=1.0, neginf=-1.0).clamp(-1.0, 1.0).cpu()
+
                     # Create audio frame
                     layout = 'mono' if waveform.shape[1] == 1 else 'stereo'
                     frame = av.AudioFrame.from_ndarray(
@@ -965,6 +971,7 @@ class SaveVideoPlus:
                         preview_sample_rate = int(audio['sample_rate'])
                         # Trim audio to match video duration
                         waveform = waveform[:, :, :math.ceil((preview_sample_rate / float(frame_rate)) * images.shape[0])]
+                        waveform = torch.nan_to_num(waveform.float(), nan=0.0, posinf=1.0, neginf=-1.0).clamp(-1.0, 1.0).cpu()
 
                         layout = 'mono' if waveform.shape[1] == 1 else 'stereo'
                         frame = av.AudioFrame.from_ndarray(

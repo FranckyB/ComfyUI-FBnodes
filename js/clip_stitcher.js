@@ -210,7 +210,6 @@ app.registerExtension({
                     sourceFolderWidget.value = "output";
                 }
             }
-            clipListWidget.type = "converted-widget";
             clipListWidget.computeSize = () => [0, -4];
             clipListWidget.hidden = true;
 

@@ -805,7 +805,6 @@ app.registerExtension({
             }
 
             // Hide the raw JSON widget
-            clipListWidget.type = "converted-widget";
             clipListWidget.computeSize = () => [0, -4];
             clipListWidget.hidden = true;
 

@@ -2650,6 +2650,8 @@ app.registerExtension({
         nodeType.prototype.onNodeCreated = function () {
             const result = onNodeCreated?.apply(this, arguments);
             const node = this;
+            // Nodes 2.0 ignores onDrawBackground below and shows execution outputs unless this is set.
+            node.hideOutputImages = true;
 
             installArrowKeyNavigation();
 

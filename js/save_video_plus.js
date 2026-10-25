@@ -19,7 +19,6 @@ const SAVE_VIDEO_PREVIEW_TOP_INSET = 0;
 function hideExecStartWidget(node) {
     const widget = node.widgets?.find((w) => w?.name === EXEC_START_WIDGET_NAME);
     if (!widget) return;
-    widget.type = "converted-widget";
     widget.hidden = true;
     widget.computeSize = () => [0, -4];
     if (widget.inputEl) widget.inputEl.style.display = "none";
@@ -283,6 +282,7 @@ function ensureRestoredVideoPreview(node) {
 
 function scheduleRestoredVideoPreview(node, attempts = 0) {
     if (ensureRestoredVideoPreview(node)) {
+        syncVuePreview(node);
         node.setDirtyCanvas?.(true, true);
         return;
     }
@@ -436,6 +436,7 @@ function getPreviewContainer(node) {
 function ensurePreviewFrame(container) {
     if (!container) return;
 
+    container.classList.add("fbnodes-save-video-preview");
     if (!container.style.position) container.style.position = "relative";
 
     let frame = container._previewFrame;
@@ -509,7 +510,7 @@ function ensurePreviewContainer(node) {
 
     if (!node.widgets?.some((w) => w.name === "video-preview")) {
         const w = node.addDOMWidget("video-preview", "video", container, {
-            canvasOnly: true,
+            hideInPanel: true,
             hideOnZoom: false,
         });
         w.serialize = false;
@@ -744,6 +745,7 @@ function applyWarningOverlay(node) {
     if (!host) return false;
 
     ensurePreviewFrame(host);
+    syncOpenPlayerButton(node, host);
 
     // Keep the warning overlay and frame preview layer anchored inside the
     // blue frame area, above the footer.
@@ -814,6 +816,57 @@ function syncWarningOverlay(node, attempts = 0) {
     if (!applied && attempts < 10) {
         setTimeout(() => syncWarningOverlay(node, attempts + 1), 80);
     }
+}
+
+// Nodes 2.0 never draws the canvas title icon, so the preview carries its own button (shown only there via CSS).
+function syncOpenPlayerButton(node, host) {
+    let button = host._openPlayerButton;
+    if (!button || button.parentElement !== host) {
+        button = document.createElement("button");
+        button.type = "button";
+        button.className = "fbnodes-save-video-open";
+        button.textContent = "\u25b6";
+        button.title = "Play in system player";
+        button.addEventListener("pointerdown", (event) => event.stopPropagation());
+        button.addEventListener("click", (event) => {
+            event.stopPropagation();
+            openInSystemPlayer(node);
+        });
+        host.appendChild(button);
+        host._openPlayerButton = button;
+    }
+    button.hidden = !hasSavedPath(node);
+}
+
+let _saveVideoStylesInstalled = false;
+function installSaveVideoStyles() {
+    if (_saveVideoStylesInstalled) return;
+    _saveVideoStylesInstalled = true;
+    // .lg-node-widgets only exists in Nodes 2.0, so these rules never affect the classic canvas.
+    const style = document.createElement("style");
+    style.textContent = `
+        .fbnodes-save-video-open { display: none; }
+        .lg-node-widgets .fbnodes-save-video-preview { min-height: 256px; }
+        .lg-node-widgets .fbnodes-save-video-open:not([hidden]) {
+            display: block; position: absolute; top: 6px; right: 14px; z-index: 12;
+            width: 24px; height: 24px; padding: 0; border: none; border-radius: 4px;
+            background: rgba(0, 0, 0, 0.45); color: rgba(255, 255, 255, 0.7);
+            font-size: 12px; line-height: 24px; cursor: pointer; pointer-events: auto;
+        }
+        .lg-node-widgets .fbnodes-save-video-open:hover { color: #ffffff; }
+    `;
+    document.head.appendChild(style);
+}
+
+// Nodes 2.0 never calls onDrawForeground and core never injects its video into our widget there,
+// so execution/restore events drive the player directly.
+function syncVuePreview(node) {
+    if (!LiteGraph.vueNodesMode) return;
+    syncRestoredPreviewUrl(node);
+    ensureRestoredVideoPreview(node);
+    syncWarningOverlay(node);
+    syncPreviewFooterFromVideo(node);
+    syncAutoplay(node);
 }
 
 // Fill the resolution footer once the native video element reports its size.
@@ -972,6 +1025,7 @@ app.registerExtension({
 
         installExecutedSync();
         installExecStartStamping();
+        installSaveVideoStyles();
 
         const onNodeCreated = nodeType.prototype.onNodeCreated;
         nodeType.prototype.onNodeCreated = function () {
@@ -979,6 +1033,8 @@ app.registerExtension({
             const node = this;
 
             if (!node.properties) node.properties = {};
+            // Only read by Nodes 2.0: our framed preview replaces core's output preview there.
+            node.hideOutputImages = true;
             node._saveVideoHoverPlayIcon = false;
             node._saveVideoPlayIconBounds = null;
             node._configuredFromWorkflow = false;
@@ -1114,6 +1170,7 @@ app.registerExtension({
                 // playback can start when the node becomes visible again.
                 if (this.properties) this.properties._saveVideoPendingAutoplay = true;
             }
+            syncVuePreview(this);
             return result;
         };
     },
