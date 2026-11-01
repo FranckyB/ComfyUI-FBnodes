@@ -3188,10 +3188,22 @@ app.registerExtension({
                 const persistedFramePosition = node.properties._loadedFramePosition;
 
                 // Restore frame position from saved widgets_values if available
-                if (info && info.widgets_values && framePositionWidget) {
-                    const idx = this.widgets.findIndex(w => w.name === "frame_position");
-                    if (idx >= 0 && info.widgets_values[idx] !== undefined) {
-                        framePositionWidget.value = coerceFramePosition(info.widgets_values[idx]);
+                if (info && framePositionWidget) {
+                    const named = info.widgets_values_named;
+                    const values = info.widgets_values;
+                    let saved;
+                    if (named && typeof named === "object" && named.frame_position !== undefined) {
+                        saved = named.frame_position;
+                    } else if (Array.isArray(values)) {
+                        // widgets_values skips non-serialized widgets (picker/buttons), unless it is full-length.
+                        const list = values.length === this.widgets.length
+                            ? this.widgets
+                            : this.widgets.filter(w => w.serialize !== false);
+                        const idx = list.indexOf(framePositionWidget);
+                        if (idx >= 0) saved = values[idx];
+                    }
+                    if (saved !== undefined && saved !== null) {
+                        framePositionWidget.value = coerceFramePosition(saved);
                     }
                 }
 
