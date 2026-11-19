@@ -390,15 +390,10 @@ class WrappedPreviewer(_latent_preview_module.LatentPreviewer):
 
     def _tensor_to_image(self, tensor, do_scale=True):
         """Convert tensor to PIL Image, matching ComfyUI's preview_to_image."""
-        import comfy.model_management
-
         if do_scale:
             latents_ubyte = (((tensor + 1.0) / 2.0).clamp(0, 1).mul(0xFF))
         else:
             latents_ubyte = (tensor.clamp(0, 1).mul(0xFF))
-
-        if comfy.model_management.directml_enabled:
-            latents_ubyte = latents_ubyte.to(dtype=torch.uint8)
 
         # Blocking copy: we encode immediately, a non_blocking read returns stale/empty host memory.
         latents_ubyte = latents_ubyte.to(device="cpu", dtype=torch.uint8)
