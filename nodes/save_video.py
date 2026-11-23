@@ -48,6 +48,15 @@ def _log(message: str):
     print(f"[SaveVideoPlus] {message}")
 
 
+def _auto_encoding(video) -> tuple[str, str, int]:
+    """Codec, chroma and CRF taken from the incoming video (as set in Create
+    Video, or a loaded file's stream): more than 8 bits needs H.265 here.
+    Anything not set gives H.264, 4:2:0, CRF 16."""
+    codec = "h265" if video.get_bit_depth() > 8 else "h264"
+    chroma = {"444": "yuv444", "422": "yuv422"}.get(video.get_chroma_subsampling(), "yuv420")
+    return codec, chroma, 16
+
+
 # Channel-count -> latent format, scoped to the model families these tools
 # target (Wan / LTX / MiniMax). Within this set the channel counts are
 # unambiguous for video latents, so the tag is reliable. Anything outside this
@@ -428,6 +437,10 @@ class SaveVideoPlus:
                     "default": "",
                     "tooltip": "Unix timestamp stamped by the UI when Execute is pressed. Enables %time% in filename_prefix (workflow generation seconds, excluding save/encode)."
                 }),
+                "auto": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Take codec and chroma from the incoming video (bit depth over 8 = h265), CRF 16. Not set there: h264, yuv420."
+                }),
             },
             "hidden": {
                 "prompt": "PROMPT",
@@ -498,7 +511,11 @@ class SaveVideoPlus:
 
         return patched
 
-    def save_video(self, video, filename_prefix, codec, chroma, crf, save, save_latent, browser_compat=True, auto_play=True, latent=None, metadata=None, prompt=None, extra_pnginfo=None, exec_start=""):
+    def save_video(self, video, filename_prefix, codec, chroma, crf, save, save_latent, browser_compat=True, auto_play=True, latent=None, metadata=None, prompt=None, extra_pnginfo=None, exec_start="", auto=False):
+
+        if auto and save:
+            codec, chroma, crf = _auto_encoding(video)
+            _log(f"Auto: {codec}, {chroma}, CRF {crf}")
 
         # Bit depth determined by codec: h264=8-bit, h265=10-bit
         is_10bit = (codec == "h265")
