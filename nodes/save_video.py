@@ -24,6 +24,7 @@ from comfy.cli_args import args
 from aiohttp import web
 
 import server
+from comfy_api.latest import InputImpl
 
 from .save_image import expand_name_tokens
 
@@ -48,13 +49,37 @@ def _log(message: str):
     print(f"[SaveVideoPlus] {message}")
 
 
-def _auto_encoding(video) -> tuple[str, str, int]:
-    """Codec, chroma and CRF taken from the incoming video (as set in Create
-    Video, or a loaded file's stream): more than 8 bits needs H.265 here.
-    Anything not set gives H.264, 4:2:0, CRF 16."""
-    codec = "h265" if video.get_bit_depth() > 8 else "h264"
-    chroma = {"444": "yuv444", "422": "yuv422"}.get(video.get_chroma_subsampling(), "yuv420")
-    return codec, chroma, 16
+def _native_target(video) -> tuple[str, int | None]:
+    """Auto saves through ComfyUI's own encoder, which honours Create Video's
+    bit depth, color space, chroma and codec. Returns the extension and CRF:
+    unencoded video gets CRF 16 (H.264, 4:2:0 unless set); an encoded one
+    keeps its stream, in a .mov when it is ProRes."""
+    if isinstance(video, InputImpl.VideoFromComponents):
+        return "mp4", 16
+    with av.open(video.get_stream_source()) as container:
+        prores = container.streams.video[0].codec.canonical_name == "prores"
+    return ("mov" if prores else "mp4"), None
+
+
+def _native_metadata(metadata_dict: dict) -> dict:
+    """ComfyUI's encoder JSON-encodes every value; values already held as JSON
+    text are decoded first so they are not encoded twice."""
+    decoded = {}
+    for key, value in metadata_dict.items():
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except json.JSONDecodeError:
+                pass
+        decoded[key] = value
+    return decoded
+
+
+def _browser_playable(path: str) -> bool:
+    """Browsers play 8-bit 4:2:0 H.264 and AV1; anything else needs a preview copy."""
+    with av.open(path) as container:
+        stream = container.streams.video[0]
+        return stream.codec.canonical_name == "av1" or (stream.codec.canonical_name == "h264" and stream.format.name == "yuv420p")
 
 
 # Channel-count -> latent format, scoped to the model families these tools
@@ -439,7 +464,7 @@ class SaveVideoPlus:
                 }),
                 "auto": ("BOOLEAN", {
                     "default": False,
-                    "tooltip": "Take codec and chroma from the incoming video (bit depth over 8 = h265), CRF 16. Not set there: h264, yuv420."
+                    "tooltip": "Save with ComfyUI's own encoder, using the incoming video's settings (Create Video's bit depth, color space, chroma and codec). Not set there: h264, yuv420, CRF 16."
                 }),
             },
             "hidden": {
@@ -513,10 +538,6 @@ class SaveVideoPlus:
 
     def save_video(self, video, filename_prefix, codec, chroma, crf, save, save_latent, browser_compat=True, auto_play=True, latent=None, metadata=None, prompt=None, extra_pnginfo=None, exec_start="", auto=False):
 
-        if auto and save:
-            codec, chroma, crf = _auto_encoding(video)
-            _log(f"Auto: {codec}, {chroma}, CRF {crf}")
-
         # Bit depth determined by codec: h264=8-bit, h265=10-bit
         is_10bit = (codec == "h265")
 
@@ -529,6 +550,9 @@ class SaveVideoPlus:
         # Get dimensions
         width, height = video.get_dimensions()
         filename_prefix = expand_name_tokens(filename_prefix, width, height, exec_start)
+
+        native = auto and save
+        ext, native_crf = _native_target(video) if native else ("mp4", None)
 
         # Preview mode: save to temp with fast encoding
         if not save:
@@ -573,11 +597,11 @@ class SaveVideoPlus:
             )
 
             # Build filename - add counter only if file already exists
-            file = f"{filename}.mp4"
+            file = f"{filename}.{ext}"
             file_path_test = os.path.join(full_output_folder, file)
             if os.path.exists(file_path_test):
                 # File exists, find next available counter
-                pattern = re.compile(rf"^{re.escape(filename)}_?(\d+)\.mp4$")
+                pattern = re.compile(rf"^{re.escape(filename)}_?(\d+)\.{ext}$")
                 existing_counters = []
                 if os.path.isdir(full_output_folder):
                     for f in os.listdir(full_output_folder):
@@ -586,13 +610,13 @@ class SaveVideoPlus:
                             existing_counters.append(int(match.group(1)))
                 # Start from 1 if no counters found, otherwise next available
                 next_counter = max(existing_counters, default=0) + 1
-                file = f"{filename}_{next_counter:05}.mp4"
+                file = f"{filename}_{next_counter:05}.{ext}"
 
             file_path = os.path.join(full_output_folder, file)
 
             # Save latent if connected and enabled (only when saving to output)
             if save_latent and latent is not None:
-                latent_file = file_path.replace('.mp4', '.latent')
+                latent_file = os.path.splitext(file_path)[0] + '.latent'
                 # Prepare latent metadata
                 prompt_info = json.dumps(prompt) if prompt else ""
                 latent_metadata = {"prompt": prompt_info}
@@ -744,21 +768,25 @@ class SaveVideoPlus:
                     for packet in audio_stream.encode(None):
                         output.mux(packet)
 
-        try:
-            _encode_video_to_path(file_path, codec_name, is_nvidia)
-        except Exception as e:
-            if is_nvidia:
-                fallback_codec = _get_cpu_encoder(codec)
-                print(f"[SaveVideoPlus] NVIDIA encoder failed ({e}). Falling back to {fallback_codec}.")
-                _encode_video_to_path(file_path, fallback_codec, False)
-            else:
-                raise
+        if native:
+            _log(f"Saving with ComfyUI's encoder: path={file_path}")
+            video.save_to(file_path, metadata=_native_metadata(metadata_dict) or None, crf=native_crf)
+        else:
+            try:
+                _encode_video_to_path(file_path, codec_name, is_nvidia)
+            except Exception as e:
+                if is_nvidia:
+                    fallback_codec = _get_cpu_encoder(codec)
+                    print(f"[SaveVideoPlus] NVIDIA encoder failed ({e}). Falling back to {fallback_codec}.")
+                    _encode_video_to_path(file_path, fallback_codec, False)
+                else:
+                    raise
 
         # Only H.264 is reliably browser-playable. Chrome/Edge cannot decode H.265
         # (even yuv420), so ALL h265 needs a browser-compatible preview or the
         # still-frame + external-player path. Previously h265+yuv420 was wrongly
         # treated as directly playable, producing a blank player.
-        if not save or codec == "h264":
+        if not save or (_browser_playable(file_path) if native else codec == "h264"):
             # Browser can play this directly (or it's already a preview)
             return {
                 "ui": {
@@ -783,7 +811,7 @@ class SaveVideoPlus:
         else:
             # Create a browser-compatible h264 preview in temp folder
             temp_dir = folder_paths.get_temp_directory()
-            preview_file = os.path.basename(file)
+            preview_file = os.path.splitext(os.path.basename(file))[0] + ".mp4"
             # preview_file = f"preview_{counter:05}_{width}x{height}.mp4"
             preview_path = os.path.join(temp_dir, preview_file)
 

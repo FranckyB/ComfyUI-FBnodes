@@ -1,45 +1,36 @@
-"""Save Video+ Auto: the encoding picked from the incoming video."""
+"""Save Video+ Auto: saving through ComfyUI's own encoder."""
 
 import ast
+import json
 from pathlib import Path
+from types import SimpleNamespace
 import unittest
 
 
 SOURCE = Path(__file__).resolve().parents[1] / "nodes" / "save_video.py"
 
 
-def load_auto_encoding():
+class FakeComponents:
+    pass
+
+
+def load_functions():
     tree = ast.parse(SOURCE.read_text(encoding="utf-8"))
-    module = ast.Module(body=[node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "_auto_encoding"], type_ignores=[])
-    namespace = {}
+    module = ast.Module(body=[node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in ("_native_target", "_native_metadata")], type_ignores=[])
+    namespace = {"json": json, "InputImpl": SimpleNamespace(VideoFromComponents=FakeComponents)}
     exec(compile(module, str(SOURCE), "exec"), namespace)
-    return namespace["_auto_encoding"]
+    return namespace
 
 
-class FakeVideo:
-    def __init__(self, bit_depth=8, chroma=None):
-        self.bit_depth = bit_depth
-        self.chroma = chroma
+class NativeSaveTests(unittest.TestCase):
+    functions = load_functions()
 
-    def get_bit_depth(self):
-        return self.bit_depth
+    def test_unencoded_video_gets_crf_16(self):
+        self.assertEqual(self.functions["_native_target"](FakeComponents()), ("mp4", 16))
 
-    def get_chroma_subsampling(self):
-        return self.chroma
-
-
-class AutoEncodingTests(unittest.TestCase):
-    auto_encoding = staticmethod(load_auto_encoding())
-
-    def test_unset_video_uses_defaults(self):
-        self.assertEqual(self.auto_encoding(FakeVideo()), ("h264", "yuv420", 16))
-
-    def test_ten_bit_video_uses_h265(self):
-        self.assertEqual(self.auto_encoding(FakeVideo(10, "420")), ("h265", "yuv420", 16))
-
-    def test_chroma_follows_video(self):
-        self.assertEqual(self.auto_encoding(FakeVideo(8, "444"))[1], "yuv444")
-        self.assertEqual(self.auto_encoding(FakeVideo(10, "422"))[1], "yuv422")
+    def test_json_text_is_not_encoded_twice(self):
+        metadata = self.functions["_native_metadata"]({"workflow": json.dumps({"nodes": []}), "prompt": {"1": {}}, "note": "plain"})
+        self.assertEqual(metadata, {"workflow": {"nodes": []}, "prompt": {"1": {}}, "note": "plain"})
 
 
 if __name__ == "__main__":
