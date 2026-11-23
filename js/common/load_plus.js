@@ -6,6 +6,8 @@
 import { api } from "../../../scripts/api.js";
 import { createFileBrowserModal } from "../file_browser.js";
 import { basenameOf, classifySelection, getMediaRoots, isAbsolutePath, stripAnnotation } from "../path_browser.js";
+import { ICONS } from "../fbui/controls.js";
+import { chainCallback } from "../fbui/dom.js";
 import { findWidget } from "../fbui/widgets.js";
 
 export const NONE = "(none)";
@@ -157,5 +159,38 @@ export function loadPlus({ widget, listKind = "media", navKind = "media", allowe
         return root ? `${String(root).replace(/[\\/]+$/, "")}/${String(value).replace(/^[\\/]+/, "")}` : null;
     }
 
-    return { isFile, sourceFolder, current, refreshForSource, refreshOptions, setFile, openBrowser, step, upload, absolutePath };
+    // ← / → step through the files on the node under the pointer; the
+    // listener is added with the first node.
+    let hovered = null;
+    let listening = false;
+    const typing = (target) => /^(INPUT|TEXTAREA|SELECT)$/.test(target?.tagName ?? "") || target?.isContentEditable;
+    const hoveredNode = () => (hovered?.graph && !hovered.flags?.collapsed ? hovered : null);
+
+    function track(node) {
+        const card = node._fb.card.root;
+        card.addEventListener("pointerenter", () => { hovered = node; });
+        card.addEventListener("pointerleave", () => { if (hovered === node) hovered = null; });
+        chainCallback(node, "onMouseEnter", () => { hovered = node; });
+        chainCallback(node, "onMouseLeave", () => { if (hovered === node) hovered = null; });
+        chainCallback(node, "onRemoved", () => { if (hovered === node) hovered = null; });
+        if (listening) return;
+        listening = true;
+        window.addEventListener("keydown", (event) => {
+            if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+            if (event.defaultPrevented || typing(event.target) || event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return;
+            const node = hoveredNode();
+            if (!node || !step(node, event.key === "ArrowRight" ? 1 : -1)) return;
+            event.preventDefault();
+            event.stopPropagation();
+        }, true);
+    }
+
+    // The Source row's buttons: previous, next, browse.
+    const sourceButtons = [
+        { text: "", icon: ICONS.chevronLeft, title: "Previous file (or press ← with the pointer over the node)", onClick: (node) => step(node, -1) },
+        { text: "", icon: ICONS.chevronRight, title: "Next file (or press → with the pointer over the node)", onClick: (node) => step(node, 1) },
+        { text: "", icon: ICONS.folder, title: "Browse files anywhere on disk", onClick: (node) => openBrowser(node) },
+    ];
+
+    return { isFile, sourceFolder, current, refreshForSource, refreshOptions, setFile, openBrowser, step, upload, absolutePath, track, hoveredNode, sourceButtons };
 }

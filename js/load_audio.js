@@ -321,13 +321,14 @@ function setupNode(node) {
         rows: [
             {
                 widget: "audio", label: "Source", kind: "select", labels: sourceLabel,
-                button: { text: "", icon: ICONS.folder, title: "Browse files anywhere on disk", onClick: () => files.openBrowser(node) },
+                button: files.sourceButtons,
             },
             { panel: playerPanel, height: PLAYER_HEIGHT },
             { pair: ["in_point", "out_point"], label: "Trim", prefixes: ["In", "Out"], suffix: "s", title: "Clip start and end in seconds (out 0 = to the end)" },
             { panel: captionPanel, height: CAPTION_HEIGHT },
         ],
     });
+    files.track(node);
 
     // The trim fields move the timeline and keep playback inside the trim.
     for (const name of ["in_point", "out_point"]) {

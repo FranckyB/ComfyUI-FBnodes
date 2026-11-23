@@ -209,12 +209,13 @@ function setupNode(node) {
         rows: [
             {
                 widget: "video", label: "Source", kind: "select", labels: sourceLabel,
-                button: { text: "", icon: ICONS.folder, title: "Browse files anywhere on disk", onClick: () => files.openBrowser(node) },
+                button: files.sourceButtons,
             },
             { panel: stagePanel, grow: true, height: STAGE_MIN_HEIGHT },
             { panel: captionPanel, height: CAPTION_HEIGHT },
         ],
     });
+    files.track(node);
 
     chainCallback(node, "onConfigure", () => {
         fb.configured = true;

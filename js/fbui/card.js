@@ -9,7 +9,7 @@
 //       info: help lines shown from an (i) beside the label (see controls.info)
 //       kind: scrub | segment | select | switch | text (default: from the widget)
 //       labels: { value: text } or (value, values, node) => text
-//       button: { text, icon?, title?, onClick(node, card) } after the control
+//       button: { text, icon?, title?, onClick(node, card) } (or a list) after the control
 //   { pair: [a, b], label, sep?, when?, group? }
 //   { section: "Caption", when? }
 //   { label, control: (node, card) => ({ element, sync?(values) }), widgets?, when?, group? }
@@ -252,8 +252,7 @@ export function mountCard(node, { rows, minWidth = 280, first = false } = {}) {
       control.append(field);
       fields.set(name, field);
     });
-    if (row.button) {
-      const { text, onClick, ...rest } = row.button;
+    for (const { text, onClick, ...rest } of [row.button ?? []].flat()) {
       control.append(makeButton(text, { ...rest, onClick: () => onClick?.(node, card) }));
     }
     line.append(label, control);

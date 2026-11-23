@@ -628,10 +628,10 @@ function showContextMenu(node, event) {
 
 // ---------------------------------------------------------------- keyboard
 
-// Shortcuts act on the Load Image+ node under the pointer.
-let hovered = null;
+// Shortcuts act on the Load Image+ node under the pointer (← / → come from
+// load_plus).
 const typing = (target) => /^(INPUT|TEXTAREA|SELECT)$/.test(target?.tagName ?? "") || target?.isContentEditable;
-const activeNode = () => (hovered?.graph && !hovered.flags?.collapsed ? hovered : null);
+const activeNode = () => files.hoveredNode();
 
 function installShortcuts() {
     window.addEventListener("keydown", (event) => {
@@ -640,9 +640,7 @@ function installShortcuts() {
         if (!node) return;
         const fb = node._fb;
         let handled = false;
-        if ((event.key === "ArrowLeft" || event.key === "ArrowRight") && !event.shiftKey) {
-            handled = files.step(node, event.key === "ArrowRight" ? 1 : -1);
-        } else if (fb.tool === "mask" && (event.key === "[" || event.key === "]")) {
+        if (fb.tool === "mask" && (event.key === "[" || event.key === "]")) {
             const step = Math.max(1, Math.round(fb.mask.brushSize * 0.15));
             editMask(node, (m) => { m.brushSize = Math.max(1, Math.min(BRUSH_MAX, m.brushSize + (event.key === "]" ? step : -step))); });
             handled = true;
@@ -709,7 +707,7 @@ function setupNode(node) {
         rows: [
             {
                 widget: "image", label: "Source", kind: "select", labels: sourceLabel,
-                button: { text: "", icon: ICONS.folder, title: "Browse files anywhere on disk", onClick: () => files.openBrowser(node) },
+                button: files.sourceButtons,
             },
             { label: "Edit", control: editControl },
             { label: "Brush", control: brushControl, when: (_values, n) => n._fb.tool === "mask" },
@@ -723,11 +721,7 @@ function setupNode(node) {
         ],
     });
 
-    const card = fb.card.root;
-    card.addEventListener("pointerenter", () => { hovered = node; });
-    card.addEventListener("pointerleave", () => { if (hovered === node) hovered = null; });
-    chainCallback(node, "onMouseEnter", () => { hovered = node; });
-    chainCallback(node, "onMouseLeave", () => { if (hovered === node) hovered = null; });
+    files.track(node);
 
     chainCallback(node, "onConfigure", () => {
         fb.configured = true;
@@ -743,7 +737,6 @@ function setupNode(node) {
     });
     chainCallback(node, "onRemoved", () => {
         fb.stage?.dispose();
-        if (hovered === node) hovered = null;
     });
 
     node.onDragOver = (event) => Boolean(event.dataTransfer?.types?.includes("Files"));
