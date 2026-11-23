@@ -2,7 +2,7 @@
  * Save Image+ review: when the node's `review` is on, the run pauses and the
  * images waiting in temp fill the screen. Click the ones to keep, then Send:
  * the picked ones move to the output folder (none picked sends none). Skip
- * keeps none. The node's timer applies on_timeout if nobody answers.
+ * keeps none. When the node's timer runs out, every image is saved.
  *
  * Space shows one image at the full size of the screen (←/→ step through,
  * a click picks it, Space or Esc go back to all of them). Enter sends.
@@ -102,7 +102,6 @@ function showReview(detail) {
     const requestId = String(detail.request_id);
     const images = Array.isArray(detail.images) ? detail.images : [];
     const timeout = Math.max(0, Number(detail.timeout) || 0);
-    const verb = detail.on_timeout === "skip all" ? "Skipping all" : "Saving all";
     const picked = new Set();
     let single = -1; // the image shown alone, or -1 for all of them
     let hovered = 0;
@@ -246,7 +245,7 @@ function showReview(detail) {
         bar.classList.toggle("paused", paused);
         timerPill.innerHTML = paused
             ? `${ICONS.play}<span>Paused · ${formatTime(remaining)} left</span>`
-            : `${ICONS.pause}<span>${verb} in ${formatTime(remaining)}</span>`;
+            : `${ICONS.pause}<span>Saving all in ${formatTime(remaining)}</span>`;
         timerPill.title = paused ? "Resume the countdown" : "Pause the countdown (picking pauses it too)";
         barFill.style.width = `${Math.max(0, Math.min(100, (remaining / timeout) * 100))}%`;
     }
@@ -307,7 +306,7 @@ app.registerExtension({
             if (index >= 0) queued.splice(index, 1);
             if (open?.requestId !== String(requestId)) return;
             open.close();
-            if (outcome === "timeout") toast("Review timed out; the node's on_timeout choice was applied.");
+            if (outcome === "timeout") toast("Review timed out: every image was saved.");
             else if (outcome === "interrupted") toast("Review cancelled with the run.", { severity: "warn" });
         });
     },

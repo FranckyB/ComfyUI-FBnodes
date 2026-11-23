@@ -93,6 +93,8 @@ function persist(node) {
 function restore(node) {
     const fb = node._fb;
     const props = node.properties;
+    // A workflow saved with the canvas face's Controls open opens Options.
+    if (props._saveImageControlsExpanded && props.fbui_open_options === undefined) props.fbui_open_options = true;
     const parse = (raw) => {
         try {
             const value = JSON.parse(raw || "[]");
@@ -429,15 +431,15 @@ function setupNode(node) {
     fb.card = mountCard(node, {
         minWidth: MIN_WIDTH,
         rows: [
-            { widget: "filename_prefix", label: "Prefix", kind: "text" },
-            { widget: "save", label: "Save", offText: "preview only", onText: "save" },
-            { widget: "format", label: "Format", kind: "segment", labels: { png: "PNG", exr: "EXR", avif: "AVIF" }, when: saving },
-            { widget: "review", label: "Review", when: saving },
-            { pair: ["review_timeout", "on_timeout"], label: "Timeout", suffix: "s", when: (values) => saving(values) && values.review },
-            { group: "more", label: "More", when: saving },
-            { widget: "bit_depth", label: "Depth", kind: "segment", group: "more", when: saving },
-            { widget: "input_color_space", label: "Color", kind: "segment", group: "more", when: saving },
-            { widget: "crf", label: "CRF", group: "more", when: (values) => saving(values) && values.format === "avif" },
+            { group: "options", label: "Options" },
+            { widget: "filename_prefix", label: "Prefix", kind: "text", group: "options" },
+            { widget: "save", label: "Save", offText: "preview only", onText: "save", group: "options" },
+            { widget: "format", label: "Format", kind: "segment", labels: { png: "PNG", exr: "EXR", avif: "AVIF" }, group: "options", when: saving },
+            { widget: "bit_depth", label: "Depth", kind: "segment", group: "options", when: saving },
+            { widget: "input_color_space", label: "Color", kind: "segment", group: "options", when: saving },
+            { widget: "crf", label: "CRF", group: "options", when: (values) => saving(values) && values.format === "avif" },
+            { widget: "review", label: "Review", group: "options", when: saving },
+            { widget: "review_timeout", label: "Timeout", suffix: "s", title: "Seconds to wait for your pick; then every image is saved. 0 waits until you decide.", group: "options", when: (values) => saving(values) && values.review },
             { label: "Image", control: pickerControl("saved"), when: (_values, n) => n._fb.saved.length > 1 },
             { label: "Compare", control: pickerControl("compare"), when: (_values, n) => n._fb.compare.length > 1 && (!n._fb.paired || n._fb.unpaired) },
             { panel: stagePanel, grow: true, height: STAGE_MIN_HEIGHT },
@@ -472,7 +474,7 @@ app.registerExtension({
     beforeRegisterNodeDef(nodeType, nodeData) {
         if (nodeData.name !== NODE_NAME) return;
         hideInputsInDef(nodeData, [
-            "filename_prefix", "save", "format", "bit_depth", "input_color_space", "crf", "review", "review_timeout", "on_timeout",
+            "filename_prefix", "save", "format", "bit_depth", "input_color_space", "crf", "review", "review_timeout",
         ]);
         chainCallback(nodeType.prototype, "onNodeCreated", function () {
             setupNode(this);

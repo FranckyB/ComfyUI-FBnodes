@@ -102,16 +102,11 @@ class SaveImageTests(unittest.TestCase):
         self.assertEqual(self.events[-1], ("fbnodes.save_image.review_done", {"request_id": announced["request_id"], "outcome": "decided"}))
         self.assertEqual(self.env["_PENDING_REVIEWS"], {})
 
-    def test_review_timeout_applies_on_timeout(self):
-        for on_timeout, saved in (("skip all", 0), ("save all", 2)):
-            with self.subTest(on_timeout=on_timeout):
-                for path in self.output.iterdir():
-                    path.unlink()
-                result = self.node.save_images(self.images, "prefix", review=True, review_timeout=1, on_timeout=on_timeout)
-                self.assertEqual(self.events[-1][1]["outcome"], "timeout")
-                self.assertEqual(len(list(self.output.iterdir())), saved)
-                kept = [info["type"] for info in result["ui"]["saved_images"]]
-                self.assertEqual(kept, ["output"] * 2 if saved else ["temp"] * 2)
+    def test_review_timeout_saves_everything(self):
+        result = self.node.save_images(self.images, "prefix", review=True, review_timeout=1)
+        self.assertEqual(self.events[-1][1]["outcome"], "timeout")
+        self.assertEqual(len(list(self.output.iterdir())), 2)
+        self.assertEqual([info["type"] for info in result["ui"]["saved_images"]], ["output"] * 2)
 
     def test_review_is_skipped_when_not_saving(self):
         self.node.save_images(self.images, "prefix", save=False, review=True)
@@ -121,7 +116,7 @@ class SaveImageTests(unittest.TestCase):
         schema = self.node.INPUT_TYPES()
         self.assertEqual(list(schema["required"]), ["images", "filename_prefix", "save"])
         # New inputs are only ever appended, so saved widgets_values keep their places.
-        self.assertEqual(list(schema["optional"]), ["Compare", "format", "bit_depth", "input_color_space", "crf", "review", "review_timeout", "on_timeout"])
+        self.assertEqual(list(schema["optional"]), ["Compare", "format", "bit_depth", "input_color_space", "crf", "review", "review_timeout"])
         self.assertEqual(list(inspect.signature(self.node.save_images).parameters)[:6],
                          ["images", "filename_prefix", "save", "Compare", "prompt", "extra_pnginfo"])
         result = self.node.save_images(self.images, "old", True, self.images, {"node": 1}, {"workflow": {"id": 2}})

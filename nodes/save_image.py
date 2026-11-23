@@ -152,11 +152,7 @@ class SaveImagePlus:
                 ),
                 "review_timeout": (
                     "INT",
-                    {"default": 60, "min": 0, "max": 3600, "tooltip": "Seconds to wait for your pick before on_timeout applies. 0 waits until you decide."},
-                ),
-                "on_timeout": (
-                    ["save all", "skip all"],
-                    {"default": "save all", "tooltip": "What happens to the images when the review timer runs out."},
+                    {"default": 120, "min": 0, "max": 3600, "tooltip": "Seconds to wait for your pick; when it runs out every image is saved. 0 waits until you decide."},
                 ),
             },
             "hidden": {
@@ -175,7 +171,7 @@ class SaveImagePlus:
 
     def save_images(self, images, filename_prefix, save=True, Compare=None, prompt=None, extra_pnginfo=None,
                     format="png", bit_depth="8-bit", input_color_space="sRGB", crf=18,
-                    review=False, review_timeout=60, on_timeout="save all", unique_id=None):
+                    review=False, review_timeout=120, unique_id=None):
         if images is None or len(images) == 0:
             return ("",)
 
@@ -301,7 +297,7 @@ class SaveImagePlus:
 
         if reviewing:
             ui_images, last_file = self._review(
-                ui_images, written_paths, filename_prefix, width, height, ext, review_timeout, on_timeout, unique_id
+                ui_images, written_paths, filename_prefix, width, height, ext, review_timeout, unique_id
             )
 
         if Compare is not None and len(Compare) > 0:
@@ -327,7 +323,7 @@ class SaveImagePlus:
         }
         return {"ui": ui_payload, "result": (last_file,)}
 
-    def _review(self, ui_images, written_paths, filename_prefix, width, height, ext, review_timeout, on_timeout, unique_id):
+    def _review(self, ui_images, written_paths, filename_prefix, width, height, ext, review_timeout, unique_id):
         """Show the temp images in the frontend and move the picked ones to the
         output folder. Returns the node's ui images and the last saved name."""
         request_id = str(uuid.uuid4())
@@ -347,7 +343,6 @@ class SaveImagePlus:
                 "request_id": request_id,
                 "node_id": str(unique_id or ""),
                 "timeout": timeout,
-                "on_timeout": on_timeout,
                 "images": ui_images,
             })
             outcome = _wait_for_review(item)
@@ -359,10 +354,8 @@ class SaveImagePlus:
                 "outcome": outcome,
             })
 
-        if outcome == "decided":
-            selected = item["selected"] or []
-        else:
-            selected = list(range(len(ui_images))) if on_timeout == "save all" else []
+        # Nobody answered in time: everything is saved.
+        selected = (item["selected"] or []) if outcome == "decided" else list(range(len(ui_images)))
         if not selected:
             # Nothing kept: the node still shows what was made, from temp.
             return ui_images, ""
