@@ -143,11 +143,13 @@ export function openMenu(x, y, items) {
   return { menu, close };
 }
 
-// openViewer([{ url, title, video?, fallback? }], index): the picture (or
-// video) as large as the screen allows over a darkened ComfyUI. ←/→ step
-// through several, Esc or a click on the dark closes. `fallback` is an image
-// URL shown when the browser cannot play a video.
-export function openViewer(items, index = 0) {
+// openViewer([{ url, title, video?, fallback?, where? }], index, { step? }):
+// the picture (or video) as large as the screen allows over a darkened
+// ComfyUI. ←/→ and the ‹ › buttons step through several, Esc or a click on
+// the dark closes. `fallback` is an image URL shown when the browser cannot
+// play a video. With `step(direction)` the caller does the stepping instead
+// and returns the item to show (null to stay); `where` labels its position.
+export function openViewer(items, index = 0, { step = null } = {}) {
   ensureKitCss();
   if (!items.length) return;
   const root = el("div", "fbui-viewer");
@@ -159,8 +161,8 @@ export function openViewer(items, index = 0) {
     stack.splice(stack.indexOf(close), 1);
     document.removeEventListener("keydown", onKey, true);
   };
-  const prev = button("", { icon: ICONS.chevronLeft, title: "Previous (←)", onClick: () => show(at - 1) });
-  const next = button("", { icon: ICONS.chevronRight, title: "Next (→)", onClick: () => show(at + 1) });
+  const prev = button("", { icon: ICONS.chevronLeft, title: "Previous (←)", onClick: () => move(-1) });
+  const next = button("", { icon: ICONS.chevronRight, title: "Next (→)", onClick: () => move(1) });
   prev.classList.add("nav", "prev");
   next.classList.add("nav", "next");
   const shut = button("", { icon: ICONS.close, title: "Close (Esc)", onClick: close });
@@ -188,12 +190,20 @@ export function openViewer(items, index = 0) {
     stage.replaceChildren(media);
     name.textContent = item.title ?? "";
     name.title = item.title ?? "";
-    where.textContent = `${at + 1} / ${items.length}`;
+    where.textContent = item.where ?? `${at + 1} / ${items.length}`;
+    where.hidden = !where.textContent || (!step && items.length < 2);
+  }
+  function move(direction) {
+    if (!step) return show(at + direction);
+    const item = step(direction);
+    if (!item) return;
+    items = [item];
+    show(0);
   }
   const onKey = (event) => {
     if (stack[stack.length - 1] !== close) return;
     if (event.key === "Escape") close();
-    else if (items.length > 1 && (event.key === "ArrowLeft" || event.key === "ArrowRight")) show(at + (event.key === "ArrowRight" ? 1 : -1));
+    else if ((step || items.length > 1) && (event.key === "ArrowLeft" || event.key === "ArrowRight")) move(event.key === "ArrowRight" ? 1 : -1);
     else return;
     event.preventDefault();
     event.stopPropagation();
@@ -201,7 +211,7 @@ export function openViewer(items, index = 0) {
   root.addEventListener("pointerdown", (event) => {
     if (event.target === root || event.target === stage) close();
   });
-  prev.hidden = next.hidden = where.hidden = items.length < 2;
+  prev.hidden = next.hidden = !step && items.length < 2;
   root.append(stage, name, where, shut, prev, next);
   document.body.append(root);
   document.addEventListener("keydown", onKey, true);

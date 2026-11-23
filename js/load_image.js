@@ -108,18 +108,27 @@ function fitNodeToImage(node) {
     node.setDirtyCanvas(true, true);
 }
 
-function showPreviewModal(node) {
+// The node's file for the large preview, with its place in the folder.
+function previewItem(node) {
     const filename = imageValue(node);
-    if (!filename || filename === NONE || filename === BLANK) return;
+    if (!filename || filename === NONE || filename === BLANK) return null;
     const source = sourceFolder(node);
     const video = isVideoFile(filename);
-    openViewer([{
+    const list = (findWidget(node, "image")?.options?.values ?? []).filter(files.isFile);
+    return {
         url: previewUrl(filename, source),
         title: basenameOf(filename),
         video,
         // H265 / yuv444 cannot play in the browser: show the backend's first frame.
         fallback: video ? api.apiURL(`/fbnodes/video-frame?${new URLSearchParams({ filename, source, position: "0" })}`) : null,
-    }]);
+        where: list.length > 1 ? `${list.indexOf(filename) + 1} / ${list.length}` : "",
+    };
+}
+
+// ←/→ and ‹ › in the preview step the node itself, as over the node.
+function showPreviewModal(node) {
+    const item = previewItem(node);
+    if (item) openViewer([item], 0, { step: (direction) => (files.step(node, direction) ? previewItem(node) : null) });
 }
 
 // ---------------------------------------------------------------- crop / flip state
