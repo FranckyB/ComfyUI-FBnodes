@@ -1,9 +1,11 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
+import { button as kitButton } from "./fbui/controls.js";
+import { el } from "./fbui/dom.js";
+import { openModal } from "./fbui/modal.js";
+import { MONO, T } from "./fbui/theme.js";
 
 const BUTTON_ID = "fbnodes-repath-missing-assets-btn";
-const SUMMARY_ID = "fbnodes-repath-summary";
-const SUMMARY_BACKDROP_ID = "fbnodes-repath-summary-backdrop";
 const COMFY_MENU_MODE_KEY = "Comfy.UseNewMenu";
 const MENU_MODE_DISABLED = "Disabled";
 const SEARCH_ICON_URL = new URL("./search.png", import.meta.url).href;
@@ -240,61 +242,6 @@ function applyRemaps(updates) {
     return applied;
 }
 
-function removeExistingSummary() {
-    const existing = document.getElementById(SUMMARY_ID);
-    if (existing) {
-        existing.remove();
-    }
-
-    const backdrop = document.getElementById(SUMMARY_BACKDROP_ID);
-    if (backdrop) {
-        backdrop.remove();
-    }
-}
-
-function makeDraggable(panel, handle) {
-    let dragging = false;
-    let offsetX = 0;
-    let offsetY = 0;
-
-    const onMouseMove = (event) => {
-        if (!dragging) return;
-
-        const maxLeft = Math.max(0, window.innerWidth - panel.offsetWidth);
-        const maxTop = Math.max(0, window.innerHeight - panel.offsetHeight);
-
-        const nextLeft = Math.min(Math.max(0, event.clientX - offsetX), maxLeft);
-        const nextTop = Math.min(Math.max(0, event.clientY - offsetY), maxTop);
-
-        panel.style.left = `${nextLeft}px`;
-        panel.style.top = `${nextTop}px`;
-    };
-
-    const onMouseUp = () => {
-        dragging = false;
-        document.removeEventListener("mousemove", onMouseMove);
-        document.removeEventListener("mouseup", onMouseUp);
-    };
-
-    handle.addEventListener("mousedown", (event) => {
-        if (event.button !== 0) return;
-
-        event.preventDefault();
-        const rect = panel.getBoundingClientRect();
-
-        dragging = true;
-        offsetX = event.clientX - rect.left;
-        offsetY = event.clientY - rect.top;
-
-        panel.style.transform = "none";
-        panel.style.left = `${rect.left}px`;
-        panel.style.top = `${rect.top}px`;
-
-        document.addEventListener("mousemove", onMouseMove);
-        document.addEventListener("mouseup", onMouseUp);
-    });
-}
-
 function setButtonBusy(button, busy) {
     if (!button) return;
     button.dataset.busy = busy ? "1" : "0";
@@ -326,108 +273,47 @@ function ensureStyles() {
     document.head.appendChild(style);
 }
 
+// The result: counts, then the models still missing or ambiguous.
 function showSummary(result, appliedCount) {
-    removeExistingSummary();
-
     const stats = result?.stats || {};
-    const unresolved = (result?.updates || []).filter(
-        (u) => u.status === "unresolved" || u.status === "ambiguous"
-    );
-    const allResolved = unresolved.length === 0;
+    const unresolved = (result?.updates || []).filter((u) => u.status === "unresolved" || u.status === "ambiguous");
 
-    const backdrop = document.createElement("div");
-    backdrop.id = SUMMARY_BACKDROP_ID;
-    backdrop.style.cssText = [
-        "position: fixed",
-        "inset: 0",
-        "z-index: 10039",
-        "background: transparent",
-    ].join(";");
-    backdrop.addEventListener("click", () => removeExistingSummary());
-
-    const wrapper = document.createElement("div");
-    wrapper.id = SUMMARY_ID;
-    wrapper.style.cssText = [
-        "position: fixed",
-        "left: 50%",
-        "top: 50%",
-        "transform: translate(-50%, -50%)",
-        "z-index: 10040",
-        "background: rgba(26, 30, 38, 0.98)",
-        "border: 1px solid rgba(255,255,255,0.12)",
-        "border-radius: 10px",
-        "box-shadow: 0 10px 30px rgba(0,0,0,0.4)",
-        "width: min(560px, calc(100vw - 32px))",
-        "max-height: 70vh",
-        "color: #d8dde7",
-        "font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif",
-    ].join(";");
-
-    const title = document.createElement("div");
-    title.style.cssText = "padding: 11px 14px; border-bottom: 1px solid rgba(255,255,255,0.1); display:flex; justify-content:flex-start; align-items:center; cursor:move; user-select:none;";
-    title.innerHTML = allResolved
-        ? `<strong style=\"font-size:20px; display:flex; align-items:center; gap:8px;\"><svg viewBox=\"0 0 24 24\" width=\"18\" height=\"18\" aria-hidden=\"true\"><path fill=\"#72e6ad\" d=\"M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2m4.1 7.8l-4.8 5.6a1 1 0 0 1-1.5.1l-2-2a1 1 0 0 1 1.4-1.4l1.2 1.2l4.1-4.8a1 1 0 0 1 1.5 1.3\"/></svg>All Paths Resolved</strong>`
-        : `<strong style=\"font-size:20px\">Missing Model Remap</strong>`;
-
-    const body = document.createElement("div");
-    body.style.cssText = "padding: 14px 16px; font-size: 18px; line-height: 1.6; overflow:auto; max-height: calc(70vh - 44px);";
-
-    const lines = [
-        `Scanned: ${stats.scanned || 0}`,
-        `Remapped: ${stats.remapped || 0}`,
-        `Applied: ${appliedCount}`,
-        `Unchanged: ${stats.unchanged || 0}`,
-        `Unresolved: ${stats.unresolved || 0}`,
-        `Ambiguous: ${stats.ambiguous || 0}`,
-    ];
-
-    const summary = document.createElement("div");
-    summary.style.cssText = "display:grid; grid-template-columns: 1fr 1fr; gap: 8px 16px; margin-bottom: 12px;";
-    for (const line of lines) {
-        const item = document.createElement("div");
-        item.textContent = line;
-        item.style.cssText = "font-weight:600; letter-spacing:0.1px;";
-        summary.appendChild(item);
+    const counts = el("div");
+    counts.style.cssText = "display:grid;grid-template-columns:1fr 1fr;gap:6px 16px;font-variant-numeric:tabular-nums";
+    for (const [label, value] of [
+        ["Scanned", stats.scanned], ["Remapped", stats.remapped], ["Applied", appliedCount],
+        ["Unchanged", stats.unchanged], ["Unresolved", stats.unresolved], ["Ambiguous", stats.ambiguous],
+    ]) {
+        const line = el("div", "", `${label} `);
+        line.style.color = T.label;
+        const number = el("b", "", String(value || 0));
+        number.style.color = T.ink;
+        line.append(number);
+        counts.append(line);
     }
+    const body = [counts];
 
-    body.appendChild(summary);
-
-    if (unresolved.length > 0) {
-        const details = document.createElement("details");
-        details.style.cssText = "border-top:1px solid rgba(255,255,255,0.08); padding-top:8px;";
-
-        const summaryEl = document.createElement("summary");
-        summaryEl.textContent = `Show unresolved/ambiguous (${unresolved.length})`;
-        summaryEl.style.cssText = "cursor:pointer; color:#8fc8ff; margin-bottom:8px; font-weight:600;";
-        details.appendChild(summaryEl);
-
-        const list = document.createElement("div");
-        list.style.cssText = "display:flex; flex-direction:column; gap:4px;";
-
+    if (unresolved.length) {
+        const details = el("details");
+        details.style.cssText = `margin-top:12px;padding-top:8px;border-top:1px solid ${T.plateEdge}`;
+        const toggle = el("summary", "", `Unresolved or ambiguous (${unresolved.length})`);
+        toggle.style.cssText = `cursor:pointer;color:${T.brandInk};font-weight:600`;
+        const list = el("div");
+        list.style.cssText = `display:flex;flex-direction:column;gap:3px;margin-top:6px;font:12px ${MONO};color:${T.inkSoft}`;
         for (const item of unresolved.slice(0, 50)) {
-            const row = document.createElement("div");
-            const reason = item.reason ? ` (${item.reason})` : "";
-            row.textContent = `#${item.node_id} ${item.widget_name}: ${item.old_value}${reason}`;
-            row.style.cssText = "color:#d8dde7; font-size:16px; line-height:1.45;";
-            list.appendChild(row);
+            list.append(el("div", "", `#${item.node_id} ${item.widget_name}: ${item.old_value}${item.reason ? ` (${item.reason})` : ""}`));
         }
-
-        if (unresolved.length > 50) {
-            const more = document.createElement("div");
-            more.textContent = `... ${unresolved.length - 50} more`;
-            more.style.cssText = "opacity:0.7;";
-            list.appendChild(more);
-        }
-
-        details.appendChild(list);
-        body.appendChild(details);
+        if (unresolved.length > 50) list.append(el("div", "", `… ${unresolved.length - 50} more`));
+        details.append(toggle, list);
+        body.push(details);
     }
 
-    document.body.appendChild(backdrop);
-    wrapper.appendChild(title);
-    wrapper.appendChild(body);
-    document.body.appendChild(wrapper);
-    makeDraggable(wrapper, title);
+    const dialog = openModal({
+        title: unresolved.length ? "Missing model remap" : "All paths resolved",
+        body,
+        footer: kitButton("Close", { primary: true, onClick: () => dialog.close() }),
+        width: 520,
+    });
 }
 
 async function runRemap(button) {
