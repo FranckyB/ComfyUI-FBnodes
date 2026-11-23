@@ -927,7 +927,7 @@ class LoadImagePlus:
     DESCRIPTION = "A better image/video loader with file browser, preview, and input/output folder switching."
     RETURN_TYPES = ("IMAGE", "MASK", "IMAGE")
     RETURN_NAMES = ("image", "mask", "canvas")
-    OUTPUT_TOOLTIPS = ("The picture (crop and flips applied, never padded).", "The painted mask (or the file's alpha); with Pad on, the canvas's mask: the new area, the feather and anything painted.", "With Pad on, the padded canvas to outpaint (the picture itself otherwise).")
+    OUTPUT_TOOLTIPS = ("The picture (crop and flips applied, never padded).", "The painted mask (or the file's alpha); with Pad on, the canvas's mask: the new area, the feather and anything painted.", "For Pad: the padded canvas to outpaint, for the Outpaint nodes. With Pad off, the picture itself.")
     FUNCTION = "load"
     OUTPUT_NODE = False
 

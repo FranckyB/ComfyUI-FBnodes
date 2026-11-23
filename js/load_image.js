@@ -215,14 +215,6 @@ function parsePad(value) {
 function syncPadData(node) {
     const { enabled, left, right, top, bottom, feather, aspect } = node._fb.pad;
     findWidget(node, "pad_data").value = JSON.stringify({ version: 1, enabled, left, right, top, bottom, feather, aspect });
-    syncCanvasOutput(node);
-}
-
-// The canvas output shows while Pad is on, and stays while a link still uses it.
-function syncCanvasOutput(node) {
-    const slot = node.findOutputSlot("canvas");
-    if (node._fb.pad.enabled && slot < 0) node.addOutput("canvas", "IMAGE");
-    else if (!node._fb.pad.enabled && slot >= 0 && !node.outputs[slot].links?.length) node.removeOutput(slot);
 }
 
 // Width / height the canvas is held to, or null while the aspect is free.
@@ -867,7 +859,6 @@ function setupNode(node) {
     });
 
     files.track(node);
-    syncCanvasOutput(node);
 
     chainCallback(node, "onConfigure", () => {
         fb.configured = true;
@@ -876,7 +867,8 @@ function setupNode(node) {
         if (!props._cropData && findWidget(node, "crop_data")?.value) props._cropData = findWidget(node, "crop_data").value;
         fb.crop = parseCrop(props._cropData);
         fb.pad = parsePad(findWidget(node, "pad_data")?.value);
-        syncCanvasOutput(node);
+        // Workflows saved before the canvas output, or while it hid with Pad off.
+        if (node.findOutputSlot("canvas") < 0) node.addOutput("canvas", "IMAGE");
         for (const axis of ["flip_x", "flip_y"]) if (props[axis] !== undefined) setFlip(node, axis, Boolean(props[axis]));
         fb.tool = TOOLS.find((tool) => fb[tool].enabled) ?? null;
         syncCropData(node);
