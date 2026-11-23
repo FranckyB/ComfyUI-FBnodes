@@ -34,6 +34,7 @@ export const T = Object.freeze({
   warn: "#e0a040",
   warnInk: "#ffdca8",
   warnSoft: "#3a2a10",
+  latent: "#c840c0",          // a lossless .latent file beside a clip
 
   overlay: "rgba(0,0,0,.72)", // modal backdrop
   panel: "#171b20",           // modal surface

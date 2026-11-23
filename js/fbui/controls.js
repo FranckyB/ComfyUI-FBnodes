@@ -234,6 +234,7 @@ export const ICONS = {
   chevronLeft: svg('<path d="M10 3.5 5.5 8l4.5 4.5"/>'),
   chevronRight: svg('<path d="M6 3.5 10.5 8 6 12.5"/>'),
   check: svg('<path d="M3 8.5 6.5 12 13 4.5"/>'),
+  grip: svg('<g fill="currentColor" stroke="none"><circle cx="6" cy="4" r="1.1"/><circle cx="10" cy="4" r="1.1"/><circle cx="6" cy="8" r="1.1"/><circle cx="10" cy="8" r="1.1"/><circle cx="6" cy="12" r="1.1"/><circle cx="10" cy="12" r="1.1"/></g>'),
   scissors: svg('<circle cx="4" cy="4.5" r="2"/><circle cx="4" cy="11.5" r="2"/><path d="M5.7 5.6 13.5 12M5.7 10.4 13.5 4"/>'),
   timer: svg('<circle cx="8" cy="9" r="5.5"/><path d="M8 6v3l2 1.5M6.5 1.5h3"/>'),
   chevronDown: svg('<path d="M3.5 6 8 10.5 12.5 6"/>'),
