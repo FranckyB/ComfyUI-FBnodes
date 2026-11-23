@@ -232,7 +232,7 @@ function setupNode(node) {
         // Saved before Encoding existed: values restore by position, so the
         // last result landed in Encoding.
         const encoding = findWidget(node, "custom_encoding");
-        if (typeof encoding.value !== "boolean") {
+        if (encoding && typeof encoding.value !== "boolean") {
             findWidget(node, LAST_RESULT_WIDGET).value = typeof encoding.value === "string" ? encoding.value : "";
             encoding.value = true;
         }
