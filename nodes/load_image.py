@@ -9,7 +9,6 @@ import io
 
 import folder_paths
 import torch
-import torch.nn.functional as F
 import server
 
 try:
@@ -820,40 +819,38 @@ def _parse_pad_data(pad_data):
     return pad
 
 
-def _edge_ramp(size, feather, start, end, device):
-    """1 at a padded edge fading to 0 over `feather` pixels inward, along one axis."""
-    ramp = torch.zeros(size, device=device)
-    if feather <= 0:
-        return ramp
-    steps = 1.0 - (torch.arange(size, dtype=torch.float32, device=device) + 1.0) / (feather + 1.0)
-    steps = steps.clamp(min=0.0)
-    if start:
-        ramp = torch.maximum(ramp, steps)
-    if end:
-        ramp = torch.maximum(ramp, steps.flip(0))
-    return ramp
+def _pad_feather(height, width, pad, device):
+    """Core Pad Image for Outpainting's feather: ((feather - d) / feather)^2 at d pixels from the nearest padded
+    edge, none when the feather is half the picture or more."""
+    feather = pad["feather"]
+    if feather <= 0 or feather * 2 >= height or feather * 2 >= width:
+        return torch.zeros((height, width), device=device)
+
+    def edge_distance(size, start, end):
+        index = torch.arange(size, dtype=torch.float32, device=device)
+        far = torch.full_like(index, float(feather))
+        return torch.minimum(index if start else far, size - index if end else far)
+
+    distance = torch.minimum(edge_distance(height, pad["top"], pad["bottom"])[:, None], edge_distance(width, pad["left"], pad["right"])[None, :])
+    return ((feather - distance).clamp(min=0) / feather) ** 2
 
 
 def _apply_pad(image_tensor, mask_tensor, pad_data=""):
-    """Extend the canvas for outpainting: the new area repeats the edge pixels,
-    and the mask is 1 there, fading `feather` pixels into the picture, joined
-    with the painted (or alpha) mask."""
+    """Extend the canvas for outpainting as core Pad Image for Outpainting does: the new area is 0.5 gray and
+    the mask is 1 there, fading into the picture over the feather, joined with the painted (or alpha) mask."""
     pad = _parse_pad_data(pad_data)
     if pad is None:
         return image_tensor, mask_tensor
-    batch, height, width, _ = image_tensor.shape
+    batch, height, width, channels = image_tensor.shape
     left, right, top, bottom = pad["left"], pad["right"], pad["top"], pad["bottom"]
-    padded = F.pad(image_tensor.movedim(-1, 1), (left, right, top, bottom), mode="replicate").movedim(1, -1)
+    padded = torch.full((batch, height + top + bottom, width + left + right, channels), 0.5, dtype=image_tensor.dtype, device=image_tensor.device)
+    padded[:, top:top + height, left:left + width] = image_tensor
 
-    device = image_tensor.device
-    inner = torch.maximum(
-        _edge_ramp(width, pad["feather"], left > 0, right > 0, device)[None, :],
-        _edge_ramp(height, pad["feather"], top > 0, bottom > 0, device)[:, None],
-    ).expand(batch, height, width)
+    inner = _pad_feather(height, width, pad, image_tensor.device).expand(batch, height, width)
     # A file without alpha gives an all-ones mask, which marks nothing.
     if mask_tensor is not None and mask_tensor.shape[-2:] == (height, width) and mask_tensor.min() < 1:
-        inner = torch.maximum(inner, mask_tensor.to(device))
-    mask = torch.ones((batch, height + top + bottom, width + left + right), dtype=torch.float32, device=device)
+        inner = torch.maximum(inner, mask_tensor.to(image_tensor.device))
+    mask = torch.ones((batch, height + top + bottom, width + left + right), dtype=torch.float32, device=image_tensor.device)
     mask[:, top:top + height, left:left + width] = inner
     return padded, mask
 

@@ -37,7 +37,7 @@ Save images with date-token filenames, output/temp switching, an optional Compar
 - **Large Preview**: Full-screen preview; ‹ › (and ← / → on pictures) step through the folder
 - **Mask Painting**: Paint masks directly in-node; they show live in the preview
 - **Crop + Flip**: In-node crop with exact padding values, plus Flip X / Flip Y
-- **Pad**: Extend the canvas for outpainting by dragging any edge outward (or exact pixels, or an aspect ratio). The new area repeats the edge pixels, and the MASK marks it, fading into the picture over the feather and joined with any painted mask
+- **Pad**: Extend the canvas for outpainting by dragging any edge outward, moving the canvas around the picture, or typing exact pixels; an aspect ratio can be locked. Same output as core Pad Image for Outpainting: the new area is gray, and the MASK marks it, fading into the picture over the feather (shown on the preview), joined with any painted mask
 - **IMAGE + MASK Output**: Outputs both IMAGE and MASK tensors, with alpha channel extraction from images
 
 ### Load Video+

@@ -31,7 +31,7 @@ const STAGE_MIN_HEIGHT = 200;
 // The frame picker: its rail (24) over the FRAME line, 6 apart.
 const FRAME_PANEL_HEIGHT = 24 + 6 + ROW_HEIGHT;
 const BRUSH_MAX = 512;
-const PAD_FEATHER = 24;
+const PAD_FEATHER = 40;
 const PAD_MAX = 16384;
 // The padded canvas's aspect: free, the picture's own, or a fixed ratio.
 const ASPECTS = ["free", "source", "1:1", "4:3", "3:4", "3:2", "2:3", "16:9", "9:16", "21:9"];
