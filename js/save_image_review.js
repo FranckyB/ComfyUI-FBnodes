@@ -18,7 +18,7 @@ import { FONT, RADIUS, T } from "./fbui/theme.js";
 import { bestGrid } from "./common/grid_math.js";
 import { countdown, ding, ensureReviewCss, MARGIN, nodeTitle, PANEL_WIDTH, reviewQueue } from "./common/review.js";
 
-const CSS_ID = "fbnodes-review-css-v3";
+const CSS_ID = "fbnodes-review-css-v4";
 const GAP = 10;
 
 function ensureImageReviewCss() {
@@ -41,7 +41,7 @@ function ensureImageReviewCss() {
 .fbnodes-review-images.single .fbnodes-review-pic{position:absolute;inset:0;margin:auto}
 .fbnodes-review-nav{position:absolute;top:50%;transform:translateY(-50%);width:44px;height:44px;border-radius:50%;background:rgba(16,19,23,.8)}
 .fbnodes-review-nav svg{width:20px;height:20px}
-.fbnodes-review-where{position:absolute;right:${MARGIN}px;top:${MARGIN}px;padding:3px 9px;border-radius:999px;background:rgba(16,19,23,.85);color:${T.ink};font:600 11px ${FONT};font-variant-numeric:tabular-nums}
+.fbnodes-review-where{position:absolute;left:${MARGIN}px;top:${MARGIN}px;padding:3px 9px;border-radius:999px;background:rgba(16,19,23,.85);color:${T.ink};font:600 11px ${FONT};font-variant-numeric:tabular-nums}
 `;
     document.head.append(style);
 }
@@ -120,8 +120,8 @@ function showReview(detail, done) {
     const next = button("", { icon: ICONS.chevronRight, title: "Next (→)", onClick: () => showSingle(single + 1) });
     prev.classList.add("fbnodes-review-nav");
     next.classList.add("fbnodes-review-nav");
-    prev.style.left = `${MARGIN * 2 + PANEL_WIDTH + 8}px`;
-    next.style.right = `${MARGIN + 8}px`;
+    prev.style.left = `${MARGIN + 8}px`;
+    next.style.right = `${MARGIN * 2 + PANEL_WIDTH + 8}px`;
     const where = el("div", "fbnodes-review-where");
     root.append(area, prev, next, where, panel);
     document.body.append(root);

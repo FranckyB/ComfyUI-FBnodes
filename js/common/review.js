@@ -1,5 +1,5 @@
 // What the review screens share (Save Image+, Video Review): the screen
-// itself, the floating panel at its left and the countdown pill that pauses.
+// itself, the floating panel at its right and the countdown pill that pauses.
 // One review is on screen at a time; reviews announced meanwhile wait.
 import { app } from "../../../scripts/app.js";
 import { ICONS } from "../fbui/controls.js";
@@ -9,7 +9,7 @@ import { ensureKitCss, FONT, RADIUS_CARD, T, Z_MODAL } from "../fbui/theme.js";
 export const MARGIN = 20;
 export const PANEL_WIDTH = 220;
 const DING_URL = new URL("../audio/ding.mp3", import.meta.url).href;
-const CSS_ID = "fbnodes-review-shell-css-v1";
+const CSS_ID = "fbnodes-review-shell-css-v2";
 
 export function ensureReviewCss() {
     ensureKitCss();
@@ -18,7 +18,7 @@ export function ensureReviewCss() {
     style.id = CSS_ID;
     style.textContent = `
 .fbnodes-review{position:fixed;inset:0;z-index:${Z_MODAL};background:rgba(5,6,8,.95);font:12px ${FONT};color:${T.inkSoft};user-select:none}
-.fbnodes-review-panel{position:absolute;left:${MARGIN}px;top:${MARGIN}px;width:${PANEL_WIDTH}px;box-sizing:border-box;display:flex;flex-direction:column;gap:8px;padding:12px;border:1px solid ${T.plateEdge};border-radius:${RADIUS_CARD}px;background:${T.panel};box-shadow:0 12px 40px rgba(0,0,0,.6)}
+.fbnodes-review-panel{position:absolute;right:${MARGIN}px;top:${MARGIN}px;width:${PANEL_WIDTH}px;box-sizing:border-box;display:flex;flex-direction:column;gap:8px;padding:12px;border:1px solid ${T.plateEdge};border-radius:${RADIUS_CARD}px;background:${T.panel};box-shadow:0 12px 40px rgba(0,0,0,.6)}
 .fbnodes-review-panel .title{color:${T.ink};font:600 13px ${FONT};overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
 .fbnodes-review-panel .count{color:${T.label};font-variant-numeric:tabular-nums}
 .fbnodes-review-panel .count b{color:${T.ink}}
@@ -33,7 +33,7 @@ export function ensureReviewCss() {
 .fbnodes-review-bar{height:3px;border-radius:2px;background:${T.fill};overflow:hidden}
 .fbnodes-review-bar>i{display:block;height:100%;background:${T.brand};transition:width 1s linear}
 .fbnodes-review-bar.paused>i{background:${T.switchOff}}
-.fbnodes-review-area{position:absolute;top:${MARGIN}px;bottom:${MARGIN}px;left:${MARGIN * 2 + PANEL_WIDTH}px;right:${MARGIN}px}
+.fbnodes-review-area{position:absolute;top:${MARGIN}px;bottom:${MARGIN}px;left:${MARGIN}px;right:${MARGIN * 2 + PANEL_WIDTH}px}
 `;
     document.head.append(style);
 }
