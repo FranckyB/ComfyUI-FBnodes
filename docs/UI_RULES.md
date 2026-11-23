@@ -15,6 +15,7 @@ These rules apply to FBnodes, Prompt Manager and H3RefModPicker. Each pack ships
   - Booleans use an off | on pill.
   - Up to 4 short choices use a segmented pill; longer lists use a select.
   - Buttons use `button()` from `fbui/controls.mjs`.
+- A field that takes tokens or a syntax gets an (i) beside its label (`info:` on the card row) listing what it understands, instead of a long tooltip.
 - Toolbars over a preview go in `.fbui-stage-tools`.
 - **Media frame.** Pictures and videos sit in a `.fbui-stage`:
   - a neutral slate plate (`T.plate`) with a 1px trim (`T.plateEdge`) and rounded corners;

@@ -5,7 +5,8 @@
 // everything on configure, on connection changes and after any callback.
 //
 // Rows:
-//   { widget, label?, kind?, suffix?, labels?, title?, when?, group?, button? }
+//   { widget, label?, kind?, suffix?, labels?, title?, info?, when?, group?, button? }
+//       info: help lines shown from an (i) beside the label (see controls.info)
 //       kind: scrub | segment | select | switch | text (default: from the widget)
 //       labels: { value: text } or (value, values, node) => text
 //       button: { text, icon?, title?, onClick(node, card) } after the control
@@ -20,7 +21,7 @@
 // Options: minWidth, first (place before the node's other DOM widgets).
 import { chainCallback, el, keepDomWidgetWidthAuto, keepKeyInField } from "./dom.mjs";
 import { notifyChange } from "./comfy.mjs";
-import { button as makeButton, segmented } from "./controls.mjs";
+import { button as makeButton, info as infoIcon, segmented } from "./controls.mjs";
 import { cardHeight, choiceLabel, isGroupHeader, rowHeight, rowKind, rowTops, socketWidgetY, visibleRows } from "./card_math.mjs";
 import { ensureNodeMinHeight, fillNodeHeight, pinHeight, WIDGET_FRAME } from "./layout.mjs";
 import { makeScrub, scrubSteps } from "./scrub.mjs";
@@ -229,8 +230,14 @@ export function mountCard(node, { rows, minWidth = 280, first = false } = {}) {
       }
     }
     const line = el("div", "fbui-row");
-    const label = el("span", "fbui-label", row.label ?? names[0]);
+    const label = el("span", "fbui-label");
     label.title = row.title ?? widgetTooltip(node, names[0]);
+    if (row.info) {
+      label.classList.add("has-info");
+      label.append(el("span", "", row.label ?? names[0]), infoIcon(row.info));
+    } else {
+      label.textContent = row.label ?? names[0];
+    }
     const control = el("div", "fbui-control");
     const syncs = [];
     const fields = new Map();

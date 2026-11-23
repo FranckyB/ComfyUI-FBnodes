@@ -7,7 +7,7 @@
 
 // Bump on any change to the CSS below. Two packs shipping the same version
 // inject one stylesheet; different versions both inject and the later wins.
-export const KIT_VERSION = 4;
+export const KIT_VERSION = 5;
 
 export const T = Object.freeze({
   brand: "#4299e1",          // the one accent: picked segment, switch on, focus ring
@@ -75,6 +75,15 @@ export function kitCss() {
 .fbui-row.panel{display:block}
 .fbui-row.panel.grow{flex:1 1 auto;height:auto}
 .fbui-label{overflow:hidden;white-space:nowrap;text-overflow:ellipsis;color:${T.label};font-size:11px;user-select:none}
+.fbui-label.has-info{display:flex;align-items:center;gap:4px}
+.fbui-label.has-info>span{overflow:hidden;text-overflow:ellipsis}
+.fbui-info{flex:none;display:inline-flex;color:${T.faint};cursor:help}
+.fbui-info:hover{color:${T.brandInk}}
+.fbui-info svg{width:12px;height:12px}
+.fbui-pop{position:fixed;z-index:${Z_MENU};max-width:340px;padding:10px 12px;border:1px solid ${T.plateEdge};border-radius:${RADIUS}px;background:${T.panel};box-shadow:0 8px 28px rgba(0,0,0,.55);color:${T.inkSoft};font:11px/1.5 ${FONT};pointer-events:none}
+.fbui-pop>div+div{margin-top:3px}
+.fbui-pop .pair{display:grid;grid-template-columns:auto 1fr;gap:10px}
+.fbui-pop code{color:${T.brandInk};font:600 11px ${MONO}}
 .fbui-control{display:flex;align-items:center;gap:6px;min-width:0;height:100%}
 .fbui-field{display:flex;align-items:center;gap:6px;flex:1 1 0;min-width:0;height:100%}
 .fbui-field.linked{opacity:.5;pointer-events:none}

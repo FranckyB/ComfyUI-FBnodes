@@ -19,6 +19,44 @@ export function button(label, { icon = "", title = "", primary = false, danger =
   return node;
 }
 
+// A small (i) that shows help in a popover while hovered (or after a
+// click, until the pointer leaves). `lines` are strings, or [code, text]
+// pairs shown as a two-column list (tokens and what they become).
+export function info(lines) {
+  const icon = el("span", "fbui-info");
+  icon.innerHTML = ICONS.info;
+  let pop = null;
+  const show = () => {
+    if (pop) return;
+    pop = el("div", "fbui-pop");
+    for (const line of lines) {
+      if (Array.isArray(line)) {
+        const row = el("div", "pair");
+        row.append(el("code", "", line[0]), el("span", "", line[1]));
+        pop.append(row);
+      } else {
+        pop.append(el("div", "", line));
+      }
+    }
+    document.body.append(pop);
+    const box = icon.getBoundingClientRect();
+    const width = pop.offsetWidth;
+    pop.style.left = `${Math.max(8, Math.min(window.innerWidth - width - 8, box.left))}px`;
+    pop.style.top = `${box.bottom + 6}px`;
+  };
+  const hide = () => {
+    pop?.remove();
+    pop = null;
+  };
+  icon.addEventListener("pointerenter", show);
+  icon.addEventListener("pointerleave", hide);
+  icon.addEventListener("click", (event) => {
+    event.stopPropagation();
+    show();
+  });
+  return icon;
+}
+
 // A row of pill choices: segmented([{ value, label, title }], { onPick, bool })
 // -> { root, set(value) }.
 export function segmented(choices, { onPick, bool = false } = {}) {
@@ -104,6 +142,7 @@ export const ICONS = {
   close: svg('<path d="M3.5 3.5l9 9M12.5 3.5l-9 9"/>'),
   invert: svg('<circle cx="8" cy="8" r="5.5"/><path d="M8 2.5v11a5.5 5.5 0 0 0 0-11z" fill="currentColor"/>'),
   eye: svg('<path d="M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z"/><circle cx="8" cy="8" r="1.8"/>'),
+  info: svg('<circle cx="8" cy="8" r="6.5"/><path d="M8 7.2V11.5M8 4.6v.1"/>'),
   open: svg('<path d="M9.5 2.5h4v4M13.5 2.5 8 8M11.5 9.5v3a1 1 0 0 1-1 1h-7a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1h3"/>'),
   up: svg('<path d="M8 13.5v-11M3.5 7 8 2.5 12.5 7"/>'),
   refresh: svg('<path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2.5v3h-3"/>'),

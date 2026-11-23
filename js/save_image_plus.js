@@ -28,6 +28,17 @@ const STAGE_MIN_HEIGHT = 200;
 const MANY = 8;
 const GRID_GAP = 6;
 
+// What the Filename field understands, shown from its (i).
+const FILENAME_HELP = [
+    "Saved as Filename_00001.png, _00002 … in the output folder.",
+    ["a/b/name", "a / makes subfolders"],
+    ["%date:yy-MM-dd%", "the date and time in any layout, using yyyy yy MM dd HH hh mm ss"],
+    ["%year% %month% %day%", "today's date"],
+    ["%hour% %minute% %second%", "the time now"],
+    ["%width% %height%", "the image size"],
+    "With Save off, only the name after the last / is used, in the temp folder.",
+];
+
 // What each format can store; the Depth and Color pills follow the format.
 const FORMAT_OPTIONS = {
     png: { bit_depth: ["8-bit", "16-bit"], input_color_space: ["sRGB"] },
@@ -432,7 +443,7 @@ function setupNode(node) {
         minWidth: MIN_WIDTH,
         rows: [
             { group: "options", label: "Options" },
-            { widget: "filename_prefix", label: "Prefix", kind: "text", group: "options" },
+            { widget: "filename_prefix", label: "Filename", kind: "text", info: FILENAME_HELP, group: "options" },
             { widget: "save", label: "Save", offText: "preview only", onText: "save", group: "options" },
             { widget: "format", label: "Format", kind: "segment", labels: { png: "PNG", exr: "EXR", avif: "AVIF" }, group: "options", when: saving },
             { widget: "bit_depth", label: "Depth", kind: "segment", group: "options", when: saving },
