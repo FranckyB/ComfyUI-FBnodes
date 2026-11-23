@@ -463,8 +463,8 @@ class SaveVideoPlus:
                     "tooltip": "Unix timestamp stamped by the UI when Execute is pressed. Enables %time% in filename_prefix (workflow generation seconds, excluding save/encode)."
                 }),
                 "custom_encoding": ("BOOLEAN", {
-                    "default": True,
-                    "tooltip": "On: encode with codec, chroma and crf above.\nOff: save with ComfyUI's own encoder, using the incoming video's settings (Create Video's bit depth, color space, chroma and codec). Not set there: h264, yuv420, CRF 16."
+                    "default": False,
+                    "tooltip": "On: encode with codec, chroma and crf above.\nOff (auto): save with ComfyUI's own encoder, using the incoming video's settings (Create Video's bit depth, color space, chroma and codec). Not set there: h264, yuv420, CRF 16."
                 }),
             },
             "hidden": {
@@ -536,7 +536,7 @@ class SaveVideoPlus:
 
         return patched
 
-    def save_video(self, video, filename_prefix, codec, chroma, crf, save, save_latent, browser_compat=True, auto_play=True, latent=None, metadata=None, prompt=None, extra_pnginfo=None, exec_start="", custom_encoding=True):
+    def save_video(self, video, filename_prefix, codec, chroma, crf, save, save_latent, browser_compat=True, auto_play=True, latent=None, metadata=None, prompt=None, extra_pnginfo=None, exec_start="", custom_encoding=False):
 
         # Bit depth determined by codec: h264=8-bit, h265=10-bit
         is_10bit = (codec == "h265")
