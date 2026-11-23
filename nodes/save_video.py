@@ -386,8 +386,8 @@ class SaveVideoPlus:
             "required": {
                 "video": ("VIDEO", {"tooltip": "The video to save."}),
                 "filename_prefix": ("STRING", {
-                    "default": "Vids/%year%-%month%-%day%/vid_%hour%-%minute%-%second%",
-                    "tooltip": "Where to save. / makes subfolders; %year% %month% %day% %hour% %minute% %second%, %width% %height%, %time% (seconds the run took) and %date:format% are filled in."
+                    "default": "Vids/%yy%-%month%-%day%/vid_%hour%-%minute%-%second%",
+                    "tooltip": "Where to save. / makes subfolders; %yy% (or %year%) %month% %day% %hour% %minute% %second%, %width% %height%, %time% (seconds the run took) and %date:format% are filled in."
                 }),
                 "codec": (cls.CODECS, {
                     "default": "h264",

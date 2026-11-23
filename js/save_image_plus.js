@@ -31,9 +31,10 @@ const GRID_GAP = 6;
 
 // What the Filename field understands, shown from its (i).
 const FILENAME_HELP = [
-    "The default Pics/%year%-%month%-%day%/img_%hour%_%minute%_%second% saves Pics/2026-11-22/img_14_05_09_00001.png, _00002 … in the output folder.",
+    "The default Pics/%yy%-%month%-%day%/img_%hour%_%minute%_%second% saves Pics/26-11-22/img_14_05_09_00001.png, _00002 … in the output folder.",
     ["a/b/name", "a / makes subfolders"],
-    ["%year% %month% %day%", "today's date"],
+    ["%yy% %month% %day%", "today's date: 26 11 22"],
+    ["%year%", "the year in four digits: 2026"],
     ["%hour% %minute% %second%", "the time now"],
     ["%time%", "the seconds the run took, from pressing Queue"],
     ["%width% %height%", "the image size"],

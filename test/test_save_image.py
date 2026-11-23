@@ -115,10 +115,10 @@ class SaveImageTests(unittest.TestCase):
         self.assertEqual(self.env["_expand_time"]("run_%time%s", ""), "run_0s")
 
     def test_name_tokens_expand_for_previews_too(self):
-        result = self.node.save_images(self.images[:1], "dir/shot_%year%-%month%_%width%x%height%", save=False)
+        result = self.node.save_images(self.images[:1], "dir/shot_%year%-%yy%-%month%_%width%x%height%", save=False)
         name = result["result"][0]
-        self.assertRegex(name, r"^shot_\d{4}-\d{2}_48x32\.png$")
-        self.assertEqual(self.node.INPUT_TYPES()["required"]["filename_prefix"][1]["default"], "Pics/%year%-%month%-%day%/img_%hour%_%minute%_%second%")
+        self.assertRegex(name, r"^shot_(\d{2})(\d{2})-\2-\d{2}_48x32\.png$")
+        self.assertEqual(self.node.INPUT_TYPES()["required"]["filename_prefix"][1]["default"], "Pics/%yy%-%month%-%day%/img_%hour%_%minute%_%second%")
 
     def test_review_is_skipped_when_not_saving(self):
         self.node.save_images(self.images, "prefix", save=False, review=True)

@@ -124,7 +124,7 @@ def expand_name_tokens(text: str, width: int, height: int, exec_start) -> str:
     text = _expand_time(_expand_date_format(text), exec_start)
     now = datetime.now()
     for token, value in (
-        ("%year%", f"{now.year}"), ("%month%", f"{now.month:02}"), ("%day%", f"{now.day:02}"),
+        ("%year%", f"{now.year}"), ("%yy%", f"{now.year % 100:02}"), ("%month%", f"{now.month:02}"), ("%day%", f"{now.day:02}"),
         ("%hour%", f"{now.hour:02}"), ("%minute%", f"{now.minute:02}"), ("%second%", f"{now.second:02}"),
         ("%width%", str(width)), ("%height%", str(height)),
     ):
@@ -148,7 +148,7 @@ class SaveImagePlus:
                 "filename_prefix": (
                     "STRING",
                     {
-                        "default": "Pics/%year%-%month%-%day%/img_%hour%_%minute%_%second%",
+                        "default": "Pics/%yy%-%month%-%day%/img_%hour%_%minute%_%second%",
                         "tooltip": "Output path prefix. Supports %date:format% patterns.",
                     },
                 ),

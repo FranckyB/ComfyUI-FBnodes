@@ -27,9 +27,10 @@ const STAGE_MIN_HEIGHT = 200;
 
 // What the Filename field understands, shown from its (i).
 const FILENAME_HELP = [
-    "The default Vids/%year%-%month%-%day%/vid_%hour%-%minute%-%second% saves Vids/2026-11-22/vid_14-05-09.mp4 in the output folder (then _00001, _00002 … if the name is taken).",
+    "The default Vids/%yy%-%month%-%day%/vid_%hour%-%minute%-%second% saves Vids/26-11-22/vid_14-05-09.mp4 in the output folder (then _00001, _00002 … if the name is taken).",
     ["a/b/name", "a / makes subfolders"],
-    ["%year% %month% %day%", "today's date"],
+    ["%yy% %month% %day%", "today's date: 26 11 22"],
+    ["%year%", "the year in four digits: 2026"],
     ["%hour% %minute% %second%", "the time now"],
     ["%time%", "the seconds the run took, from pressing Queue"],
     ["%width% %height%", "the video size"],
