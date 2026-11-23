@@ -1,6 +1,6 @@
 // The image stage: one canvas that shows a picture and edits a crop rect, the
 // padding around it and a painted mask. The picture, mask, crop shade and pad
-// are drawn into the canvas, so hit-testing does not drift with zoom and
+// hatch are drawn into the canvas, so hit-testing does not drift with zoom and
 // works the same in both renderers; numbers (size, crop) belong in the caption
 // under it, never on the picture. Interaction follows the AusBoss pad
 // stage: the whole crop edge is the handle, the geometry freezes while a drag
@@ -85,11 +85,26 @@ function outline(ctx, view, editable) {
   ctx.restore();
 }
 
-// The pad as the output has it: core Pad Image for Outpainting's 0.5 gray,
-// fading into the picture over the feather, ((feather - d) / feather)^2 at
-// d pixels from each padded edge (none when the feather is half the picture).
-const PAD_GRAY = "128,128,128";
+// The added canvas: hatched over the crop shade, so it reads as "to be painted".
+const PAD_SHADE = T.shade.match(/[\d.]+/g).map(Number);
 
+function hatch(ctx) {
+  const tile = document.createElement("canvas");
+  tile.width = tile.height = 8;
+  const t = tile.getContext("2d");
+  t.fillStyle = T.shade;
+  t.fillRect(0, 0, 8, 8);
+  t.strokeStyle = "rgba(255,255,255,.16)";
+  t.beginPath();
+  t.moveTo(-1, 9);
+  t.lineTo(9, -1);
+  t.stroke();
+  return ctx.createPattern(tile, "repeat");
+}
+
+// The feather: the shade fading into the picture as the mask does,
+// ((feather - d) / feather)^2 at d pixels from each padded edge (none when
+// the feather is half the picture or more, as in the output).
 function drawFeather(ctx, base, sides, perPixel) {
   const reach = sides.feather * perPixel;
   if (!reach || reach * 2 >= base.width || reach * 2 >= base.height) return;
@@ -104,7 +119,8 @@ function drawFeather(ctx, base, sides, perPixel) {
   for (const [side, line] of Object.entries(edges)) {
     if (!sides[side]) continue;
     const fade = ctx.createLinearGradient(...line);
-    for (const at of [0, 0.25, 0.5, 0.75, 1]) fade.addColorStop(at, `rgba(${PAD_GRAY},${(1 - at) ** 2})`);
+    const [r, g, b, a] = PAD_SHADE;
+    for (const at of [0, 0.25, 0.5, 0.75, 1]) fade.addColorStop(at, `rgba(${r},${g},${b},${a * (1 - at) ** 2})`);
     ctx.fillStyle = fade;
     ctx.fillRect(base.x, base.y, base.width, base.height);
   }
@@ -211,7 +227,7 @@ export function createImageStage(options) {
       ctx.beginPath();
       ctx.rect(view.x, view.y, view.width, view.height);
       ctx.rect(base.x, base.y, base.width, base.height);
-      ctx.fillStyle = `rgb(${PAD_GRAY})`;
+      ctx.fillStyle = hatch(ctx);
       ctx.fill("evenodd");
       drawFeather(ctx, base, pad.sides, perPixel);
       outline(ctx, view, pad.editable);
