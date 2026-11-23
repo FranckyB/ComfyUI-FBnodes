@@ -2,16 +2,16 @@
 Outpainting beside MiniMax H3 Image Conditioning. Load Image+'s Pad (or core
 Pad Image for Outpainting) makes the canvas and its mask:
 
-  Outpaint Source  the picture cut from the canvas for the conditioning's
+  Outpaint Prepare  the picture cut from the canvas for the conditioning's
                    image_1, so the text encoder never sees the pad, and the
                    canvas's size at a pixel count for its width and height.
 
-  Outpaint Latent  the canvas, VAE-encoded at the conditioning's resolution,
+  Outpaint Anchor Latent  the canvas, VAE-encoded at the conditioning's resolution,
                    with a noise mask that frees the new area for KSampler.
                    Picture 1's reference becomes the cells of the picture the
                    mask keeps whole, placed on the canvas where they sit, so
                    the model continues the picture instead of copying the pad.
-  Outpaint Blend   the decoded result back on the canvas with AusBoss's
+  Outpaint Stitch  the decoded result back on the canvas with AusBoss's
                    "blend in" seam and its Tone match (py/blend_in).
 
 Inspired by TwoAbove's ComfyUI-H3VideoOutpaint and the Outpaint Anchor / Prepare of
@@ -131,9 +131,9 @@ class OutpaintSource:
             },
         }
 
-    RETURN_TYPES = ("IMAGE", "INT", "INT")
-    RETURN_NAMES = ("image", "width", "height")
-    OUTPUT_TOOLTIPS = ("The picture without the pad: image_1 of MiniMax H3 Image Conditioning.", "The canvas's width at that pixel count, a multiple of 32.", "The canvas's height at that pixel count, a multiple of 32.")
+    RETURN_TYPES = ("IMAGE", "INT", "INT", "MASK", "IMAGE")
+    RETURN_NAMES = ("image", "width", "height", "mask", "canvas")
+    OUTPUT_TOOLTIPS = ("The picture without the pad: image_1 of MiniMax H3 Image Conditioning.", "The canvas's width at that pixel count, a multiple of 32.", "The canvas's height at that pixel count, a multiple of 32.", "The mask, on to the next outpaint node.", "The canvas, on to the next outpaint node.")
     FUNCTION = "source"
     CATEGORY = "FBnodes"
     DESCRIPTION = "Cuts the picture out of an outpaint canvas for MiniMax H3 Image Conditioning's image_1, and gives the canvas's width and height at a pixel count, for the conditioning's width and height."
@@ -145,7 +145,7 @@ class OutpaintSource:
         scale = math.sqrt(megapixels * 1e6 / (width * height)) if megapixels > 0 else 1.0
         size_w = max(32, round(width * scale / 32) * 32)
         size_h = max(32, round(height * scale / 32) * 32)
-        return (canvas[:, top:bottom, left:right, :3].clone(), size_w, size_h)
+        return (canvas[:, top:bottom, left:right, :3].clone(), size_w, size_h, mask, canvas)
 
 
 class OutpaintLatent:
