@@ -235,12 +235,13 @@ Display any input as text in-node, with values persisted in the workflow.
 - Useful for inspecting intermediate values without extra conversion nodes
 - Persists displayed text across workflow reloads and tab switching
 
-### Outpaint Latent / Outpaint Blend
+### Outpaint Source / Latent / Blend
 Outpaint with MiniMax H3 Image next to the core **MiniMax H3 Image Conditioning**, which stays as it is:
 
-1. **Load Image+** with **Pad**: its `image` (the picture, unpadded) goes to the conditioning's `image_1`, so the model never sees the gray. Its `mask` (now the canvas's mask) and `canvas` (shown while Pad is on) go to the same-named inputs of Outpaint Latent and Outpaint Blend. Leave width / height at 0, or set a resolution.
-2. **Outpaint Latent** sits between the conditioning and KSampler, on the model path after any LoRAs (`model`, `positive` and the conditioning's latent in; `model`, `positive`, `latent` out to KSampler, denoise 1.0). The canvas is VAE-encoded at the latent's resolution (keeping the canvas's aspect) with the pad mask as noise mask. Picture 1's reference becomes the picture alone, placed where it sits on the canvas, so the model continues it instead of zooming or copying it.
-3. **Outpaint Blend** takes the decoded image and puts it back on the canvas at full size with AusBoss's **blend in** seam: colour, tone and detail hand over from the result to your picture across its edge, and deeper in, the picture is yours bit for bit. **Tone match** (0 to 1) takes the result's tone drift off first, read from the strip of your picture the model repainted (it needs a feather).
+1. **Load Image+** with **Pad** (or core Pad Image for Outpainting) makes the `mask` and `canvas`; they go to the same-named inputs of the three outpaint nodes.
+2. **Outpaint Source** cuts the picture out of the canvas for the conditioning's `image_1`, so the model never sees the gray, and gives the canvas's `width` and `height` at the **Megapixels** you set (0 keeps the canvas's own) for the conditioning's width and height.
+3. **Outpaint Latent** sits between the conditioning and KSampler, on the model path after any LoRAs (`model`, `positive` and the conditioning's latent in; `model`, `positive`, `latent` out to KSampler, denoise 1.0). The canvas is VAE-encoded at the latent's resolution (keeping the canvas's aspect) with the pad mask as noise mask. Picture 1's reference becomes the picture alone, placed where it sits on the canvas, so the model continues it instead of zooming or copying it.
+4. **Outpaint Blend** takes the decoded image and puts it back on the canvas at full size with AusBoss's **blend in** seam: colour, tone and detail hand over from the result to your picture across its edge, and deeper in, the picture is yours bit for bit. **Tone match** (0 to 1) takes the result's tone drift off first, read from the strip of your picture the model repainted (it needs a feather).
 
 Inspired by [ComfyUI-H3VideoOutpaint](https://github.com/TwoAbove/ComfyUI-H3VideoOutpaint) and the Outpaint Anchor / Prepare of [ComfyUI-Aitrepreneur-Image-Tools](https://github.com/aitrepreneur/ComfyUI-Aitrepreneur-Image-Tools) (MIT); the seam and Tone match are adapted from [ComfyUI-AusBoss](https://github.com/ausboss/ComfyUI-AusBoss)' Stitch Inpaint (MIT, see `py/blend_in/LICENSE`).
 
@@ -323,7 +324,7 @@ GPL-3.0
 - **Save Image+**: Review before saving, Compare wipe and grid, date and time filename tokens
 - **Save Video+**: Encoding auto keeps Create Video's settings; previews already playable videos without encoding
 - **Video Review** (was LTX Review): full-screen review with a pausable timer; outputs the review clip as `video` (review_path removed)
-- **Outpainting**: Pad in Load Image+, and Outpaint Latent / Outpaint Blend for MiniMax H3 Image
+- **Outpainting**: Pad in Load Image+, and Outpaint Source / Latent / Blend for MiniMax H3 Image
 - **If/Else Switch+** (was Switch Any Bool); **Replace with …+** on the right-click menu of core Load / Save Image and Video nodes
 - **Legacy**: Crop Audio+ (use Trim Audio Duration), Load LTX Latent File (use Load Latent File), LTX Review Preview (use Save Video+)
 - **Fixes**: Get Video Components+ follows a trimmed video and re-runs when an output is linked

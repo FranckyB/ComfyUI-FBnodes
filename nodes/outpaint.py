@@ -1,7 +1,10 @@
 '''
-Outpainting beside MiniMax H3 Image Conditioning. Load Image+'s Pad makes the
-canvas and its mask; its image (the picture, unpadded) is the conditioning's
-image_1, so the text encoder never sees the pad:
+Outpainting beside MiniMax H3 Image Conditioning. Load Image+'s Pad (or core
+Pad Image for Outpainting) makes the canvas and its mask:
+
+  Outpaint Source  the picture cut from the canvas for the conditioning's
+                   image_1, so the text encoder never sees the pad, and the
+                   canvas's size at a pixel count for its width and height.
 
   Outpaint Latent  the canvas, VAE-encoded at the conditioning's resolution,
                    with a noise mask that frees the new area for KSampler.
@@ -111,6 +114,35 @@ def _place_references(executor, x, timestep, context, transformer_options={}, mi
             layout.position_ids[a:b, 1:] = canvas[top:top + ref["latent_h"] // 2, left:left + ref["latent_w"] // 2].reshape(-1, 2)
         minimax_payload = {**minimax_payload, "layout": layout}
     return executor(x, timestep, context, transformer_options, minimax_payload=minimax_payload, **kwargs)
+
+
+class OutpaintSource:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "mask": ("MASK", {"tooltip": "The canvas's mask: 1 over the new area."}),
+                "canvas": ("IMAGE", {"tooltip": "The padded canvas."}),
+                "megapixels": ("FLOAT", {"default": 4.0, "min": 0.0, "max": 64.0, "step": 0.25,
+                                         "tooltip": "The pixel count to sample the canvas at; 0 keeps the canvas's own. MiniMax H3 Image is tuned for about 4."}),
+            },
+        }
+
+    RETURN_TYPES = ("IMAGE", "INT", "INT")
+    RETURN_NAMES = ("image", "width", "height")
+    OUTPUT_TOOLTIPS = ("The picture without the pad: image_1 of MiniMax H3 Image Conditioning.", "The canvas's width at that pixel count, a multiple of 32.", "The canvas's height at that pixel count, a multiple of 32.")
+    FUNCTION = "source"
+    CATEGORY = "FBnodes"
+    DESCRIPTION = "Cuts the picture out of an outpaint canvas for MiniMax H3 Image Conditioning's image_1, and gives the canvas's width and height at a pixel count, for the conditioning's width and height."
+
+    def source(self, mask, canvas, megapixels):
+        height, width = canvas.shape[1:3]
+        box = _box(_mask_at(mask[:1], width, height)[0, 0] < 1)
+        top, left, bottom, right = box or (0, 0, height, width)
+        scale = math.sqrt(megapixels * 1e6 / (width * height)) if megapixels > 0 else 1.0
+        size_w = max(32, round(width * scale / 32) * 32)
+        size_h = max(32, round(height * scale / 32) * 32)
+        return (canvas[:, top:bottom, left:right, :3].clone(), size_w, size_h)
 
 
 class OutpaintLatent:
