@@ -320,7 +320,7 @@ function stagePanel(node) {
             canvas.width = w;
             canvas.height = h;
         }
-        const key = `${w}x${h}|${main.src}|${other.src}|${other.naturalWidth}`;
+        const key = `${w}x${h}|${main.src}|${other.src}`;
         if (scaled.key !== key) {
             const rect = fitRect(main.naturalWidth, main.naturalHeight, w, h, 0);
             const rw = Math.max(1, Math.round(rect.width));
@@ -408,13 +408,21 @@ function stagePanel(node) {
         }
     }
 
-    main.addEventListener("load", () => fb.card.refresh());
+    // A new src keeps the old picture's pixels until it loads, and a draw in
+    // between caches them under the new key: a load starts the cache afresh.
+    main.addEventListener("load", () => {
+        scaled.key = "";
+        fb.card.refresh();
+    });
     main.addEventListener("error", () => {
         mainLost = true;
         canvas.getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
         fb.card.refresh();
     });
-    other.addEventListener("load", redraw);
+    other.addEventListener("load", () => {
+        scaled.key = "";
+        redraw();
+    });
     stage.addEventListener("pointermove", (event) => {
         const box = stage.getBoundingClientRect();
         hoverX = ((event.clientX - box.left) / Math.max(1, box.width)) * stage.clientWidth;
