@@ -34,7 +34,8 @@ class CropAudioPlus:
         }
 
     CATEGORY = "FBnodes"
-    DESCRIPTION = "Trim an incoming AUDIO clip between in/out points."
+    DESCRIPTION = "Trim an incoming AUDIO clip between in/out points. Use the core Trim Audio Duration node instead (or Load Audio+'s Trim for files)."
+    DEPRECATED = True
     RETURN_TYPES = ("AUDIO", "FLOAT")
     RETURN_NAMES = ("audio", "duration")
     FUNCTION = "crop"

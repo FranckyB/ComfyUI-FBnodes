@@ -77,7 +77,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "ApplyLoraPlus": "Apply LoRA+",
     "ApplyLTXLoraPlus": "Apply LTX LoRA+",
     "ClipStitcher": "Clip Stitcher",
-    "CropAudioPlus": "Crop Audio+",
+    "CropAudioPlus": "Crop Audio+ (legacy)",
     "LoadAudioPlus": "Load Audio+",
     "AudioMonoToStereo": "Audio Mono to Stereo",
     "GetVideoComponentsPlus": "Get Video Components+",

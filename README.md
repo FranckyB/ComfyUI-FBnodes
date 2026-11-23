@@ -129,8 +129,8 @@ Merge multiple video clips into one with optional cross-dissolve transitions. Pu
 - **Blend duration**: Seconds of cross-dissolve between clips (0 = hard cut). Audio is crossfaded to match
 - **Output**: 10-bit VIDEO via ComfyUI's CreateVideo
 
-### Crop Audio+
-Trim an incoming AUDIO connection between in/out points. Minimal node — just the two sliders. (Usefull if you need to trim audio in a workflow, from incoming Video Components)
+### Crop Audio+ (legacy)
+Trim an incoming AUDIO connection between in/out points. Kept for older workflows: use the core **Trim Audio Duration** node, or the Trim switch on Load Audio+ / Load Video+ for files.
 
 - **Inputs**: `audio`, `in_point`, `out_point` (seconds; 0 = full length)
 - **Outputs**: `audio` (trimmed), `duration` (trimmed length in seconds)

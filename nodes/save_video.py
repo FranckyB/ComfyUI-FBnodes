@@ -1152,6 +1152,9 @@ class GetVideoComponentsPlus:
             "required": {
                 "video": ("VIDEO", {"tooltip": "The video to extract components from."}),
             },
+            "optional": {
+                "outputs_used": ("STRING", {"default": "", "tooltip": "The connected outputs (images, audio, latent), kept by the UI so linking one re-runs the node."}),
+            },
             "hidden": {
                 "unique_id": "UNIQUE_ID",
                 "prompt": "PROMPT",
@@ -1234,14 +1237,9 @@ class GetVideoComponentsPlus:
             except Exception as e:
                 print(f"[GetVideoComponentsPlus] Metadata probe failed: {e}")
 
-        if duration > 0.0:
-            clip_start = max(0.0, float(trim_in or 0.0))
-            clip_end = float(trim_out or 0.0)
-            if clip_end > clip_start:
-                duration = max(0.0, min(duration, clip_end) - clip_start)
-            elif clip_start > 0.0:
-                duration = max(0.0, duration - clip_start)
-
+        # A trimmed video (Load Video+ trim): the clip's own length.
+        if video is not None and (trim_in > 0.0 or trim_out > 0.0):
+            duration = float(video.get_duration())
             if fps > 0.0:
                 frame_count = int(round(duration * fps))
 
@@ -1407,22 +1405,11 @@ class GetVideoComponentsPlus:
 
     @staticmethod
     def _get_trim_points(video):
-        if video is None:
-            return 0.0, 0.0
-        getter = getattr(video, "get_trim_points", None)
-        if getter is None:
-            return 0.0, 0.0
-        try:
-            trim = getter()
-            if isinstance(trim, (tuple, list)) and len(trim) >= 2:
-                trim_in = max(0.0, float(trim[0] or 0.0))
-                trim_out = max(0.0, float(trim[1] or 0.0))
-                return trim_in, trim_out
-        except Exception:
-            pass
-        return 0.0, 0.0
+        """(start, end) in seconds of the video's trim; end 0 = to the end."""
+        start, duration = video.get_active_trim_window()
+        return max(0.0, float(start)), float(start) + float(duration) if duration else 0.0
 
-    def get_components(self, video, unique_id=None, prompt=None):
+    def get_components(self, video, outputs_used="", unique_id=None, prompt=None):
         if video is None:
             return (self._empty_image(), None, 0.0, "", None, 0, 0, 0, 0.0)
 
@@ -1431,9 +1418,14 @@ class GetVideoComponentsPlus:
 
         fps, width, height, frame_count, duration = self._probe_video_metadata(video, video_path, trim_in=trim_in, trim_out=trim_out)
 
-        decode_images = self._is_output_connected(prompt, unique_id, self.IMAGE_OUTPUT_INDEX)
-        decode_audio = self._is_output_connected(prompt, unique_id, self.AUDIO_OUTPUT_INDEX)
-        load_latent = self._is_output_connected(prompt, unique_id, self.LATENT_OUTPUT_INDEX)
+        if outputs_used:
+            used = outputs_used.split(",")
+            decode_images, decode_audio, load_latent = "images" in used, "audio" in used, "latent" in used
+        else:
+            # Workflows from before outputs_used, and API prompts.
+            decode_images = self._is_output_connected(prompt, unique_id, self.IMAGE_OUTPUT_INDEX)
+            decode_audio = self._is_output_connected(prompt, unique_id, self.AUDIO_OUTPUT_INDEX)
+            load_latent = self._is_output_connected(prompt, unique_id, self.LATENT_OUTPUT_INDEX)
 
         latent = self._load_matching_latent(video_path) if load_latent else None
 
