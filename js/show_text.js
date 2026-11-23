@@ -1,91 +1,87 @@
-import { app } from "../../scripts/app.js";
-import { ComfyWidgets } from "../../scripts/widgets.js";
+/**
+ * Show as Text (FBnodes): whatever comes in, as text, kept with the workflow
+ * (and with the workflow saved in an output file). One fbui card: the texts
+ * in a read-only frame, each selectable, with a button that copies them.
+ *
+ * The texts live in a hidden widget, saved as [[text, ...]]: the shape the
+ * backend writes into the workflow it embeds in outputs. Older workflows
+ * saved one widget per text, ["text", ...]; both load.
+ */
 
-// Displays input text on a node
-// TODO: This should need to be so complicated. Refactor at some point.
+import { app } from "../../scripts/app.js";
+import { mountCard } from "./fbui/card.js";
+import { toast } from "./fbui/comfy.js";
+import { button, ICONS } from "./fbui/controls.js";
+import { chainCallback, el } from "./fbui/dom.js";
+import { FONT, MONO, RADIUS, T } from "./fbui/theme.js";
+import { findWidget, hideWidget } from "./fbui/widgets.js";
+
+const NODE_NAME = "ShowTextPlus";
+const TEXT_WIDGET = "preview_text";
+const CSS_ID = "fbnodes-show-text-css-v1";
+
+function ensureCss() {
+    if (document.getElementById(CSS_ID)) return;
+    const style = document.createElement("style");
+    style.id = CSS_ID;
+    style.textContent = `
+.fbnodes-text{position:relative;height:100%;box-sizing:border-box;display:flex;flex-direction:column;gap:6px;padding:8px;overflow-y:auto;border:1px solid ${T.plateEdge};border-radius:${RADIUS}px;background:${T.plate};pointer-events:auto}
+.fbnodes-text pre{margin:0;padding:6px 8px;border-radius:${RADIUS}px;background:${T.card};color:${T.ink};font:12px/1.45 ${MONO};white-space:pre-wrap;word-break:break-word;user-select:text;cursor:text}
+.fbnodes-text .empty{margin:auto;color:${T.faint};font:11px ${FONT}}
+.fbnodes-text .fbui-stage-tools{position:sticky;top:0;align-self:flex-end;margin-bottom:-28px}
+`;
+    document.head.append(style);
+}
+
+const texts = (node) => {
+    const value = findWidget(node, TEXT_WIDGET)?.value;
+    return Array.isArray(value) ? value : [];
+};
+
+function textPanel(node) {
+    ensureCss();
+    const panel = el("div", "fbnodes-text");
+    const tools = el("div", "fbui-stage-tools");
+    const copy = button("Copy", {
+        small: true, title: "Copy the text",
+        onClick: () => navigator.clipboard?.writeText(texts(node).join("\n\n")).then(() => toast("Text copied.")),
+    });
+    tools.append(copy);
+    // Selecting text must not drag the node.
+    panel.addEventListener("pointerdown", (event) => event.stopPropagation());
+    return {
+        element: panel,
+        sync() {
+            const shown = texts(node).filter((text) => text !== "");
+            copy.hidden = !shown.length;
+            panel.replaceChildren(tools, ...(shown.length ? shown.map((text) => el("pre", "", text)) : [el("div", "empty", "Run the workflow to see the text")]));
+        },
+    };
+}
+
+function setTexts(node, values) {
+    findWidget(node, TEXT_WIDGET).value = (Array.isArray(values) ? values : [values]).flat().map((value) => String(value ?? ""));
+    node._fb.card.refresh();
+}
 
 app.registerExtension({
     name: "FBnodes.ShowTextPlus",
-    async beforeRegisterNodeDef(nodeType, nodeData, app) {
-        if (nodeData.name === "ShowTextPlus") {
-            const DEFAULT_WIDTH = 300;
-            const DEFAULT_HEIGHT = 300;
-
-            function populate(text) {
-                if (this.widgets) {
-                    // On older frontend versions there is a hidden converted-widget
-                    const isConvertedWidget = +!!this.inputs?.[0].widget;
-                    for (let i = isConvertedWidget; i < this.widgets.length; i++) {
-                        this.widgets[i].onRemove?.();
-                    }
-                    this.widgets.length = isConvertedWidget;
-                }
-
-                const values = Array.isArray(text) ? [...text] : [text];
-                const rows = values.length ? values : [""];
-
-                for (let list of rows) {
-                    // Force list to be an array, not sure why sometimes it is/isn't
-                    if (!(list instanceof Array)) list = [list];
-                    for (const l of list) {
-                        const widgetIndex = this.widgets?.length ?? 0;
-                        const widgetName = widgetIndex <= 1 ? "preview_text" : `preview_text_${widgetIndex}`;
-                        const w = ComfyWidgets["STRING"](this, widgetName, ["STRING", { multiline: true }], app).widget;
-                        w.inputEl.readOnly = true;
-                        w.inputEl.style.opacity = 1;
-                        w.value = l ?? "";
-                    }
-                }
-
-                requestAnimationFrame(() => {
-                    const sz = this.computeSize();
-                    if (sz[0] < this.size[0]) {
-                        sz[0] = this.size[0];
-                    }
-                    if (sz[1] < this.size[1]) {
-                        sz[1] = this.size[1];
-                    }
-                    this.onResize?.(sz);
-                    app.graph.setDirtyCanvas(true, false);
-                });
-            }
-
-            const onNodeCreated = nodeType.prototype.onNodeCreated;
-            nodeType.prototype.onNodeCreated = function () {
-                onNodeCreated?.apply(this, arguments);
-                this.size = this.size || [0, 0];
-                this.size[0] = Math.max(this.size[0], DEFAULT_WIDTH);
-                this.size[1] = Math.max(this.size[1], DEFAULT_HEIGHT);
-                // Ensure the node starts expanded with a visible text area.
-                populate.call(this, [""]);
-            };
-
-            // When the node is executed we will be sent the input text, display this in the widget
-            const onExecuted = nodeType.prototype.onExecuted;
-            nodeType.prototype.onExecuted = function (message) {
-                onExecuted?.apply(this, arguments);
-                populate.call(this, message.text);
-            };
-
-            const VALUES = Symbol();
-            const configure = nodeType.prototype.configure;
-            nodeType.prototype.configure = function () {
-                // Store unmodified widget values as they get removed on configure by new frontend
-                this[VALUES] = arguments[0]?.widgets_values;
-                return configure?.apply(this, arguments);
-            };
-
-            const onConfigure = nodeType.prototype.onConfigure;
-            nodeType.prototype.onConfigure = function () {
-                onConfigure?.apply(this, arguments);
-                const widgets_values = this[VALUES];
-                if (widgets_values?.length) {
-                    // In newer frontend there seems to be a delay in creating the initial widget
-                    requestAnimationFrame(() => {
-                        populate.call(this, widgets_values.slice(+(widgets_values.length > 1 && this.inputs?.[0].widget)));
-                    });
-                }
-            };
-        }
+    beforeRegisterNodeDef(nodeType, nodeData) {
+        if (nodeData.name !== NODE_NAME) return;
+        chainCallback(nodeType.prototype, "onNodeCreated", function () {
+            const widget = this.addWidget("text", TEXT_WIDGET, [], null, { serialize: true });
+            widget.serialize = true;
+            hideWidget(widget);
+            this._fb = {};
+            this._fb.card = mountCard(this, { minWidth: 260, rows: [{ panel: textPanel, grow: true, height: 160 }] });
+        });
+        chainCallback(nodeType.prototype, "onExecuted", function (message) {
+            setTexts(this, message?.text ?? []);
+        });
+        // The saved texts, whichever shape they were saved in.
+        chainCallback(nodeType.prototype, "onConfigure", function (info) {
+            const saved = info?.widgets_values ?? [];
+            setTexts(this, Array.isArray(saved[0]) ? saved[0] : saved.filter((value) => typeof value === "string"));
+        });
     },
 });

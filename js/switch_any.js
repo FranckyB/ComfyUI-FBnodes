@@ -6,6 +6,8 @@
  */
 
 import { app } from "../../scripts/app.js";
+import { mountCard } from "./fbui/card.js";
+import { hideInputsInDef } from "./fbui/widgets.js";
 
 const MAX_INPUTS = 10;
 
@@ -60,6 +62,7 @@ app.registerExtension({
 
     async beforeRegisterNodeDef(nodeType, nodeData, app) {
         if (nodeData.name !== "SwitchAny") return;
+        hideInputsInDef(nodeData, ["select", "num_inputs", "names"]);
 
         // Synchronous relabel: populate the select dropdown from `names` and set each input slot's label + visibility.
         // that keeps ComfyUI's native link handling and subgraph widget connection intact.
@@ -92,6 +95,7 @@ app.registerExtension({
                 }
             }
 
+            node._switchCard?.refresh();
             node.setDirtyCanvas(true, true);
         }
 
@@ -100,8 +104,15 @@ app.registerExtension({
             const result = onNodeCreated?.apply(this, arguments);
             const node = this;
 
-            node.setSize([260, node.size[1]]);
             node._refreshSwitchAny = () => refreshSwitchAny(node);
+            node._switchCard = mountCard(node, {
+                minWidth: 260,
+                rows: [
+                    { widget: "select", label: "Use", kind: "select" },
+                    { widget: "num_inputs", label: "Inputs" },
+                    { widget: "names", label: "Names", kind: "text", title: "Names for the inputs, separated by commas or semicolons (e.g. WAN; FLUX; SDXL)" },
+                ],
+            });
 
             const numWidget = node.widgets.find(w => w.name === "num_inputs");
             const namesWidget = node.widgets.find(w => w.name === "names");
