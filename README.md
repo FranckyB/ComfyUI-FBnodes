@@ -239,7 +239,7 @@ Display any input as text in-node, with values persisted in the workflow.
 Outpaint with MiniMax H3 Image next to the core **MiniMax H3 Image Conditioning**, which stays as it is:
 
 1. **Load Image+** with **Pad**: its IMAGE goes to the conditioning's `image_1`, to Outpaint Latent and to Outpaint Blend's `canvas`; its MASK to both outpaint nodes. Leave width / height at 0 for the canvas's size, or set a resolution.
-2. **Outpaint Latent** takes the conditioning's latent: the canvas is VAE-encoded at that latent's resolution (keeping the canvas's aspect) with a noise mask, so KSampler (denoise 1.0) paints only the new area and the seam.
+2. **Outpaint Latent** sits between the conditioning and KSampler, on the model path after any LoRAs (`model`, `positive` and the conditioning's latent in; `model`, `positive`, `latent` out to KSampler, denoise 1.0). The canvas is VAE-encoded at the latent's resolution (keeping the canvas's aspect) with a noise mask, so only the new area and the seam are painted. Picture 1's reference becomes the picture alone, placed where it sits on the canvas, so the model continues it instead of copying the gray.
 3. **Outpaint Blend** takes the decoded image: it shifts its tone to meet the picture at the seam and puts it back on the canvas at full size, the original pixels kept where the mask is 0.
 
 Inspired by [ComfyUI-H3VideoOutpaint](https://github.com/TwoAbove/ComfyUI-H3VideoOutpaint).
