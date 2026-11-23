@@ -226,6 +226,9 @@ Display any input as text in-node, with values persisted in the workflow.
 - Useful for inspecting intermediate values without extra conversion nodes
 - Persists displayed text across workflow reloads and tab switching
 
+## Replace with …+
+Right-click a core **Load Image**, **Load Video**, **Save Image** or **Save Video** node and pick **Replace with …+**: the FBnodes version takes its place with the same links, and the loaded file (or a filename prefix you changed) carried over.
+
 ## Missing Model Remap Tool
 Adds a top-bar button in ComfyUI: **Remap Missing Models**.
 
