@@ -1,332 +1,125 @@
+/**
+ * Load Checkpoint+ / Load Diffusion Model+ / Load LoRA+ (FBnodes): a model
+ * list narrowed by a text filter, on one fbui card.
+ *
+ * The model combo always holds real file paths, so the value is right
+ * wherever it goes (a promoted subgraph input, the API prompt); only what is
+ * shown is short: the file name without its extension, under its folder
+ * (getOptionLabel for ComfyUI's own combos, <optgroup>s on the card).
+ */
+
 import { app } from "../../scripts/app.js";
+import { mountCard } from "./fbui/card.js";
+import { chainCallback } from "./fbui/dom.js";
+import { findWidget, hideInputsInDef } from "./fbui/widgets.js";
 
-const TARGET_NODE_NAMES = new Set(["LoadCheckpointPlus", "LoadDiffusionModelPlus", "LoadLoraPlus"]);
+const MODEL_WIDGETS = { LoadCheckpointPlus: "ckpt_name", LoadDiffusionModelPlus: "unet_name", LoadLoraPlus: "lora_name" };
+const MODEL_LABELS = { ckpt_name: "Checkpoint", unet_name: "Model", lora_name: "LoRA" };
+const EXTENSION = /\.(safetensors|ckpt|pt|bin|pth|gguf|sft)$/i;
+// What earlier versions stored as the value: a display label.
+const OLD_HEADER = /^----(.*)----$/;
+const OLD_COUNT = /^(.*) \(\d+\)$/;
 
-function getSchemaModelWidgetInfo(nodeData) {
-    const required = nodeData?.input?.required || {};
-    if (Array.isArray(required?.ckpt_name?.[0])) {
-        return { widgetName: "ckpt_name", values: [...required.ckpt_name[0]] };
+const parts = (path) => String(path).split(/[\\/]/);
+const stem = (path) => parts(path).pop().replace(EXTENSION, "");
+
+// The folder a path sits in, below the folders every model shares.
+function folderOf(path, values) {
+    const dirs = parts(path).slice(0, -1);
+    let shared = 0;
+    const others = values.map((value) => parts(value).slice(0, -1));
+    while (shared < dirs.length && others.every((other) => other[shared] === dirs[shared])) shared++;
+    return dirs.slice(shared).join(" / ");
+}
+
+const splitTerms = (raw) => String(raw || "").toLowerCase().replace(/\band\b/g, " ").split(/[\s,]+/).filter(Boolean);
+
+function setupNode(node, name) {
+    const filter = findWidget(node, "filter");
+    const model = findWidget(node, name);
+    const options = model.options;
+    let all = [...(Array.isArray(options.values) ? options.values : [])];
+    let shown = all;
+
+    // A short name; the folder joins it where two files share one.
+    options.getOptionLabel = (value) => {
+        if (!value) return value;
+        const short = stem(value);
+        const twin = shown.some((other) => other !== value && stem(other) === short);
+        const folder = twin ? folderOf(value, shown) : "";
+        return folder ? `${short} (${folder})` : short;
+    };
+
+    // ComfyUI's refresh (R) hands the combo a new full list: keep it as the
+    // list to filter.
+    let internal = false;
+    let values = shown;
+    Object.defineProperty(options, "values", {
+        get: () => values,
+        set(next) {
+            values = next;
+            if (internal) return;
+            all = [...(Array.isArray(next) ? next : [])];
+            queueMicrotask(applyFilter);
+        },
+        enumerable: true,
+        configurable: true,
+    });
+
+    function applyFilter() {
+        const terms = splitTerms(filter.value);
+        const matching = terms.length ? all.filter((path) => terms.every((term) => path.toLowerCase().includes(term))) : all;
+        shown = matching.length ? matching : all;
+        internal = true;
+        options.values = shown;
+        internal = false;
+        // A model the filter hides gives way to the first shown; a missing one
+        // stays, so the run (or the remap tool) can name it.
+        if (all.includes(model.value) && !shown.includes(model.value)) model.value = shown[0];
+        node._fb?.card.refresh();
+        node.setDirtyCanvas?.(true, true);
     }
-    if (Array.isArray(required?.unet_name?.[0])) {
-        return { widgetName: "unet_name", values: [...required.unet_name[0]] };
+
+    // An older workflow saved the display label: find its file again.
+    function adoptOldValue() {
+        const value = model.value;
+        if (typeof value !== "string" || !value || all.includes(value)) return;
+        const header = OLD_HEADER.exec(value);
+        const wanted = (OLD_COUNT.exec(value)?.[1] ?? value).toLowerCase();
+        const found = header
+            ? all.find((path) => folderOf(path, all).replace(/ \/ /g, " - ") === header[1])
+            : all.find((path) => stem(path).toLowerCase() === wanted);
+        if (found) model.value = found;
     }
-    if (Array.isArray(required?.lora_name?.[0])) {
-        return { widgetName: "lora_name", values: [...required.lora_name[0]] };
-    }
-    return { widgetName: null, values: [] };
+
+    chainCallback(filter, "callback", applyFilter);
+    chainCallback(node, "onConfigure", () => {
+        adoptOldValue();
+        applyFilter();
+    });
+
+    node._fb = {};
+    const rows = [
+        { widget: "filter", label: "Filter", kind: "text", title: "Show only models whose path holds every word (e.g. sdxl anime)" },
+        {
+            widget: name, label: MODEL_LABELS[name], kind: "select",
+            labels: (value) => options.getOptionLabel(value),
+            groups: (value) => folderOf(value, shown) || null,
+        },
+    ];
+    if (name === "lora_name") rows.push({ widget: "strength_model", label: "Strength" });
+    node._fb.card = mountCard(node, { minWidth: 280, rows });
+    applyFilter();
 }
 
 app.registerExtension({
     name: "FBnodes.LoadModelsPlus",
     beforeRegisterNodeDef(nodeType, nodeData) {
-        if (!TARGET_NODE_NAMES.has(nodeData?.name)) return;
-
-        const schemaInfo = getSchemaModelWidgetInfo(nodeData);
-
-        const onNodeCreated = nodeType.prototype.onNodeCreated;
-        nodeType.prototype.onNodeCreated = function () {
-            const r = onNodeCreated?.apply(this, arguments);
-
-            const filterWidget = this.widgets?.find((w) => w?.name === "filter");
-            const modelWidget = this.widgets?.find((w) => w?.name === schemaInfo.widgetName)
-                || this.widgets?.find((w) => w?.name === "ckpt_name")
-                || this.widgets?.find((w) => w?.name === "unet_name")
-                || this.widgets?.find((w) => w?.name === "lora_name");
-
-            if (!filterWidget || !modelWidget) return r;
-
-            modelWidget.options = modelWidget.options || {};
-            const runtimeValues = Array.isArray(modelWidget.options.values) ? modelWidget.options.values : [];
-            const sourceValues = runtimeValues.length > 0 ? runtimeValues : schemaInfo.values;
-            modelWidget.options.values_original = [...sourceValues];
-            modelWidget.options.values = [...sourceValues];
-
-            const modelPaths = new Map();
-            const displayToActual = new Map();
-            const headerToFirstDisplay = new Map();
-
-            const isHeader = (value) => typeof value === "string" && value.startsWith("----") && value.endsWith("----");
-            const stripKnownExtension = (name) => name.replace(/\.(safetensors|ckpt|pt|bin|pth)$/i, "");
-            const normalizeOptionValues = (rawValues) => {
-                const values = [];
-                const seen = new Set();
-
-                if (Array.isArray(rawValues)) {
-                    for (const value of rawValues) {
-                        if (typeof value !== "string") continue;
-                        if (isHeader(value)) continue;
-                        const actual = displayToActual.get(value) || value;
-                        if (!seen.has(actual)) {
-                            seen.add(actual);
-                            values.push(actual);
-                        }
-                    }
-                    return values;
-                }
-
-                if (rawValues && typeof rawValues === "object") {
-                    for (const value of Object.values(rawValues)) {
-                        if (typeof value !== "string") continue;
-                        if (!seen.has(value)) {
-                            seen.add(value);
-                            values.push(value);
-                        }
-                    }
-                }
-
-                return values;
-            };
-
-            const splitTerms = (raw) => (raw || "")
-                .toLowerCase()
-                .replace(/\band\b/g, " ")
-                .split(/[\s,]+/)
-                .map((t) => t.trim().toLowerCase())
-                .filter((t) => t.length > 0);
-
-            const pickFirstModelValue = (values) => {
-                for (const value of values) {
-                    if (!isHeader(value)) {
-                        return value;
-                    }
-                }
-                return values.length > 0 ? values[0] : null;
-            };
-
-            const buildGroupedDisplay = (actualPaths) => {
-                const outputValues = [];
-                const usedDisplay = new Set();
-
-                if (actualPaths.length === 0) {
-                    return outputValues;
-                }
-
-                let stripLevel = 0;
-                const maxDepth = Math.max(...actualPaths.map((p) => p.split(/[\\/]/).length));
-                for (let level = 0; level < maxDepth; level++) {
-                    const levelOptions = new Set();
-                    actualPaths.forEach((modelName) => {
-                        const parts = modelName.split(/[\\/]/);
-                        if (level < parts.length) {
-                            levelOptions.add(parts[level]);
-                        }
-                    });
-                    if (levelOptions.size > 1) {
-                        stripLevel = level;
-                        break;
-                    }
-                }
-
-                const sectionOrder = [];
-                const sectionItems = new Map();
-                const sectionLocalCounts = new Map();
-
-                const toSectionLabel = (dirParts) => {
-                    if (!dirParts || dirParts.length === 0) {
-                        return "Other";
-                    }
-                    return dirParts.join(" - ");
-                };
-
-                actualPaths.forEach((actualPath) => {
-                    const parts = actualPath.split(/[\\/]/);
-                    const relParts = parts.slice(stripLevel);
-                    const dirParts = relParts.length > 1 ? relParts.slice(0, -1) : [];
-                    const section = toSectionLabel(dirParts);
-                    const fileName = relParts[relParts.length - 1] || actualPath;
-                    const baseLabel = stripKnownExtension(fileName);
-
-                    if (!sectionItems.has(section)) {
-                        sectionItems.set(section, []);
-                        sectionOrder.push(section);
-                        sectionLocalCounts.set(section, new Map());
-                    }
-
-                    const localCounts = sectionLocalCounts.get(section);
-                    const count = (localCounts.get(baseLabel) || 0) + 1;
-                    localCounts.set(baseLabel, count);
-
-                    let display = count > 1 ? `${baseLabel} (${count})` : baseLabel;
-                    while (usedDisplay.has(display) || isHeader(display)) {
-                        const bumped = (localCounts.get(baseLabel) || count) + 1;
-                        localCounts.set(baseLabel, bumped);
-                        display = `${baseLabel} (${bumped})`;
-                    }
-
-                    usedDisplay.add(display);
-                    sectionItems.get(section).push({ display, actualPath });
-                });
-
-                // If the filtered result only maps to one section, show a plain list
-                // (no section header like ----Other----).
-                if (sectionOrder.length === 1) {
-                    const onlyItems = sectionItems.get(sectionOrder[0]) || [];
-                    return onlyItems.map((item) => item.display);
-                }
-
-                sectionOrder.forEach((section) => {
-                    const items = sectionItems.get(section) || [];
-                    if (items.length === 0) return;
-
-                    const header = `----${section}----`;
-                    outputValues.push(header);
-                    displayToActual.set(header, items[0].actualPath);
-                    headerToFirstDisplay.set(header, items[0].display);
-
-                    items.forEach((item) => {
-                        outputValues.push(item.display);
-                        displayToActual.set(item.display, item.actualPath);
-                    });
-                });
-
-                return outputValues;
-            };
-
-            modelWidget.options.values_original.forEach((name) => {
-                modelPaths.set(name, name);
-            });
-
-            let refreshScheduled = false;
-            let settingValuesInternally = false;
-            let trackedValues = modelWidget.options.values;
-
-            const scheduleFilterRefresh = () => {
-                if (refreshScheduled) return;
-                refreshScheduled = true;
-                Promise.resolve().then(() => {
-                    refreshScheduled = false;
-                    updateFilteredModels();
-                });
-            };
-
-            const options = modelWidget.options;
-            if (!Object.prototype.hasOwnProperty.call(options, "_fb_values_tracked")) {
-                Object.defineProperty(options, "_fb_values_tracked", {
-                    value: true,
-                    writable: false,
-                    enumerable: false,
-                    configurable: true,
-                });
-
-                Object.defineProperty(options, "values", {
-                    get() {
-                        return trackedValues;
-                    },
-                    set(nextValues) {
-                        trackedValues = nextValues;
-
-                        if (settingValuesInternally) {
-                            return;
-                        }
-
-                        const refreshedValues = normalizeOptionValues(nextValues);
-                        if (refreshedValues.length > 0) {
-                            modelWidget.options.values_original = [...refreshedValues];
-                            modelPaths.clear();
-                            refreshedValues.forEach((name) => {
-                                modelPaths.set(name, name);
-                            });
-                        }
-
-                        scheduleFilterRefresh();
-                    },
-                    enumerable: true,
-                    configurable: true,
-                });
-            }
-
-            const updateFilteredModels = () => {
-                const currentValue = modelWidget.value;
-                const currentActual = displayToActual.get(currentValue) || currentValue;
-                displayToActual.clear();
-                headerToFirstDisplay.clear();
-
-                const terms = splitTerms(filterWidget.value || "");
-                const originalValues = modelWidget.options.values_original || [];
-                const filtered = terms.length === 0
-                    ? [...originalValues]
-                    : originalValues.filter((modelName) => {
-                        const pathValue = (modelPaths.get(modelName) || "").toLowerCase();
-                        const nameValue = modelName.toLowerCase();
-                        return terms.every((term) => pathValue.includes(term) || nameValue.includes(term));
-                    });
-
-                const groupedValues = buildGroupedDisplay(filtered);
-                const fallbackValues = buildGroupedDisplay(originalValues);
-                settingValuesInternally = true;
-                try {
-                    modelWidget.options.values = groupedValues.length > 0 ? groupedValues : fallbackValues;
-                } finally {
-                    settingValuesInternally = false;
-                }
-
-                let resolvedDisplay = null;
-                for (const displayName of modelWidget.options.values) {
-                    if (isHeader(displayName)) {
-                        continue;
-                    }
-                    if (displayToActual.get(displayName) === currentActual) {
-                        resolvedDisplay = displayName;
-                        break;
-                    }
-                }
-
-                if (resolvedDisplay !== null) {
-                    modelWidget.value = resolvedDisplay;
-                } else if (!modelWidget.options.values.includes(modelWidget.value)) {
-                    const firstModel = pickFirstModelValue(modelWidget.options.values);
-                    if (firstModel) {
-                        modelWidget.value = firstModel;
-                    }
-                }
-
-                if (this.canvas) {
-                    this.setDirtyCanvas(true, true);
-                }
-            };
-
-            this._fbRefreshModelFilter = updateFilteredModels;
-            updateFilteredModels();
-
-            const oldFilterCallback = filterWidget.callback;
-            filterWidget.callback = function (value) {
-                if (oldFilterCallback) {
-                    oldFilterCallback.call(this, value);
-                }
-                updateFilteredModels();
-            };
-
-            const oldModelCallback = modelWidget.callback;
-            modelWidget.callback = function (value) {
-                if (isHeader(value)) {
-                    const firstDisplay = headerToFirstDisplay.get(value);
-                    if (firstDisplay) {
-                        modelWidget.value = firstDisplay;
-                        if (oldModelCallback) {
-                            oldModelCallback.call(this, firstDisplay);
-                        }
-                        return;
-                    }
-                }
-
-                modelWidget.value = value;
-                if (oldModelCallback) {
-                    oldModelCallback.call(this, value);
-                }
-            };
-
-            modelWidget.serializeValue = () => displayToActual.get(modelWidget.value) || modelWidget.value;
-
-            return r;
-        };
-
-        const onConfigure = nodeType.prototype.onConfigure;
-        nodeType.prototype.onConfigure = function () {
-            const r = onConfigure?.apply(this, arguments);
-            if (typeof this._fbRefreshModelFilter === "function") {
-                this._fbRefreshModelFilter();
-            }
-            return r;
-        };
+        const name = MODEL_WIDGETS[nodeData.name];
+        if (!name) return;
+        hideInputsInDef(nodeData, ["filter", name, "strength_model"]);
+        chainCallback(nodeType.prototype, "onNodeCreated", function () {
+            setupNode(this, name);
+        });
     },
 });

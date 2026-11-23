@@ -10,6 +10,7 @@
 //       kind: scrub | segment | select | switch | text (default: from the widget)
 //       labels: { value: text } or (value, values, node) => text
 //       button: { text, icon?, title?, onClick(node, card) } (or a list) after the control
+//       groups: (value, values, node) => heading, for a select's <optgroup>s
 //   { pair: [a, b], label, sep?, when?, group? }
 //   { section: "Caption", when? }
 //   { label, control: (node, card) => ({ element, sync?(values) }), widgets?, when?, group? }
@@ -120,10 +121,19 @@ export function mountCard(node, { rows, minWidth = 280, first = false } = {}) {
         if (key !== shown) {
           shown = key;
           select.textContent = "";
+          // row.groups(value) names a value's group: runs of one group sit
+          // under an <optgroup> heading.
+          let group = null;
           for (const value of list) {
             const option = el("option", "", choiceLabel(row, value, options, node));
             option.value = String(value);
-            select.append(option);
+            const name = row.groups?.(value, options, node) ?? null;
+            if (name && name !== group?.label) {
+              group = el("optgroup");
+              group.label = name;
+              select.append(group);
+            } else if (!name) group = null;
+            (group ?? select).append(option);
           }
         }
         select.value = String(current ?? "");

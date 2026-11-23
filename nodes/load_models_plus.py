@@ -5,6 +5,7 @@ Load Models+ nodes - interactive model loaders with text filtering.
 from __future__ import annotations
 
 import os
+import re
 
 import folder_paths
 
@@ -15,6 +16,13 @@ def _get_model_list(folder_name: str) -> list[str]:
     """Get sorted model list from a ComfyUI folder bucket."""
     models = folder_paths.get_filename_list(folder_name)
     return sorted(models) if models else []
+
+
+_MODEL_EXTENSION = re.compile(r"\.(safetensors|ckpt|pt|bin|pth|gguf|sft)$", re.IGNORECASE)
+
+
+def _strip_model_extension(name: str) -> str:
+    return _MODEL_EXTENSION.sub("", name)
 
 
 def _resolve_model_path(folder_name: str, value: str) -> tuple[str, str]:
@@ -38,12 +46,13 @@ def _resolve_model_path(folder_name: str, value: str) -> tuple[str, str]:
     if full_path and os.path.exists(full_path):
         return full_path, candidate
 
-    # Basename match ignoring known model extensions (handles frontend display
-    # labels that drop the extension or directory prefix).
-    target_stem = os.path.splitext(os.path.basename(candidate).lower())[0]
+    # Basename match ignoring known model extensions (a short name without
+    # the folder or extension, e.g. from an API prompt). Only the extension
+    # goes: names like "wan2.2_..." keep their dots.
+    target_stem = _strip_model_extension(os.path.basename(candidate).lower())
     if target_stem:
         for rel_path in folder_paths.get_filename_list(folder_name):
-            if os.path.splitext(os.path.basename(rel_path).lower())[0] == target_stem:
+            if _strip_model_extension(os.path.basename(rel_path).lower()) == target_stem:
                 full_path = folder_paths.get_full_path(folder_name, rel_path)
                 if full_path and os.path.exists(full_path):
                     return full_path, rel_path
