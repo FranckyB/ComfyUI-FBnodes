@@ -14,6 +14,10 @@
  *     filterTypeOptions, defaultFilter the Type filter's choices and its default
  *     showListKindSelector             the Type filter offers All / Audio / Video
  *     multiSelect, onMultiSelect([{ value, meta }])
+ *     places                           quick folders instead of Input / Output:
+ *                                      [{ label, title, path() }] (path may be async)
+ *     custom                           the Custom folder: { get(), set(path), message };
+ *                                      by default the Load+ one (Settings → FBnodes)
  */
 
 import { api } from "../../scripts/api.js";
@@ -390,8 +394,13 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder, 
         const next = pathField.value.trim();
         if (next) go(next);
     });
+    const custom = options.custom ?? {
+        get: getCustomPresetPath,
+        set: setCustomPresetPath,
+        message: "The folder the Custom button opens, in every Load+ browser.",
+    };
     const customButton = button("Custom", { onClick: () => {
-        const path = getCustomPresetPath();
+        const path = custom.get();
         if (path) go(path);
         else askCustomPath();
     } });
@@ -401,22 +410,22 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder, 
         askCustomPath();
     });
     const updateCustomTitle = () => {
-        const path = getCustomPresetPath();
+        const path = custom.get();
         customButton.title = path ? `${path}\nRight-click to choose another folder` : "Click to choose your Custom folder";
     };
-    // Asks for the Custom folder (this one, to start with), keeps it in
-    // Settings → FBnodes → Load+ Nodes, and opens it.
+    // Asks for the Custom folder (this one, to start with), keeps it in its
+    // setting and opens it.
     async function askCustomPath() {
         const path = await prompt({
             title: "Custom folder",
-            message: "The folder the Custom button opens, in every Load+ browser.",
-            value: getCustomPresetPath() || state.dir,
+            message: custom.message,
+            value: custom.get() || state.dir,
             placeholder: "/path/to/folder",
             confirmText: "Set and open",
         });
         if (!path) return;
         try {
-            await setCustomPresetPath(path);
+            await custom.set(path);
         } catch (error) {
             toast(`Could not save the Custom folder: ${error.message}`, { severity: "error" });
         }
@@ -425,15 +434,21 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder, 
     }
     updateCustomTitle();
 
+    const places = options.places ?? [
+        { label: "Input", title: "ComfyUI's input folder", path: () => state.roots.input },
+        { label: "Output", title: "ComfyUI's output folder", path: () => state.roots.output },
+    ];
     const whereBar = el("div", "fbnodes-browser-bar");
     whereBar.append(
         button("", { icon: ICONS.up, title: "Up one folder (Backspace, mouse Back button)", onClick: () => goUp() }),
         button("", { icon: ICONS.refresh, title: "Reload this folder", onClick: () => load() }),
-        button("Input", { title: "ComfyUI's input folder", onClick: () => state.roots.input && go(state.roots.input) }),
-        button("Output", { title: "ComfyUI's output folder", onClick: () => state.roots.output && go(state.roots.output) }),
+        ...places.map((place) => button(place.label, { title: place.title, onClick: async () => {
+            const path = await place.path();
+            if (path) go(path);
+        } })),
         customButton,
         pathField,
-        button("Regenerate cache", { icon: ICONS.film, title: "Rebuild every video thumbnail", onClick: () => { clearThumbCache(); load(); } }),
+        ...(state.kind === "lora" ? [] : [button("Regenerate cache", { icon: ICONS.film, title: "Rebuild every video thumbnail", onClick: () => { clearThumbCache(); load(); } })]),
     );
 
     // ---- toolbar: what

@@ -43,11 +43,7 @@ async function folderExists(path) {
     }
 }
 
-// Where the browser opens: the node's last folder, else the Custom LoRA List
-// Path setting, else ComfyUI's first LoRA folder.
-async function startFolder(lastPath) {
-    const custom = String(app.ui?.settings?.getSettingValue(SETTING_CUSTOM_PATH) || "").trim();
-    for (const path of [lastPath, custom]) if (await folderExists(path)) return path;
+async function lorasRoot() {
     try {
         const response = await api.fetchApi("/fbnodes/lora-browser/root");
         const data = response.ok ? await response.json() : null;
@@ -55,6 +51,21 @@ async function startFolder(lastPath) {
     } catch {
         return "";
     }
+}
+
+// The browser's Custom folder is LoRA List+'s own setting.
+const customFolder = {
+    get: () => String(app.ui?.settings?.getSettingValue(SETTING_CUSTOM_PATH) || "").trim(),
+    set: (path) => app.ui.settings.setSettingValueAsync(SETTING_CUSTOM_PATH, String(path || "").trim()),
+    message: "The folder the Custom button opens in LoRA List+ (Settings → FBnodes → LoRA List).",
+};
+const places = [{ label: "LoRAs", title: "ComfyUI's LoRA folder", path: lorasRoot }];
+
+// Where the browser opens: the node's last folder, else the Custom folder,
+// else ComfyUI's first LoRA folder.
+async function startFolder(lastPath) {
+    for (const path of [lastPath, customFolder.get()]) if (await folderExists(path)) return path;
+    return lorasRoot();
 }
 
 function setupNode(node) {
@@ -78,6 +89,8 @@ function setupNode(node) {
             createFileBrowserModal("", () => {}, "input", {
                 initialPath: await startFolder(lastPath),
                 navKind: "lora",
+                places,
+                custom: customFolder,
                 allowedTypes: ["other"],
                 filterTypeOptions: ["all", "other"],
                 defaultFilter: "other",

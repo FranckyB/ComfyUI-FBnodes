@@ -1,17 +1,20 @@
 /**
  * Crop Image+ (FBnodes): crop the incoming image by dragging the box, its
  * edges or corners, with an optional aspect-ratio lock. One fbui card: Aspect
- * (and Portrait for a fixed ratio), the picture, the exact edges in percent
- * under Exact crop, and the output size as the footnote. The stock widgets
+ * (and Portrait for a fixed ratio), the picture, the pixels cropped from
+ * each side under Exact crop (as in Load Image+), and the output size as the
+ * footnote. The stock widgets
  * stay hidden and hold the values.
  */
 
 import { app } from "../../scripts/app.js";
 import { mountCard } from "./fbui/card.js";
+import { notifyChange } from "./fbui/comfy.js";
 import { button, ICONS } from "./fbui/controls.js";
 import { el } from "./fbui/dom.js";
+import { makeScrub } from "./fbui/scrub.js";
 import { CAPTION_HEIGHT, T } from "./fbui/theme.js";
-import { hideInputsInDef } from "./fbui/widgets.js";
+import { hideInputsInDef, hideWidget } from "./fbui/widgets.js";
 
 // The stage's size before it is laid out.
 const PREVIEW_W = 420;
@@ -363,6 +366,7 @@ function updateWidgetValues(node, state) {
     }
 
     state._persistCrop?.();
+    node._fb?.card.refresh();
     node.setDirtyCanvas?.(true, true);
 }
 
@@ -854,6 +858,73 @@ function buildUI(node) {
     };
 }
 
+// ---------------------------------------------------------------- exact crop
+
+// Pixels cropped from each side, as in Load Image+'s Exact crop.
+const SIDE_HANDLE = { left: "w", right: "e", top: "n", bottom: "s" };
+
+function cropPixels(state) {
+    const r = state.rect;
+    return { left: r.left, right: state.imageW - r.right, top: r.top, bottom: state.imageH - r.bottom };
+}
+
+function cropPairControl(node, ui, first, second) {
+    const state = ui.state;
+    const field = el("div", "fbui-field");
+    const scrubs = {};
+    const commit = (side, value) => {
+        if (!state.hasVisibleImage) return;
+        const r = state.rect;
+        const px = Math.max(0, Math.round(value));
+        if (side === "left") r.left = Math.min(px, r.right - 1);
+        else if (side === "right") r.right = Math.max(state.imageW - px, r.left + 1);
+        else if (side === "top") r.top = Math.min(px, r.bottom - 1);
+        else r.bottom = Math.max(state.imageH - px, r.top + 1);
+        const ratio = getActiveRatio(node, state);
+        if (ratio) applyRatioForHandle(r, SIDE_HANDLE[side], ratio, state.imageW, state.imageH);
+        updateWidgetValues(node, state);
+        ui.redraw();
+    };
+    for (const side of [first, second]) {
+        if (side === second) field.append(el("span", "fbui-sep", "·"));
+        scrubs[side] = makeScrub({
+            value: 0, min: 0, max: 16384, step: 1, fineStep: 1, decimals: 0, unit: "px",
+            title: `Pixels cropped from the ${side}.`,
+            onChange: (value) => commit(side, value),
+            onSettle: notifyChange,
+        });
+        field.append(scrubs[side].root);
+    }
+    return {
+        element: field,
+        sync() {
+            const px = cropPixels(state);
+            for (const side of [first, second]) scrubs[side].set(state.hasVisibleImage ? px[side] : 0);
+        },
+    };
+}
+
+function resetCrop(node, ui) {
+    const state = ui.state;
+    Object.assign(state.rect, { left: 0, right: state.imageW, top: 0, bottom: state.imageH });
+    const aspectWidget = getWidget(node, "aspect_ratio");
+    if (aspectWidget) aspectWidget.value = "None";
+    updateWidgetValues(node, state);
+    ui.redraw();
+    notifyChange();
+}
+
+function cropResetControl(node, ui) {
+    const reset = button("Reset crop", { icon: ICONS.reset, grow: true, title: "Back to the whole picture", onClick: () => resetCrop(node, ui) });
+    return {
+        element: reset,
+        sync() {
+            const px = cropPixels(ui.state);
+            reset.disabled = !ui.state.hasVisibleImage || Object.values(px).every((value) => value === 0);
+        },
+    };
+}
+
 app.registerExtension({
     name: "FBnodes.CropImagePlus",
     beforeRegisterNodeDef(nodeType, nodeData) {
@@ -874,23 +945,7 @@ app.registerExtension({
                 bottom: getWidget(this, "bottom_pct"),
             };
 
-            const reset = button("", {
-                icon: ICONS.reset, small: true, title: "Reset the crop",
-                onClick: () => {
-                    ui.state.rect.left = 0;
-                    ui.state.rect.right = ui.state.imageW;
-                    ui.state.rect.top = 0;
-                    ui.state.rect.bottom = ui.state.imageH;
-                    const aspectWidget = getWidget(this, "aspect_ratio");
-                    if (aspectWidget) aspectWidget.value = "None";
-                    updateWidgetValues(this, ui.state);
-                    ui.redraw();
-                    this._fb.card.refresh();
-                },
-            });
-            const tools = el("div", "fbui-stage-tools");
-            tools.append(reset);
-            ui.state.root.append(tools);
+            for (const widget of Object.values(this._cropPctWidgets)) hideWidget(widget);
 
             const aspectWidget = getWidget(this, "aspect_ratio");
             if (aspectWidget?.options) {
@@ -913,14 +968,15 @@ app.registerExtension({
             const fixedRatio = (values) => values.aspect_ratio !== "None" && values.aspect_ratio !== "Source";
             this._fb = {};
             this._fb.card = mountCard(this, {
-                minWidth: 300,
+                minWidth: 330,
                 rows: [
                     { widget: "aspect_ratio", label: "Aspect", kind: "select" },
                     { widget: "portrait", label: "Portrait", when: fixedRatio },
                     { panel: () => ({ element: ui.state.root }), grow: true, height: STAGE_MIN_HEIGHT },
                     { group: "crop", label: "Exact crop" },
-                    { pair: ["left_pct", "right_pct"], label: "Left · Right", suffix: "%", group: "crop" },
-                    { pair: ["top_pct", "bottom_pct"], label: "Top · Bottom", suffix: "%", group: "crop" },
+                    { label: "Left · Right", control: (n) => cropPairControl(n, ui, "left", "right"), group: "crop" },
+                    { label: "Top · Bottom", control: (n) => cropPairControl(n, ui, "top", "bottom"), group: "crop" },
+                    { label: "", control: (n) => cropResetControl(n, ui), group: "crop" },
                     { panel: () => ({ element: caption }), height: CAPTION_HEIGHT },
                 ],
             });
