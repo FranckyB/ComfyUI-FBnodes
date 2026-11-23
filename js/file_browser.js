@@ -1,7 +1,10 @@
 /**
- * File browser modal shared by the Load+ nodes, Clip / VACE Stitcher and the
- * Visual LoRA Picker: browse any folder on disk, preview thumbnails, pick a
- * file (or several with multiSelect). Built on the FB UI kit (js/fbui/).
+ * File browser modal for the packs' loaders and lists (FBnodes' Load+
+ * nodes, Stitchers and LoRA pickers, Prompt Manager's Prompt Extractor):
+ * browse any folder on disk, preview thumbnails, pick a file (or several
+ * with multiSelect). Built on the FB UI kit (js/fbui/).
+ * The same file in every pack (tools/sync_fbui.py copies it): the pack's own
+ * path_browser.js names its routes and its Custom-folder setting.
  *
  * createFileBrowserModal(currentFile, onFileSelect, sourceFolder, options)
  *   currentFile     the value now in the node (relative to initialPath, or absolute)
@@ -21,7 +24,7 @@
  */
 
 import { api } from "../../scripts/api.js";
-import { getCustomPresetPath, mediaFileUrl, setCustomPresetPath } from "./path_browser.js";
+import { BROWSER_ROUTES, getCustomPresetPath, mediaFileUrl, setCustomPresetPath } from "./path_browser.js";
 import { toast } from "./fbui/comfy.js";
 import { button, ICONS } from "./fbui/controls.js";
 import { el } from "./fbui/dom.js";
@@ -133,7 +136,7 @@ async function fetchListing(path, kind) {
     const params = new URLSearchParams();
     if (path) params.set("path", path);
     if (kind) params.set("kind", kind);
-    const response = await api.fetchApi(`/fbnodes/path-browser/list?${params}`);
+    const response = await api.fetchApi(`${BROWSER_ROUTES.list}?${params}`);
     const data = await response.json().catch(() => null);
     if (!response.ok) throw new Error(data?.error || `Request failed (${response.status})`);
     return data;
@@ -196,7 +199,7 @@ function showVideoThumb(holder, path, { refresh = false } = {}) {
         }
     };
     img.onerror = () => holder.replaceChildren(iconFor("video"), el("span", "note", "Preview unavailable"));
-    img.src = api.apiURL(`/fbnodes/video-frame?${new URLSearchParams({ filename: path, position: "0" })}`);
+    img.src = api.apiURL(`${BROWSER_ROUTES.videoFrame}?${new URLSearchParams({ filename: path, position: "0" })}`);
 }
 
 function clearThumbCache() {
@@ -639,7 +642,7 @@ export function createFileBrowserModal(currentFile, onFileSelect, sourceFolder, 
         const sure = await confirm({ title: "Delete file", message: `Delete "${file.name}"? This cannot be undone.`, confirmText: "Delete", danger: true });
         if (!sure) return;
         try {
-            const response = await api.fetchApi("/fbnodes/path-browser/delete", {
+            const response = await api.fetchApi(BROWSER_ROUTES.remove, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ path: file.path }),

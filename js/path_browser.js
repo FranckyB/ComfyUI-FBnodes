@@ -12,6 +12,15 @@ import { api } from "../../scripts/api.js";
 
 export const SETTING_CUSTOM_PATH = "FBnodes.LoadPlusCustomPath";
 
+// This pack's routes for the shared file browser (file_browser.js is the
+// same file in every pack; each pack's path_browser.js names its own).
+export const BROWSER_ROUTES = {
+    list: "/fbnodes/path-browser/list",
+    file: "/fbnodes/path-browser/file",
+    remove: "/fbnodes/path-browser/delete",
+    videoFrame: "/fbnodes/video-frame",
+};
+
 export function getCustomPresetPath() {
     const pref = app.ui?.settings?.getSettingValue(SETTING_CUSTOM_PATH) || "";
     return typeof pref === "string" ? pref.trim() : "";
@@ -24,7 +33,7 @@ export function setCustomPresetPath(path) {
 
 /** URL that streams a media file from any path (for previews of out-of-tree files). */
 export function mediaFileUrl(absPath) {
-    return api.apiURL(`/fbnodes/path-browser/file?path=${encodeURIComponent(absPath)}`);
+    return api.apiURL(`${BROWSER_ROUTES.file}?path=${encodeURIComponent(absPath)}`);
 }
 
 /** "name.png [output]" (the MaskEditor's annotation) -> "name.png". */
@@ -104,7 +113,7 @@ async function fetchBrowser(path, kind) {
     if (path) params.push(`path=${encodeURIComponent(path)}`);
     if (kind) params.push(`kind=${encodeURIComponent(kind)}`);
     const query = params.length ? `?${params.join("&")}` : "";
-    const resp = await api.fetchApi(`/fbnodes/path-browser/list${query}`);
+    const resp = await api.fetchApi(`${BROWSER_ROUTES.list}${query}`);
     if (!resp.ok) {
         let msg = `Request failed (${resp.status})`;
         try {
