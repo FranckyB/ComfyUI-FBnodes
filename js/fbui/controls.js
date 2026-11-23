@@ -147,6 +147,66 @@ export function rail({ onSeek, title = "" } = {}) {
   };
 }
 
+// A rail with in and out edges and a playhead, for trimming: press near an
+// edge to move it, anywhere else to move the playhead.
+// rangeRail({ onEdge(edge, fraction, settled), onSeek(fraction, settled) })
+//   -> { root, set({ start, stop, head }) } with edge "in" | "out", all 0..1.
+export function rangeRail({ onEdge, onSeek, title = "" } = {}) {
+  const root = el("div", "fbui-rail fbui-range");
+  const fill = el("div", "fbui-range-fill");
+  const edgeIn = el("div", "fbui-range-edge");
+  const edgeOut = el("div", "fbui-range-edge");
+  const head = el("div", "fbui-rail-head");
+  root.append(fill, edgeIn, edgeOut, head);
+  if (title) root.title = title;
+  let shown = { start: 0, stop: 1, head: 0 };
+  let drag = null;
+  const at = (event) => {
+    const box = root.getBoundingClientRect();
+    return Math.max(0, Math.min(1, (event.clientX - box.left) / Math.max(1, box.width)));
+  };
+  const send = (event, settled) => {
+    if (drag === "head") onSeek?.(at(event), settled);
+    else onEdge?.(drag, at(event), settled);
+  };
+  root.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    root.setPointerCapture(event.pointerId);
+    // The nearer edge within 8px; on top of each other, the side pressed.
+    const width = root.getBoundingClientRect().width;
+    const x = at(event);
+    const toIn = Math.abs(x - shown.start) * width;
+    const toOut = Math.abs(x - shown.stop) * width;
+    drag = Math.min(toIn, toOut) > 8 ? "head" : toIn < toOut || (toIn === toOut && x < shown.start) ? "in" : "out";
+    send(event, false);
+  });
+  root.addEventListener("pointermove", (event) => {
+    if (drag && root.hasPointerCapture(event.pointerId)) send(event, false);
+  });
+  const end = (event) => {
+    if (!drag || !root.hasPointerCapture(event.pointerId)) return;
+    root.releasePointerCapture(event.pointerId);
+    send(event, true);
+    drag = null;
+  };
+  root.addEventListener("pointerup", end);
+  root.addEventListener("pointercancel", end);
+  const pct = (fraction) => `${Math.max(0, Math.min(1, fraction)) * 100}%`;
+  return {
+    root,
+    set(next) {
+      shown = { ...shown, ...next };
+      fill.style.left = pct(shown.start);
+      fill.style.width = pct(shown.stop - shown.start);
+      edgeIn.style.left = pct(shown.start);
+      edgeOut.style.left = pct(shown.stop);
+      head.style.left = pct(shown.head);
+    },
+  };
+}
+
 // Small stroke icons, drawn in currentColor so they follow the button state.
 const svg = (body) => `<svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
 export const ICONS = {
@@ -174,6 +234,7 @@ export const ICONS = {
   chevronLeft: svg('<path d="M10 3.5 5.5 8l4.5 4.5"/>'),
   chevronRight: svg('<path d="M6 3.5 10.5 8 6 12.5"/>'),
   check: svg('<path d="M3 8.5 6.5 12 13 4.5"/>'),
+  scissors: svg('<circle cx="4" cy="4.5" r="2"/><circle cx="4" cy="11.5" r="2"/><path d="M5.7 5.6 13.5 12M5.7 10.4 13.5 4"/>'),
   timer: svg('<circle cx="8" cy="9" r="5.5"/><path d="M8 6v3l2 1.5M6.5 1.5h3"/>'),
   chevronDown: svg('<path d="M3.5 6 8 10.5 12.5 6"/>'),
   grid: svg('<rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/>'),

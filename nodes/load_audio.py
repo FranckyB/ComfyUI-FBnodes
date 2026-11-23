@@ -200,6 +200,9 @@ class LoadAudioPlus:
                     "tooltip": "Clip end in seconds (0 = full length)"
                 }),
             },
+            "optional": {
+                "trim": ("BOOLEAN", {"default": False, "tooltip": "Load only in_point to out_point."}),
+            },
             "hidden": {
                 "unique_id": "UNIQUE_ID",
             },
@@ -215,7 +218,7 @@ class LoadAudioPlus:
     def VALIDATE_INPUTS(cls, **kwargs):
         return True
 
-    def load(self, audio="", source_folder="input", in_point=0.0, out_point=0.0, unique_id=None):
+    def load(self, audio="", source_folder="input", in_point=0.0, out_point=0.0, trim=None, unique_id=None):
         if not audio or audio == "(none)":
             return (_empty_audio_payload(), 0.0)
 
@@ -228,6 +231,9 @@ class LoadAudioPlus:
             raise FileNotFoundError(f"Audio file not found: {file_path}")
 
         waveform, sample_rate = _decode_audio_waveform(resolved_path)
+        # Prompts from before the Trim switch have no trim and keep their points.
+        if trim is False:
+            in_point, out_point = 0.0, 0.0
         trimmed, trimmed_duration = _trim_waveform(waveform, sample_rate, in_point, out_point)
 
         return ({"waveform": trimmed, "sample_rate": sample_rate}, trimmed_duration)

@@ -3,8 +3,9 @@
  * a trim timeline over the waveform, and in / out points.
  *
  * The face is one fbui card; the stock widgets (source_folder, audio,
- * in_point, out_point) stay hidden and hold the saved values. out_point 0
- * means "to the end". Playback stays inside the trim and loops there.
+ * in_point, out_point, trim) stay hidden and hold the saved values. With
+ * Trim on, out_point 0 means "to the end" and playback stays inside the trim
+ * and loops there.
  */
 
 import { app } from "../../scripts/app.js";
@@ -12,9 +13,9 @@ import { api } from "../../scripts/api.js";
 import { previewUrl, stripAnnotation } from "./path_browser.js";
 import { mountCard } from "./fbui/card.js";
 import { notifyChange, toast } from "./fbui/comfy.js";
-import { ICONS } from "./fbui/controls.js";
+import { button, ICONS } from "./fbui/controls.js";
 import { chainCallback, el } from "./fbui/dom.js";
-import { findWidget, hideInputsInDef, hideWidget } from "./fbui/widgets.js";
+import { commitWidgetValue, findWidget, hideInputsInDef, hideWidget } from "./fbui/widgets.js";
 import { CAPTION_HEIGHT, FONT, RADIUS, RADIUS_CARD, T } from "./fbui/theme.js";
 import { loadPlus, NONE, sourceLabel } from "./common/load_plus.js";
 
@@ -67,8 +68,12 @@ function formatTime(seconds) {
     return `${mins}:${secs.toFixed(1).padStart(4, "0")}`;
 }
 
-// The trim as seconds: out_point 0 means the end of the file.
+const trimOn = (node) => findWidget(node, "trim")?.value === true;
+
+// The trim as seconds: out_point 0 means the end of the file; the whole
+// file while Trim is off.
 function trimOf(node, duration) {
+    if (!trimOn(node)) return { start: 0, stop: duration > 0 ? duration : 0 };
     const inPoint = Math.max(0, Number(findWidget(node, "in_point")?.value) || 0);
     const rawOut = Math.max(0, Number(findWidget(node, "out_point")?.value) || 0);
     const end = duration > 0 ? duration : Infinity;
@@ -81,6 +86,28 @@ function setTrim(node, start, stop) {
     findWidget(node, "in_point").value = Number(Math.max(0, start).toFixed(3));
     findWidget(node, "out_point").value = Number(Math.max(0, stop).toFixed(3));
     node._fb.card.refresh();
+}
+
+function toggleTrim(node) {
+    const on = !trimOn(node);
+    const total = Number.isFinite(node._fb.audio?.duration) ? node._fb.audio.duration : 0;
+    if (on && !(Number(findWidget(node, "out_point").value) > 0) && total) setTrim(node, Number(findWidget(node, "in_point").value) || 0, total);
+    commitWidgetValue(node, findWidget(node, "trim"), on);
+    node._fb.card.refresh();
+    notifyChange();
+}
+
+// The Edit row: the Trim switch.
+function editControl(node) {
+    const field = el("div", "fbui-field");
+    const trim = button("Trim", { icon: ICONS.scissors, grow: true, title: "Load only part of the audio. Press again to load all of it.", onClick: () => toggleTrim(node) });
+    field.append(trim);
+    return {
+        element: field,
+        sync() {
+            trim.classList.toggle("primary", trimOn(node));
+        },
+    };
 }
 
 // Peaks of the file's samples, one bucket per few pixels, drawn as a
@@ -166,7 +193,8 @@ function playerPanel(node) {
         empty.hidden = files.isFile(files.current(node));
         play.disabled = !has;
         play.innerHTML = audio.paused ? ICONS.play : ICONS.pause;
-        for (const part of [shadeLeft, shadeRight, edgeIn, edgeOut, head]) part.hidden = !has;
+        for (const part of [shadeLeft, shadeRight, edgeIn, edgeOut]) part.hidden = !has || !trimOn(node);
+        head.hidden = !has;
         if (has) {
             shadeLeft.style.left = "0";
             shadeLeft.style.width = at(start / total);
@@ -228,7 +256,7 @@ function playerPanel(node) {
         const box = track.getBoundingClientRect();
         const x = event.clientX - box.left;
         const { start, stop } = trimOf(node, total);
-        const near = (seconds) => Math.abs(x - (seconds / total) * box.width) <= HANDLE_GRAB;
+        const near = (seconds) => trimOn(node) && Math.abs(x - (seconds / total) * box.width) <= HANDLE_GRAB;
         drag = near(stop) && !near(start) ? "out" : near(start) ? "in" : "head";
         move(event);
     });
@@ -323,8 +351,9 @@ function setupNode(node) {
                 widget: "audio", label: "Source", kind: "select", labels: sourceLabel,
                 button: files.sourceButtons,
             },
+            { label: "Edit", control: editControl, widgets: ["trim"] },
             { panel: playerPanel, height: PLAYER_HEIGHT },
-            { pair: ["in_point", "out_point"], label: "Trim", prefixes: ["In", "Out"], suffix: "s", title: "Clip start and end in seconds (out 0 = to the end)" },
+            { pair: ["in_point", "out_point"], label: "Trim", prefixes: ["In", "Out"], suffix: "s", title: "Clip start and end in seconds (out 0 = to the end)", when: (_values, n) => trimOn(n) },
             { panel: captionPanel, height: CAPTION_HEIGHT },
         ],
     });
@@ -339,9 +368,13 @@ function setupNode(node) {
         });
     }
 
-    chainCallback(node, "onConfigure", () => {
+    chainCallback(node, "onConfigure", (info) => {
         fb.configured = true;
         fb.resetTrim = false;
+        // Saved before the Trim switch: a trim that was set stays on.
+        if (Array.isArray(info?.widgets_values) && info.widgets_values.length <= 4) {
+            findWidget(node, "trim").value = Number(findWidget(node, "in_point").value) > 0 || Number(findWidget(node, "out_point").value) > 0;
+        }
         files.refreshOptions(node, files.current(node));
         showFile(node, files.current(node));
     });
@@ -373,7 +406,7 @@ app.registerExtension({
     name: "FBnodes.LoadAudioPlus",
     beforeRegisterNodeDef(nodeType, nodeData) {
         if (nodeData.name !== NODE_NAME) return;
-        hideInputsInDef(nodeData, ["source_folder", "audio", "in_point", "out_point"]);
+        hideInputsInDef(nodeData, ["source_folder", "audio", "in_point", "out_point", "trim"]);
         chainCallback(nodeType.prototype, "onNodeCreated", function () {
             setupNode(this);
         });

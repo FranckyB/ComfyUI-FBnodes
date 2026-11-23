@@ -4,9 +4,13 @@ Outputs VIDEO type for use with Get Video Components+.
 """
 import os
 
+import av
+
 import folder_paths
 
 from comfy_api.input_impl import VideoFromFile
+
+from .load_image import video_clock
 
 VIDEO_EXTENSIONS = ['.mp4', '.webm', '.mov', '.avi', '.mkv', '.m4v', '.wmv']
 
@@ -16,6 +20,26 @@ _PLACEHOLDER_VIDEO_PATH = os.path.join(
     "js",
     "placeholder.mp4",
 )
+
+
+def trim_window(fps, count, origin, in_frame, out_frame):
+    """(start_time, duration) for VideoFromFile that keeps frames in_frame to
+    out_frame (inclusive; out 0 = the last frame). Frame i sits i / fps after
+    the stream's start (as in Load Image+); half a frame of slack on each side
+    keeps rounded timestamps inside."""
+    last = count - 1 if out_frame <= 0 else min(out_frame, count - 1)
+    first = max(0, min(in_frame, last))
+    start = max(0.0, origin + (first - 0.5) / fps)
+    return start, origin + (last + 0.5) / fps - start
+
+
+def trimmed_video(path, in_frame, out_frame):
+    with av.open(path) as container:
+        fps, count, origin = video_clock(container, container.streams.video[0])
+    if fps <= 0 or count <= 0:
+        return VideoFromFile(path)
+    start, duration = trim_window(fps, count, origin, int(in_frame), int(out_frame))
+    return VideoFromFile(path, start_time=start, duration=duration)
 
 
 class LoadVideoPlus:
@@ -53,6 +77,11 @@ class LoadVideoPlus:
                 # plays the video; the core upload widget would add a second player.
                 "video": (files, {}),
             },
+            "optional": {
+                "trim": ("BOOLEAN", {"default": False, "tooltip": "Load only the frames from in_frame to out_frame."}),
+                "in_frame": ("INT", {"default": 0, "min": 0, "max": 1_000_000, "tooltip": "First frame of the clip (0 = the first)."}),
+                "out_frame": ("INT", {"default": 0, "min": 0, "max": 1_000_000, "tooltip": "Last frame of the clip, included (0 = to the end)."}),
+            },
             "hidden": {
                 "unique_id": "UNIQUE_ID",
             },
@@ -77,7 +106,7 @@ class LoadVideoPlus:
             return match.group(1).strip(), match.group(2)
         return video.strip(), None
 
-    def load(self, video="", source_folder="input", unique_id=None):
+    def load(self, video="", source_folder="input", trim=False, in_frame=0, out_frame=0, unique_id=None):
         if not video or video == "(none)":
             return (None,)
 
@@ -113,6 +142,8 @@ class LoadVideoPlus:
             print(f"[LoadVideoPlus] Video file not found, using placeholder: {file_path}")
             return (VideoFromFile(_PLACEHOLDER_VIDEO_PATH),)
 
+        if trim:
+            return (trimmed_video(resolved_path, in_frame, out_frame),)
         return (VideoFromFile(resolved_path),)
 
     @classmethod

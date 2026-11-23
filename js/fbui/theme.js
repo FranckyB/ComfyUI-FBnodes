@@ -7,7 +7,7 @@
 
 // Bump on any change to the CSS below. Two packs shipping the same version
 // inject one stylesheet; different versions both inject and the later wins.
-export const KIT_VERSION = 7;
+export const KIT_VERSION = 8;
 
 export const T = Object.freeze({
   brand: "#4299e1",          // the one accent: picked segment, switch on, focus ring
@@ -127,6 +127,8 @@ export function kitCss() {
 .fbui-rail-fill{position:absolute;left:0;top:10px;height:5px;border-radius:3px;background:${T.brandSoftHover};pointer-events:none}
 .fbui-rail-head{position:absolute;top:0;bottom:0;width:2px;margin-left:-1px;background:${T.ink};box-shadow:0 0 0 1px rgba(0,0,0,.55);pointer-events:none}
 .fbui-rail-head::before{content:"";position:absolute;top:-1px;left:50%;transform:translateX(-50%);border:5px solid transparent;border-top:6px solid ${T.ink};filter:drop-shadow(0 0 1px rgba(0,0,0,.7))}
+.fbui-range-fill{position:absolute;top:10px;height:5px;background:${T.brand};opacity:.6;pointer-events:none}
+.fbui-range-edge{position:absolute;top:4px;width:7px;height:17px;margin-left:-3.5px;border-radius:3px;background:${T.brand};box-shadow:0 0 0 1px rgba(0,0,0,.5);pointer-events:none}
 .fbui-readout{flex:1 1 0;min-width:0;color:${T.faint};font:11px ${FONT};font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .fbui-readout b{color:${T.ink};font-weight:600}
 .fbui-tag{flex:none;color:${T.brand};font:650 10px ${FONT};letter-spacing:.08em;text-transform:uppercase;user-select:none}
