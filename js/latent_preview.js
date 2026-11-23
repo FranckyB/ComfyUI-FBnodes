@@ -168,18 +168,6 @@ function fitHeight(node) {
 }
 
 /**
- * Allow drag from the preview widget
- */
-function allowDragFromWidget(widget) {
-    widget.element.addEventListener('pointerdown', (e) => {
-        if (e.button === 0) {
-            // Prevent default to allow canvas interaction
-            e.stopPropagation();
-        }
-    });
-}
-
-/**
  * Get or create the canvas context for latent preview
  */
 function getLatentPreviewCtx(id, width, height) {
@@ -201,6 +189,9 @@ function getLatentPreviewCtx(id, width, height) {
         // Create canvas element
         const canvasEl = document.createElement("canvas");
         canvasEl.style.width = "100%";
+        // Presses go through to the node and graph beneath (drag, menu,
+        // zoom), in both renderers.
+        canvasEl.style.pointerEvents = "none";
         
         previewWidget = node.addDOMWidget("pmlatentpreview", "pmcanvas", canvasEl, {
             serialize: false,
@@ -208,21 +199,6 @@ function getLatentPreviewCtx(id, width, height) {
         });
         previewWidget.serialize = false;
         
-        allowDragFromWidget(previewWidget);
-        
-        // Forward mouse events to canvas for interaction
-        const forwardEvent = (eventName, handler) => {
-            canvasEl.addEventListener(eventName, (e) => {
-                e.preventDefault();
-                return handler(e);
-            }, true);
-        };
-        
-        forwardEvent('contextmenu', (e) => app.canvas._mousedown_callback(e));
-        forwardEvent('pointerdown', (e) => app.canvas._mousedown_callback(e));
-        forwardEvent('mousewheel', (e) => app.canvas._mousewheel_callback(e));
-        forwardEvent('pointermove', (e) => app.canvas._mousemove_callback(e));
-        forwardEvent('pointerup', (e) => app.canvas._mouseup_callback(e));
 
         previewWidget.computeSize = function(width) {
             if (this.aspectRatio) {

@@ -74,17 +74,16 @@ The three packs grew independently and each node builds its UI differently. Some
    - routes stay pack-prefixed.
 8. Cross-pack calls (for example, PM to `/fbnodes/...`) must handle a 404 gracefully and hide that feature.
 
-## Progress (2026-11-22)
-- **Done:**
+## Progress (2026-11-23)
+- **Done (FBnodes):**
   - Phase 0: kit, colours, rules and hygiene.
-  - Phase 1: the Load Image+ pilot, with frame-exact PyAV video frames.
-  - The file browser.
-  - Phase 2: Load Video+, Load Audio+ and Visual LoRA Picker+, with the Load+ source handling shared in `js/common/load_plus.js`.
-  - Save Image+ review: pick the images to keep before saving.
-  - Save Image+ and Save Video+ faces; Video Review (was LTX Review) card and review screen, sharing `js/common/review.js` with Save Image+'s review.
-- **Next:**
-  - Phase 3: convert the Save Image+ and Save Video+ faces, Crop Image+ and Crop Audio+.
-  - Still to drop: the ignored `enableNavigation` / `listKind` options that Clip Stitcher and VACE Stitcher pass to the browser.
+  - Phases 1–2: Load Image+, Load Video+, Load Audio+, Visual LoRA Picker+ and the file browser (Load+ source handling in `js/common/load_plus.js`).
+  - Phase 3: Save Image+ (review), Save Video+, Video Review (was LTX Review; shares `js/common/review.js`), Crop Image+.
+  - Phase 4: Clip Stitcher, VACE Stitcher and LoRA List+ share `js/common/item_list.js` (LoRA List+ uses the shared file browser); Show as Text, Switch Any and the small nodes (`js/simple_cards.js`) are cards; Load Checkpoint+ / Diffusion Model+ / LoRA+ are cards that keep real paths.
+  - Phase 5: the remap summary is a kit modal; the latent preview no longer reaches into `app.canvas._*`.
+  - Legacy: Crop Audio+, Load LTX Latent File, LTX Review Preview.
+- **Left native on purpose:** Prompt Batcher (three multiline texts; the card has no multiline row), Get Video Components+ and If Any (no settings).
+- **Next:** sync the kit into Prompt-Manager, then H3RefModPicker.
 
 ## FBnodes phases
 **Phase 0: kit and hygiene**
