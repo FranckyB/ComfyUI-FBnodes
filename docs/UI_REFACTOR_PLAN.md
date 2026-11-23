@@ -81,6 +81,7 @@ The three packs grew independently and each node builds its UI differently. Some
   - The file browser.
   - Phase 2: Load Video+, Load Audio+ and Visual LoRA Picker+, with the Load+ source handling shared in `js/common/load_plus.js`.
   - Save Image+ review: pick the images to keep before saving.
+  - Save Image+ and Save Video+ faces; Video Review (was LTX Review) card and review screen, sharing `js/common/review.js` with Save Image+'s review.
 - **Next:**
   - Phase 3: convert the Save Image+ and Save Video+ faces, Crop Image+ and Crop Audio+.
   - Still to drop: the ignored `enableNavigation` / `listKind` options that Clip Stitcher and VACE Stitcher pass to the browser.

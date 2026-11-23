@@ -55,17 +55,11 @@ Audio loader with the same file browser and UX as Load Image+/Video+, plus in/ou
 - **Outputs**: `AUDIO` (trimmed) and `duration` (seconds)
 
 ### Video Review
-Review gate node for 2-pass video workflows (formerly LTX Review). It pauses execution, decodes video/audio latents internally, opens a review popup with playback, and continues only when you proceed (or timeout policy allows it).
+Review gate for 2-pass video workflows (formerly LTX Review). It pauses the run, decodes the video/audio latents into a review clip and shows it full screen; the run goes on only when you proceed (or the timeout action says so).
 
-- **Inputs**: `video_latent`, `audio_latent`, `video_vae`, `audio_vae`, `fps`, `timeout`, `on_timeout`, `enable`
-- **Popup controls**: Proceed, Cancel, Requeue
-- **Audio + video playback**: Always generates a browser-compatible H.264/yuv420 preview in temp from decoded latents
-- **Timeout behavior**: Auto-proceeds or auto-cancels based on `on_timeout`
-- **Enable switch**: When OFF, passes through latents immediately and skips both VAE decodes/review popup
-- **Preview passthrough when disabled**: Optional `preview_video` preserves `review_path` output for preview workflows without running decode
-- **Outputs**: `video_latent`, `audio_latent`, `review_path`, `video`
-- **review_path**: Path to the generated temp preview clip
-- **video**: The review clip; plug it into **Save Video+** with Save off to show it on the canvas (no re-encode). It is a quick H.264 copy, so save final videos from the latents.
+- **Node**: Review (on, or pass through without decoding), FPS of the review clip, Timeout (0 = wait until you decide) and what happens when it runs out (proceed or cancel)
+- **Review screen**: the clip fills the screen; Proceed, Cancel and Requeue in the panel beside it, with a countdown you can pause. <kbd>Space</kbd> plays / pauses, <kbd>←</kbd> <kbd>→</kbd> step a frame, <kbd>Enter</kbd> proceeds
+- **Outputs**: `video_latent`, `audio_latent` (unchanged) and `video`: the review clip. Plug it into **Save Video+** with Save off to show it on the canvas (no re-encode). It is a quick H.264 copy, so save final videos from the latents. Nothing comes out of `video` when Review is off.
 
 LTX Review Preview is now legacy: use Save Video+ on the `video` output instead.
 

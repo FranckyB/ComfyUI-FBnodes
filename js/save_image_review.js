@@ -14,42 +14,20 @@ import { api } from "../../scripts/api.js";
 import { toast } from "./fbui/comfy.js";
 import { button, ICONS } from "./fbui/controls.js";
 import { el } from "./fbui/dom.js";
-import { ensureKitCss, FONT, RADIUS, RADIUS_CARD, T, Z_MODAL } from "./fbui/theme.js";
+import { FONT, RADIUS, T } from "./fbui/theme.js";
 import { bestGrid } from "./common/grid_math.js";
+import { countdown, ding, ensureReviewCss, MARGIN, nodeTitle, PANEL_WIDTH, reviewQueue } from "./common/review.js";
 
-const DING_URL = new URL("./audio/ding.mp3", import.meta.url).href;
-const CSS_ID = "fbnodes-review-css-v2";
-// The screen around the pictures: the panel's column on the left.
-const MARGIN = 20;
-const PANEL_WIDTH = 220;
+const CSS_ID = "fbnodes-review-css-v3";
 const GAP = 10;
 
-let open = null; // the review on screen: { requestId, close }
-const queued = []; // reviews announced while another is open
-
-function ensureReviewCss() {
-    ensureKitCss();
+function ensureImageReviewCss() {
+    ensureReviewCss();
     if (document.getElementById(CSS_ID)) return;
     const style = document.createElement("style");
     style.id = CSS_ID;
     style.textContent = `
-.fbnodes-review{position:fixed;inset:0;z-index:${Z_MODAL};background:rgba(5,6,8,.95);font:12px ${FONT};color:${T.inkSoft};user-select:none}
-.fbnodes-review-panel{position:absolute;left:${MARGIN}px;top:${MARGIN}px;width:${PANEL_WIDTH}px;box-sizing:border-box;display:flex;flex-direction:column;gap:8px;padding:12px;border:1px solid ${T.plateEdge};border-radius:${RADIUS_CARD}px;background:${T.panel};box-shadow:0 12px 40px rgba(0,0,0,.6)}
-.fbnodes-review-panel .title{color:${T.ink};font:600 13px ${FONT};overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
-.fbnodes-review-panel .count{color:${T.label};font-variant-numeric:tabular-nums}
-.fbnodes-review-panel .count b{color:${T.ink}}
-.fbnodes-review-panel .actions{display:flex;gap:6px}
-.fbnodes-review-panel .hint{color:${T.faint};font-size:11px;line-height:1.5}
-.fbnodes-review-panel kbd{padding:0 4px;border-radius:3px;background:${T.fill};color:${T.label};font:600 10px ${FONT}}
-.fbnodes-review-timer{display:flex;align-items:center;justify-content:center;gap:6px;height:26px;border:none;border-radius:999px;background:${T.brandSoft};color:${T.brandInk};font:600 11px ${FONT};font-variant-numeric:tabular-nums;cursor:pointer}
-.fbnodes-review-timer:hover{background:${T.brandSoftHover}}
-.fbnodes-review-timer.paused{background:${T.fill};color:${T.label}}
-.fbnodes-review-timer.urgent{background:${T.warnSoft};color:${T.warnInk}}
-.fbnodes-review-timer:disabled{cursor:default}
-.fbnodes-review-bar{height:3px;border-radius:2px;background:${T.fill};overflow:hidden}
-.fbnodes-review-bar>i{display:block;height:100%;background:${T.brand};transition:width 1s linear}
-.fbnodes-review-bar.paused>i{background:${T.switchOff}}
-.fbnodes-review-area{position:absolute;top:${MARGIN}px;bottom:${MARGIN}px;left:${MARGIN * 2 + PANEL_WIDTH}px;right:${MARGIN}px;display:grid;gap:${GAP}px;justify-content:center;align-content:center}
+.fbnodes-review-images{display:grid;gap:${GAP}px;justify-content:center;align-content:center}
 .fbnodes-review-pic{position:relative;box-sizing:border-box;border:2px solid ${T.plateEdge};border-radius:${RADIUS}px;background:${T.card};overflow:hidden;cursor:pointer}
 .fbnodes-review-pic img{width:100%;height:100%;object-fit:contain;display:block;pointer-events:none}
 .fbnodes-review-pic:hover{border-color:${T.brandInk}}
@@ -59,8 +37,8 @@ function ensureReviewCss() {
 .fbnodes-review-pic.picked .badge{background:${T.brand};box-shadow:none;color:${T.onBrand}}
 .fbnodes-review-pic.picked .badge span{display:none}
 .fbnodes-review-pic.picked .badge svg{display:block}
-.fbnodes-review-area.single{display:block}
-.fbnodes-review-area.single .fbnodes-review-pic{position:absolute;inset:0;margin:auto}
+.fbnodes-review-images.single{display:block}
+.fbnodes-review-images.single .fbnodes-review-pic{position:absolute;inset:0;margin:auto}
 .fbnodes-review-nav{position:absolute;top:50%;transform:translateY(-50%);width:44px;height:44px;border-radius:50%;background:rgba(16,19,23,.8)}
 .fbnodes-review-nav svg{width:20px;height:20px}
 .fbnodes-review-where{position:absolute;right:${MARGIN}px;top:${MARGIN}px;padding:3px 9px;border-radius:999px;background:rgba(16,19,23,.85);color:${T.ink};font:600 11px ${FONT};font-variant-numeric:tabular-nums}
@@ -72,11 +50,6 @@ function imageUrl(info) {
     const shown = info.preview ?? info;
     const params = new URLSearchParams({ filename: shown.filename, type: shown.type || "temp", subfolder: shown.subfolder || "" });
     return api.apiURL(`/view?${params}`);
-}
-
-function nodeTitle(nodeId) {
-    const node = app.graph?.getNodeById?.(nodeId) ?? app.graph?.getNodeById?.(Number(nodeId));
-    return node?.title || "Save Image+";
 }
 
 async function answer(requestId, body) {
@@ -92,13 +65,10 @@ async function answer(requestId, body) {
     }
 }
 
-const formatTime = (seconds) => {
-    const total = Math.max(0, Math.ceil(seconds));
-    return total >= 60 ? `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}` : `${total}s`;
-};
-
-function showReview(detail) {
-    ensureReviewCss();
+// Opens the review for `detail`; done() hands the screen to the next one.
+// Returns the function that closes it.
+function showReview(detail, done) {
+    ensureImageReviewCss();
     const requestId = String(detail.request_id);
     const images = Array.isArray(detail.images) ? detail.images : [];
     const timeout = Math.max(0, Number(detail.timeout) || 0);
@@ -108,24 +78,26 @@ function showReview(detail) {
     let finished = false;
 
     const root = el("div", "fbnodes-review");
-    const area = el("div", "fbnodes-review-area");
+    const area = el("div", "fbnodes-review-area fbnodes-review-images");
 
     // ---- the floating panel
     const panel = el("div", "fbnodes-review-panel");
-    const title = el("div", "title", nodeTitle(detail.node_id));
+    const title = el("div", "title", nodeTitle(detail.node_id, "Save Image+"));
     const count = el("div", "count");
-    const timerPill = el("button", "fbnodes-review-timer");
-    timerPill.type = "button";
-    const bar = el("div", "fbnodes-review-bar");
-    const barFill = el("i");
-    bar.append(barFill);
+    // Picking pauses the timer: a review in progress is never cut short.
+    const timer = countdown({
+        timeout,
+        running: (time) => `Saving all in ${time}`,
+        onPause: () => answer(requestId, { action: "pause" }),
+        onResume: (seconds) => answer(requestId, { action: "resume", seconds }),
+    });
     const skip = button("Skip", { grow: true, title: "Keep none of them", onClick: () => finish({ action: "skip" }) });
     const send = button("Send", { grow: true, primary: true, title: "Save the picked images (Enter)", onClick: () => finish({ action: "save", indices: [...picked].sort((a, b) => a - b) }) });
     const actions = el("div", "actions");
     actions.append(skip, send);
     const hint = el("div", "hint");
     hint.innerHTML = "Click to pick · <kbd>Space</kbd> one at a time · <kbd>←</kbd><kbd>→</kbd> step · <kbd>Enter</kbd> send";
-    panel.append(title, count, timerPill, bar, actions, hint);
+    panel.append(title, count, timer.pill, timer.bar, actions, hint);
 
     // ---- the pictures
     const pics = images.map((info, index) => {
@@ -191,13 +163,13 @@ function showReview(detail) {
         if (index < 0 || index >= images.length) return;
         if (picked.has(index)) picked.delete(index);
         else picked.add(index);
-        pauseTimer();
+        timer.pause();
         refresh();
     }
 
     function showSingle(index) {
         single = images.length ? (index + images.length) % images.length : -1;
-        pauseTimer();
+        timer.pause();
         refresh();
     }
 
@@ -207,13 +179,11 @@ function showReview(detail) {
     }
 
     function close() {
-        clearInterval(ticker);
+        timer.stop();
         document.removeEventListener("keydown", onKey, true);
         window.removeEventListener("resize", layout);
         root.remove();
-        open = null;
-        const nextReview = queued.shift();
-        if (nextReview) showReview(nextReview);
+        done();
     }
 
     async function finish(body) {
@@ -223,46 +193,6 @@ function showReview(detail) {
         if (!(await answer(requestId, body))) toast("This review had already ended.", { severity: "warn" });
         close();
     }
-
-    // ---- timer
-    let remaining = timeout;
-    let paused = timeout === 0;
-    const ticker = setInterval(() => {
-        if (paused || finished) return;
-        remaining -= 1;
-        showTimer();
-    }, 1000);
-
-    function showTimer() {
-        if (timeout === 0) {
-            timerPill.innerHTML = `${ICONS.timer}<span>No time limit</span>`;
-            timerPill.disabled = true;
-            bar.hidden = true;
-            return;
-        }
-        timerPill.classList.toggle("paused", paused);
-        timerPill.classList.toggle("urgent", !paused && remaining <= 10);
-        bar.classList.toggle("paused", paused);
-        timerPill.innerHTML = paused
-            ? `${ICONS.play}<span>Paused · ${formatTime(remaining)} left</span>`
-            : `${ICONS.pause}<span>Saving all in ${formatTime(remaining)}</span>`;
-        timerPill.title = paused ? "Resume the countdown" : "Pause the countdown (picking pauses it too)";
-        barFill.style.width = `${Math.max(0, Math.min(100, (remaining / timeout) * 100))}%`;
-    }
-
-    function pauseTimer() {
-        if (paused || timeout === 0) return;
-        paused = true;
-        answer(requestId, { action: "pause" });
-        showTimer();
-    }
-
-    timerPill.addEventListener("click", () => {
-        if (!paused) return pauseTimer();
-        paused = false;
-        answer(requestId, { action: "resume", seconds: remaining });
-        showTimer();
-    });
 
     // ---- keys
     function onKey(event) {
@@ -284,28 +214,24 @@ function showReview(detail) {
     document.addEventListener("keydown", onKey, true);
     window.addEventListener("resize", layout);
 
-    open = { requestId, close };
     refresh();
-    showTimer();
-    new Audio(DING_URL).play().catch(() => {});
+    ding();
+    return close;
 }
+
+const reviews = reviewQueue(showReview);
 
 app.registerExtension({
     name: "FBnodes.SaveImageReview",
     setup() {
         api.addEventListener("fbnodes.save_image.review", (event) => {
             const detail = event.detail ?? {};
-            if (!detail.request_id) return;
-            if (open) queued.push(detail);
-            else showReview(detail);
+            if (detail.request_id) reviews.show(detail);
         });
         // The run ended the review itself: timed out, or the queue was cancelled.
         api.addEventListener("fbnodes.save_image.review_done", (event) => {
             const { request_id: requestId, outcome } = event.detail ?? {};
-            const index = queued.findIndex((detail) => String(detail.request_id) === String(requestId));
-            if (index >= 0) queued.splice(index, 1);
-            if (open?.requestId !== String(requestId)) return;
-            open.close();
+            if (!reviews.end(requestId)) return;
             if (outcome === "timeout") toast("Review timed out: every image was saved.");
             else if (outcome === "interrupted") toast("Review cancelled with the run.", { severity: "warn" });
         });

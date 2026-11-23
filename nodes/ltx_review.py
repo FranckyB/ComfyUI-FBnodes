@@ -12,6 +12,7 @@ import shutil
 import json
 import math
 import threading
+import time
 import uuid
 from datetime import datetime
 from fractions import Fraction
@@ -25,9 +26,13 @@ import folder_paths
 import server
 from comfy.model_management import InterruptProcessingException
 from comfy_api.input_impl import VideoFromFile
+from comfy_api.input import VideoInput
+
+from .save_image import _REVIEW_LOCK, _wait_for_review
 
 
-_REVIEW_LOCK = threading.Lock()
+# One entry per Video Review waiting for an answer; the lock and the wait are
+# Save Image+'s review ones.
 _PENDING_REVIEW_REQUESTS: dict[str, dict] = {}
 _SAVE_VIDEO_PREVIEW_PREFIX = "Vids/%date:yy-MM-dd%/vid_%date:HH-mm-ss%"
 
@@ -236,27 +241,30 @@ def _build_temp_preview_path() -> str:
 
 @server.PromptServer.instance.routes.post("/fbnodes/ltx-review/decision")
 async def ltx_review_decision(request):
+    """Answer a pending Video Review (proceed, cancel, requeue) or pause /
+    resume its timer."""
     try:
         body = await request.json()
     except Exception:
         return web.json_response({"ok": False, "error": "Invalid JSON body"}, status=400)
+    if not isinstance(body, dict):
+        return web.json_response({"ok": False, "error": "Invalid JSON body"}, status=400)
 
-    request_id = body.get("request_id") if isinstance(body, dict) else None
-    decision = body.get("decision") if isinstance(body, dict) else None
-
-    if not request_id or not isinstance(request_id, str):
-        return web.json_response({"ok": False, "error": "Missing request_id"}, status=400)
-    if decision not in {"proceed", "cancel", "requeue"}:
-        return web.json_response({"ok": False, "error": "Invalid decision"}, status=400)
-
+    decision = body.get("decision")
+    action = body.get("action")
     with _REVIEW_LOCK:
-        item = _PENDING_REVIEW_REQUESTS.get(request_id)
-
-    if item is None:
-        return web.json_response({"ok": False, "error": "Request expired or not found"}, status=404)
-
-    item["decision"] = decision
-    item["event"].set()
+        item = _PENDING_REVIEW_REQUESTS.get(body.get("request_id"))
+        if item is None:
+            return web.json_response({"ok": False, "error": "Request expired or not found"}, status=404)
+        if action == "pause":
+            item["deadline"] = None
+        elif action == "resume":
+            item["deadline"] = time.monotonic() + max(0.0, float(body.get("seconds") or 0))
+        elif decision in {"proceed", "cancel", "requeue"}:
+            item["decision"] = decision
+            item["event"].set()
+        else:
+            return web.json_response({"ok": False, "error": "Invalid decision"}, status=400)
     return web.json_response({"ok": True})
 
 
@@ -278,10 +286,10 @@ class LTXReview:
                 }),
                 "timeout": ("INT", {
                     "default": 120,
-                    "min": 1,
-                    "max": 600,
+                    "min": 0,
+                    "max": 3600,
                     "step": 1,
-                    "tooltip": "Seconds to wait for user decision before timeout action."
+                    "tooltip": "Seconds to wait for your decision before the timeout action. 0 waits until you decide."
                 }),
                 "on_timeout": (["proceed", "cancel"], {
                     "default": "proceed",
@@ -298,12 +306,11 @@ class LTXReview:
             },
         }
 
-    RETURN_TYPES = ("LATENT", "LATENT", "STRING", "VIDEO")
-    RETURN_NAMES = ("video_latent", "audio_latent", "review_path", "video")
+    RETURN_TYPES = ("LATENT", "LATENT", "VIDEO")
+    RETURN_NAMES = ("video_latent", "audio_latent", "video")
     OUTPUT_TOOLTIPS = (
         "The video latent, unchanged.",
         "The audio latent, unchanged.",
-        "Path of the review clip.",
         "The review clip (a quick H.264 copy, not for final saves); plug it into Save Video+ with Save off to show it. Nothing when enable is off.",
     )
     FUNCTION = "review"
@@ -326,14 +333,7 @@ class LTXReview:
             origin_graph_id = ""
 
         if not bool(enable):
-            passthrough_path = ""
-            ui = {
-                "ltx_review_video_path": [passthrough_path],
-            }
-            return {"ui": ui, "result": (video_latent, audio_latent, passthrough_path, None)}
-
-        review_video_url = None
-        review_clip_path = ""
+            return (video_latent, audio_latent, None)
 
         try:
             decoded_images = _decode_video_images(video_latent, video_vae)
@@ -347,59 +347,45 @@ class LTXReview:
                 review_clip_path,
                 review_metadata,
             )
-            review_video_url = _temp_view_url(os.path.basename(review_clip_path))
         except Exception as e:
-            raise RuntimeError(f"LTXReview could not decode/encode review clip: {e}") from e
+            raise RuntimeError(f"Video Review could not decode/encode the review clip: {e}") from e
 
         request_id = str(uuid.uuid4())
-        wait_event = threading.Event()
-
+        timeout = max(0, int(timeout or 0))
+        item = {
+            "event": threading.Event(),
+            "decision": None,
+            "deadline": time.monotonic() + timeout if timeout > 0 else None,
+        }
         with _REVIEW_LOCK:
-            _PENDING_REVIEW_REQUESTS[request_id] = {
-                "event": wait_event,
-                "decision": None,
+            _PENDING_REVIEW_REQUESTS[request_id] = item
+
+        outcome = "interrupted"
+        try:
+            server.PromptServer.instance.send_sync("fbnodes.ltx_review.request", {
+                "request_id": request_id,
                 "node_id": str(_first(unique_id) or ""),
                 "graph_id": origin_graph_id,
-                "video_path": review_clip_path,
-            }
+                "timeout": timeout,
+                "on_timeout": on_timeout,
+                "fps": float(fps),
+                "video_url": _temp_view_url(os.path.basename(review_clip_path)),
+            })
+            outcome = _wait_for_review(item)
+        finally:
+            with _REVIEW_LOCK:
+                _PENDING_REVIEW_REQUESTS.pop(request_id, None)
+            server.PromptServer.instance.send_sync("fbnodes.ltx_review.review_done", {
+                "request_id": request_id,
+                "outcome": outcome,
+                "on_timeout": on_timeout,
+            })
 
-        display_path = str(review_clip_path or "").strip()
-        if not display_path and review_clip_path:
-            display_path = os.path.basename(review_clip_path)
-
-        server.PromptServer.instance.send_sync("fbnodes.ltx_review.request", {
-            "request_id": request_id,
-            "node_id": str(_first(unique_id) or ""),
-            "graph_id": origin_graph_id,
-            "timeout": int(timeout),
-            "video_url": review_video_url,
-            "video_path": display_path,
-            "source_type": "temp",
-            "filename": os.path.basename(review_clip_path),
-            "subfolder": "",
-            "workflow_embedded": bool(review_metadata.get("workflow")),
-        })
-
-        signaled = wait_event.wait(timeout=float(timeout))
-
-        with _REVIEW_LOCK:
-            item = _PENDING_REVIEW_REQUESTS.pop(request_id, None)
-
-        decision = ""
-        if signaled and item is not None:
-            decision = str(item.get("decision") or "")
-        if decision not in {"proceed", "cancel", "requeue"}:
-            decision = "cancel" if on_timeout == "cancel" else "proceed"
-
-        if decision in {"cancel", "requeue"}:
+        # Nobody answered in time: the node's timeout action.
+        decision = item["decision"] if outcome == "decided" else on_timeout
+        if decision != "proceed":
             raise InterruptProcessingException()
-
-        ui = {
-            "ltx_review_decision": [decision],
-            "ltx_review_video_path": [review_clip_path],
-        }
-
-        return {"ui": ui, "result": (video_latent, audio_latent, review_clip_path, VideoFromFile(review_clip_path))}
+        return (video_latent, audio_latent, VideoFromFile(review_clip_path))
 
 
 def _parse_path_annotation(path_value: str) -> tuple[str, str | None]:
@@ -490,10 +476,10 @@ class LTXReviewPreview:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "review_path": ("STRING", {
-                    "default": "",
-                    "forceInput": True,
-                    "tooltip": "Path to a video file (absolute or relative with optional [input]/[output]/[temp])."
+                # Any type: older workflows linked Video Review's review_path
+                # here, and that output slot now carries its video.
+                "review_path": ("*", {
+                    "tooltip": "Path to a video file (absolute or relative with optional [input]/[output]/[temp]), or a VIDEO."
                 }),
             },
         }
@@ -509,6 +495,9 @@ class LTXReviewPreview:
     def preview(self, review_path=""):
         if isinstance(review_path, (list, tuple)):
             review_path = review_path[0] if review_path else ""
+        if isinstance(review_path, VideoInput):
+            source = review_path.get_stream_source()
+            review_path = source if isinstance(source, str) else ""
 
         path_value = str(review_path or "").strip()
         if not path_value:
