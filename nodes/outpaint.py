@@ -119,7 +119,7 @@ def _place_references(executor, *args, **kwargs):
     return executor(*args, **kwargs)
 
 
-class OutpaintSource:
+class OutpaintPrepare:
     @classmethod
     def INPUT_TYPES(cls):
         return {
@@ -148,7 +148,7 @@ class OutpaintSource:
         return (canvas[:, top:bottom, left:right, :3].clone(), size_w, size_h, mask, canvas)
 
 
-class OutpaintLatent:
+class OutpaintAnchorLatent:
     @classmethod
     def INPUT_TYPES(cls):
         return {
@@ -187,7 +187,7 @@ class OutpaintLatent:
         return (model, positive, out)
 
 
-class OutpaintBlend:
+class OutpaintStitch:
     @classmethod
     def INPUT_TYPES(cls):
         return {
