@@ -454,7 +454,8 @@ function stagePanel(node) {
     };
 }
 
-// The footnote under the stage: the size the node outputs.
+// The footnote under the stage: the picture's size, and the size the node
+// outputs when a crop or pad changes it.
 function captionPanel(node) {
     const fb = node._fb;
     const caption = el("div", "fbui-caption");
@@ -471,7 +472,8 @@ function captionPanel(node) {
                 width += fb.pad.left + fb.pad.right;
                 height += fb.pad.top + fb.pad.bottom;
             }
-            caption.textContent = `${width} × ${height}`;
+            const source = `${image.width} × ${image.height}`;
+            caption.textContent = width === image.width && height === image.height ? source : `${source} → ${width} × ${height}`;
         },
     };
 }
