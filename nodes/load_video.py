@@ -49,7 +49,9 @@ class LoadVideoPlus:
                     "default": "input",
                     "tooltip": "Browse files from the input or output folder"
                 }),
-                "video": (files, {"video_upload": True}),
+                # No video_upload: the node's own card uploads (drop a file) and
+                # plays the video; the core upload widget would add a second player.
+                "video": (files, {}),
             },
             "hidden": {
                 "unique_id": "UNIQUE_ID",

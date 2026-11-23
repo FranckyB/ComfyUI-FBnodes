@@ -9,17 +9,7 @@
 
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
-import {
-    basenameOf,
-    classifySelection,
-    getMediaRoots,
-    isAbsolutePath,
-    isImageFile,
-    isVideoFile,
-    previewUrl,
-    stripAnnotation,
-} from "./path_browser.js";
-import { createFileBrowserModal } from "./file_browser.js";
+import { basenameOf, isAbsolutePath, isImageFile, isVideoFile, previewUrl, stripAnnotation } from "./path_browser.js";
 import { mountCard } from "./fbui/card.mjs";
 import { notifyChange, toast } from "./fbui/comfy.mjs";
 import { button, ICONS, rail } from "./fbui/controls.mjs";
@@ -28,6 +18,7 @@ import { openMenu, openModal } from "./fbui/modal.mjs";
 import { makeScrub } from "./fbui/scrub.mjs";
 import { findWidget, hideInputsInDef, hideWidget, suppressCorePreview } from "./fbui/widgets.mjs";
 import { createImageStage, drawStroke } from "./common/image_stage.mjs";
+import { BLANK, loadPlus, NONE, sourceLabel } from "./common/load_plus.mjs";
 import { cropPixels, isFullCrop } from "./common/stage_math.mjs";
 import { CAPTION_HEIGHT, ROW_HEIGHT } from "./fbui/theme.mjs";
 
@@ -39,8 +30,6 @@ const STAGE_MIN_HEIGHT = 200;
 // The frame picker: its rail (24) over the FRAME line, 6 apart.
 const FRAME_PANEL_HEIGHT = 24 + 6 + ROW_HEIGHT;
 const BRUSH_MAX = 512;
-const NONE = "(none)";
-const BLANK = "(blank)";
 
 const sourceFolder = (node) => findWidget(node, "source_folder")?.value || "input";
 const imageValue = (node) => stripAnnotation(findWidget(node, "image")?.value);
@@ -398,7 +387,7 @@ function stagePanel(node) {
             notifyChange();
         },
         onClick: () => {
-            if (!fb.tool) openBrowser(node);
+            if (!fb.tool) files.openBrowser(node);
         },
         onContextMenu: (event) => showContextMenu(node, event),
         emptyText: () => "Browse, drop or paste an image",
@@ -566,146 +555,14 @@ function cropResetControl(node) {
 
 // ---------------------------------------------------------------- files
 
-// Basenames for the source list; a repeated name gets " (2)", " (3)".
-const labelCache = new WeakMap();
-function sourceLabel(value, values) {
-    let labels = labelCache.get(values);
-    if (!labels) {
-        labels = new Map();
-        const used = new Map();
-        for (const item of values) {
-            const base = item === NONE || item === BLANK ? item : basenameOf(item) || item;
-            const count = (used.get(base) ?? 0) + 1;
-            used.set(base, count);
-            labels.set(item, count > 1 ? `${base} (${count})` : base);
-        }
-        labelCache.set(values, labels);
-    }
-    return labels.get(value) ?? basenameOf(value);
-}
-
-function setImageOptions(node, files, preferred) {
-    const widget = findWidget(node, "image");
-    const values = [NONE, BLANK, ...files];
-    const current = stripAnnotation(preferred ?? widget.value);
-    if (current && !values.includes(current)) values.push(current);
-    widget.options.values = values;
-    node._fb.card?.refresh();
-}
-
-async function refreshForSource(node, source, preferred = null) {
-    try {
-        const response = await api.fetchApi(`/fbnodes/list-files?source=${encodeURIComponent(source || "input")}`);
-        if (!response.ok) return;
-        const result = await response.json();
-        setImageOptions(node, Array.isArray(result?.files) ? result.files : [], preferred);
-    } catch (error) {
-        console.warn("[LoadImagePlus] Could not fetch file list:", error);
-    }
-}
-
-async function refreshForBrowsePath(node, path, preferred = null) {
-    try {
-        const roots = await getMediaRoots();
-        const response = await api.fetchApi(`/fbnodes/path-browser/list?path=${encodeURIComponent(path)}&kind=media`);
-        if (!response.ok) return;
-        const data = await response.json();
-        const files = [];
-        for (const item of Array.isArray(data?.files) ? data.files : []) {
-            const absPath = typeof item === "string" ? item : item?.path;
-            const value = absPath && (classifySelection(absPath, roots)?.value || absPath);
-            if (value && !files.includes(value)) files.push(value);
-        }
-        setImageOptions(node, files, preferred);
-    } catch (error) {
-        console.warn("[LoadImagePlus] Could not list the browsed folder:", error);
-    }
-}
-
-function refreshOptions(node, preferred = null) {
-    const path = node.properties._browsePath;
-    return path ? refreshForBrowsePath(node, path, preferred) : refreshForSource(node, sourceFolder(node), preferred);
-}
-
-function setImage(node, value) {
-    const widget = findWidget(node, "image");
-    if (!widget.options.values.includes(value)) widget.options.values = [...widget.options.values, value];
-    // The same name again (an upload that replaced the file) still reloads.
-    if (stripAnnotation(widget.value) === value) showFile(node, value);
-    else node._fb.card.setWidget("image", value);
-}
-
-function setSourceFolder(node, folder) {
-    const widget = findWidget(node, "source_folder");
-    if (widget && folder) widget.value = folder;
-}
-
-async function openBrowser(node) {
-    const roots = await getMediaRoots();
-    const source = sourceFolder(node);
-    const current = imageValue(node);
-    let initialPath = node.properties._browsePath || (source === "output" ? roots.output : roots.input);
-    let selectedAbsPath = "";
-    if (current && current !== NONE && current !== BLANK) {
-        if (isAbsolutePath(current)) selectedAbsPath = current;
-        else {
-            const root = source === "output" ? roots.output : roots.input;
-            if (root) selectedAbsPath = `${String(root).replace(/[\\/]+$/, "")}/${String(current).replace(/^[\\/]+/, "")}`;
-        }
-    }
-    selectedAbsPath ||= node.properties._browseSelectedAbsPath || "";
-    createFileBrowserModal(current, (selected, meta) => {
-        if (meta?.absPath) {
-            const picked = classifySelection(meta.absPath, meta.roots);
-            node.properties._browsePath = meta.dir;
-            node.properties._browseSelectedAbsPath = meta.absPath;
-            setSourceFolder(node, picked.sourceFolder);
-            setImage(node, picked.value);
-            refreshForBrowsePath(node, meta.dir, picked.value);
-        } else {
-            node.properties._browseSelectedAbsPath = "";
-            setImage(node, selected);
-            if (node.properties._browsePath) refreshForBrowsePath(node, node.properties._browsePath, selected);
-        }
-    }, source, {
-        enableNavigation: true,
-        initialPath,
-        selectedAbsPath,
-        navKind: "media",
-        allowedTypes: ["image", "video"],
-    });
-}
-
-function stepImage(node, direction) {
-    const values = (findWidget(node, "image")?.options?.values ?? []).filter((value) => value !== NONE && value !== BLANK);
-    if (values.length <= 1) return false;
-    const index = values.indexOf(imageValue(node));
-    const next = index < 0 ? (direction > 0 ? 0 : values.length - 1) : (index + direction + values.length) % values.length;
-    setImage(node, values[next]);
-    return true;
-}
-
-async function uploadToNode(node, blob, filename, mime) {
-    const file = blob instanceof File ? blob : new File([blob], filename, { type: mime || blob.type || "image/png" });
-    const form = new FormData();
-    form.append("image", file);
-    form.append("subfolder", "");
-    form.append("type", "input");
-    const response = await api.fetchApi("/upload/image", { method: "POST", body: form });
-    if (!response.ok) throw new Error(`Upload failed (${response.status})`);
-    const data = await response.json();
-    setSourceFolder(node, "input");
-    node.properties._browsePath = "";
-    await refreshForSource(node, "input", data.name);
-    setImage(node, data.name);
-}
+const files = loadPlus({ widget: "image", listKind: "media", navKind: "media", allowedTypes: ["image", "video"] });
 
 const isImagePath = (text) => isAbsolutePath(text) && /\.(png|jpe?g|webp|gif|bmp)$/i.test(text);
 
 async function pastePath(node, path) {
     const response = await api.fetchApi(`/fbnodes/path-browser/file?path=${encodeURIComponent(path)}`);
     if (!response.ok) throw new Error(`Could not read ${path}`);
-    await uploadToNode(node, await response.blob(), basenameOf(path));
+    await files.upload(node, await response.blob(), basenameOf(path));
 }
 
 async function pasteClipboardItems(node, items) {
@@ -718,7 +575,7 @@ async function pasteClipboardItems(node, items) {
         const type = item.types.find((entry) => entry.startsWith("image/"));
         if (!type) continue;
         const ext = { "image/jpeg": "jpg", "image/webp": "webp" }[type] ?? "png";
-        await uploadToNode(node, await item.getType(type), `pasted_${Date.now()}.${ext}`, type);
+        await files.upload(node, await item.getType(type), `pasted_${Date.now()}.${ext}`, type);
         return true;
     }
     return false;
@@ -732,7 +589,7 @@ async function pasteDataTransfer(node, data) {
     }
     const file = data?.files?.[0];
     if (file && /\.(png|jpe?g|webp|gif|bmp)$/i.test(file.name)) {
-        await uploadToNode(node, file, file.name, file.type);
+        await files.upload(node, file, file.name, file.type);
         return true;
     }
     return false;
@@ -772,7 +629,7 @@ function showContextMenu(node, event) {
                 }
             },
         },
-        { label: "Browse files…", action: () => openBrowser(node) },
+        { label: "Browse files…", action: () => files.openBrowser(node) },
     ]);
 }
 
@@ -791,7 +648,7 @@ function installShortcuts() {
         const fb = node._fb;
         let handled = false;
         if ((event.key === "ArrowLeft" || event.key === "ArrowRight") && !event.shiftKey) {
-            handled = stepImage(node, event.key === "ArrowRight" ? 1 : -1);
+            handled = files.step(node, event.key === "ArrowRight" ? 1 : -1);
         } else if (fb.tool === "mask" && (event.key === "[" || event.key === "]")) {
             const step = Math.max(1, Math.round(fb.mask.brushSize * 0.15));
             editMask(node, (m) => { m.brushSize = Math.max(1, Math.min(BRUSH_MAX, m.brushSize + (event.key === "]" ? step : -step))); });
@@ -828,6 +685,7 @@ function setupNode(node) {
         mask: restoreMask(node),
         crop: parseCrop(node.properties._cropData || findWidget(node, "crop_data")?.value),
         tool: null,
+        reload: (value) => showFile(node, value),
     };
     node._fb = fb;
     fb.tool = fb.crop.enabled ? "crop" : fb.mask.enabled ? "mask" : null;
@@ -858,7 +716,7 @@ function setupNode(node) {
         rows: [
             {
                 widget: "image", label: "Source", kind: "select", labels: sourceLabel,
-                button: { text: "", icon: ICONS.folder, title: "Browse files anywhere on disk", onClick: () => openBrowser(node) },
+                button: { text: "", icon: ICONS.folder, title: "Browse files anywhere on disk", onClick: () => files.openBrowser(node) },
             },
             { label: "Edit", control: editControl },
             { label: "Brush", control: brushControl, when: (_values, n) => n._fb.tool === "mask" },
@@ -887,7 +745,7 @@ function setupNode(node) {
         for (const axis of ["flip_x", "flip_y"]) if (props[axis] !== undefined) setFlip(node, axis, Boolean(props[axis]));
         fb.tool = fb.crop.enabled ? "crop" : fb.mask.enabled ? "mask" : null;
         syncCropData(node);
-        refreshOptions(node, imageValue(node));
+        files.refreshOptions(node, imageValue(node));
         showFile(node, imageValue(node)).then(() => { if (fb.mask.enabled) syncMaskData(node); });
     });
     chainCallback(node, "onRemoved", () => {
@@ -900,7 +758,7 @@ function setupNode(node) {
         const file = event.dataTransfer?.files?.[0];
         if (!file || !/\.(png|jpe?g|webp|mp4|webm|mov|avi)$/i.test(file.name)) return false;
         try {
-            await uploadToNode(node, file, file.name, file.type);
+            await files.upload(node, file, file.name, file.type);
         } catch (error) {
             toast(`Upload failed: ${error.message}`, { severity: "error" });
         }
@@ -910,7 +768,7 @@ function setupNode(node) {
     // A new node lists the input folder and shows its default value.
     queueMicrotask(() => {
         if (fb.configured) return;
-        refreshOptions(node, imageValue(node));
+        files.refreshOptions(node, imageValue(node));
         showFile(node, imageValue(node));
     });
 }
