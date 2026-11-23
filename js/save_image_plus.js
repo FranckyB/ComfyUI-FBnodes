@@ -55,10 +55,7 @@ function ensureCss() {
     style.id = CSS_ID;
     style.textContent = `
 .fbnodes-save .single,.fbnodes-save .grid{position:absolute;inset:0}
-.fbnodes-save .single img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;display:block;pointer-events:none}
-.fbnodes-save .divider{position:absolute;top:0;width:2px;margin-left:-1px;background:${T.ink};box-shadow:0 0 0 1px rgba(0,0,0,.5);pointer-events:none}
-.fbnodes-save .divider::after{content:"";position:absolute;left:50%;top:50%;width:10px;height:10px;border-radius:50%;transform:translate(-50%,-50%);background:${T.ink};box-shadow:0 0 0 1px rgba(0,0,0,.5)}
-.fbnodes-save .tag{position:absolute;top:8px;padding:2px 7px;border-radius:999px;background:rgba(10,12,15,.75);color:${T.ink};font:600 10px system-ui;pointer-events:none}
+.fbnodes-save .single canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
 .fbnodes-save .grid{display:grid;gap:${GRID_GAP}px;justify-content:center;align-content:center}
 .fbnodes-save .grid img{width:100%;height:100%;object-fit:contain;border-radius:${RADIUS - 2}px;background:${T.card};outline:1px solid ${T.plateEdge};cursor:pointer;display:block}
 .fbnodes-save .grid img:hover{outline:2px solid ${T.brand}}
@@ -261,19 +258,16 @@ async function copyImage(info) {
 
 // The view: the shown image (with the compare image revealed left of the
 // pointer), or the batch as a grid; the size footnote reads fb.shownSize.
+// The single view draws on a canvas from copies of both pictures scaled to
+// the view once, so following the pointer only redraws two small bitmaps,
+// at most once a frame.
 function stagePanel(node) {
     ensureCss();
     const fb = node._fb;
     const stage = el("div", "fbui-stage fbnodes-save");
     const single = el("div", "single");
-    const main = el("img");
-    const other = el("img");
-    const divider = el("div", "divider");
-    const tagA = el("span", "tag", "A");
-    const tagB = el("span", "tag", "B");
-    tagA.style.left = "8px";
-    tagB.style.right = "8px";
-    single.append(main, other, divider, tagA, tagB);
+    const canvas = el("canvas");
+    single.append(canvas);
     const grid = el("div", "grid");
     const empty = el("div", "fbui-stage-empty", "Run the workflow to see the saved images");
     const tools = el("div", "fbui-stage-tools");
@@ -281,9 +275,14 @@ function stagePanel(node) {
     tools.append(large);
     stage.append(single, grid, empty, tools);
 
+    const main = new Image();
+    const other = new Image();
     let hoverX = null;
     let gridKey = "";
-    const naturalSize = (img) => (img.naturalWidth ? [img.naturalWidth, img.naturalHeight] : null);
+    let frame = 0;
+    // The pictures scaled to the view, rebuilt when the view or a picture changes.
+    const scaled = { key: "", main: null, other: null, rect: null };
+    const naturalSize = (img) => (img?.naturalWidth ? [img.naturalWidth, img.naturalHeight] : null);
 
     function layoutGrid() {
         const first = grid.firstChild;
@@ -293,19 +292,63 @@ function stagePanel(node) {
         grid.style.gridTemplateRows = `repeat(${fit.rows}, ${Math.floor(fit.height)}px)`;
     }
 
-    function drawCompare() {
-        const item = compareItem(node);
-        const size = naturalSize(main);
-        const show = Boolean(item && size && hoverX !== null && !fb.grid);
-        other.hidden = divider.hidden = tagA.hidden = tagB.hidden = !show;
-        if (!show) return;
-        const rect = fitRect(size[0], size[1], stage.clientWidth, stage.clientHeight, 0);
-        const x = Math.max(rect.x, Math.min(rect.x + rect.width, hoverX));
-        other.style.clipPath = `inset(0 ${stage.clientWidth - x}px 0 0)`;
-        divider.style.left = `${x}px`;
-        divider.style.top = `${rect.y}px`;
-        divider.style.height = `${rect.height}px`;
+    function scaleTo(img, width, height) {
+        if (!img.naturalWidth) return null;
+        const copy = document.createElement("canvas");
+        copy.width = width;
+        copy.height = height;
+        const ctx = copy.getContext("2d");
+        ctx.imageSmoothingQuality = "high";
+        ctx.drawImage(img, 0, 0, width, height);
+        return copy;
     }
+
+    function draw() {
+        frame = 0;
+        if (fb.grid || !main.naturalWidth) return;
+        // Screen pixels per CSS pixel: the graph zoom scales the node, so the
+        // canvas follows it (capped) to stay sharp when zoomed in.
+        const box = stage.getBoundingClientRect();
+        const dpr = Math.min(4, ((box.width / Math.max(1, stage.clientWidth)) || 1) * (window.devicePixelRatio || 1));
+        const w = Math.max(1, Math.round(stage.clientWidth * dpr));
+        const h = Math.max(1, Math.round(stage.clientHeight * dpr));
+        if (canvas.width !== w || canvas.height !== h) {
+            canvas.width = w;
+            canvas.height = h;
+        }
+        const key = `${w}x${h}|${main.src}|${other.src}|${other.naturalWidth}`;
+        if (scaled.key !== key) {
+            const rect = fitRect(main.naturalWidth, main.naturalHeight, w, h, 0);
+            const rw = Math.max(1, Math.round(rect.width));
+            const rh = Math.max(1, Math.round(rect.height));
+            Object.assign(scaled, { key, rect, main: scaleTo(main, rw, rh), other: compareItem(node) ? scaleTo(other, rw, rh) : null });
+        }
+        const { rect } = scaled;
+        const ctx = canvas.getContext("2d");
+        ctx.clearRect(0, 0, w, h);
+        ctx.drawImage(scaled.main, rect.x, rect.y);
+        if (hoverX === null || !scaled.other) return;
+        const x = Math.max(rect.x, Math.min(rect.x + rect.width, hoverX * dpr));
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(rect.x, rect.y, x - rect.x, rect.height);
+        ctx.clip();
+        ctx.drawImage(scaled.other, rect.x, rect.y);
+        ctx.restore();
+        // The split line and its knob.
+        ctx.fillStyle = T.ink;
+        ctx.shadowColor = "rgba(0,0,0,.6)";
+        ctx.shadowBlur = 2 * dpr;
+        ctx.fillRect(Math.round(x - dpr), rect.y, Math.round(2 * dpr), rect.height);
+        ctx.beginPath();
+        ctx.arc(x, rect.y + rect.height / 2, 5 * dpr, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+    }
+
+    const redraw = () => {
+        if (!frame) frame = requestAnimationFrame(draw);
+    };
 
     function sync() {
         const has = fb.saved.length > 0;
@@ -344,22 +387,26 @@ function stagePanel(node) {
             if (other.dataset.url !== otherUrl) {
                 other.dataset.url = otherUrl;
                 if (otherUrl) other.src = otherUrl;
+                else other.removeAttribute("src");
             }
             fb.shownSize = naturalSize(main);
-            drawCompare();
+            redraw();
         }
     }
 
     main.addEventListener("load", () => fb.card.refresh());
+    other.addEventListener("load", redraw);
     stage.addEventListener("pointermove", (event) => {
         const box = stage.getBoundingClientRect();
         hoverX = ((event.clientX - box.left) / Math.max(1, box.width)) * stage.clientWidth;
-        drawCompare();
+        if (scaled.other) redraw();
     });
     stage.addEventListener("pointerleave", () => {
         hoverX = null;
-        drawCompare();
+        redraw();
     });
+    // The graph zoom resizes nothing, so the resolution is checked on arrival.
+    stage.addEventListener("pointerenter", redraw);
     stage.addEventListener("contextmenu", (event) => {
         event.preventDefault();
         event.stopPropagation();
@@ -375,7 +422,7 @@ function stagePanel(node) {
     });
     new ResizeObserver(() => {
         if (fb.grid) layoutGrid();
-        else drawCompare();
+        else redraw();
     }).observe(stage);
 
     return { element: stage, sync };
