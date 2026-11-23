@@ -8,8 +8,8 @@ image_1, so the text encoder never sees the pad:
                    Picture 1's reference becomes the cells of the picture the
                    mask keeps whole, placed on the canvas where they sit, so
                    the model continues the picture instead of copying the pad.
-  Outpaint Blend   the decoded result back on the canvas: tone matched across
-                   the seam, the original pixels kept where the mask is 0.
+  Outpaint Blend   the decoded result back on the canvas with AusBoss's
+                   "blend in" seam and its Tone match (py/blend_in).
 
 Inspired by TwoAbove's ComfyUI-H3VideoOutpaint and the Outpaint Anchor / Prepare of
 aitrepreneur's ComfyUI-Aitrepreneur-Image-Tools (MIT).
@@ -23,8 +23,7 @@ import comfy.ldm.minimax.model
 import comfy.patcher_extension
 import comfy.utils
 
-# Known picture just inside the seam that Outpaint Blend reads the tone from, in pixels.
-SEAM_RING = 16
+from ..py.blend_in import blend as blend_in
 
 
 def _resize(image, width, height):
@@ -160,27 +159,19 @@ class OutpaintBlend:
             "required": {
                 "image": ("IMAGE", {"tooltip": "The decoded result."}),
                 "canvas": ("IMAGE", {"tooltip": "The padded canvas the result was painted on."}),
-                "mask": ("MASK", {"tooltip": "The canvas's mask: the result shows where it is 1, the canvas where it is 0."}),
-                "match_tone": ("BOOLEAN", {"default": True, "tooltip": "Shift the result's colours to meet the picture's at the seam."}),
+                "mask": ("MASK", {"tooltip": "The canvas's mask, as the sampler had it."}),
+                "tone_match": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.05,
+                                         "tooltip": "Match the new area's tone to your picture when it comes back lighter, darker or warmer. 1 is the full match, 0 is off; it needs a feather, since it reads the strip of your picture the model repainted."}),
             },
         }
 
     RETURN_TYPES = ("IMAGE",)
     FUNCTION = "blend"
     CATEGORY = "FBnodes"
-    DESCRIPTION = "Puts an outpainted result back on its canvas at the canvas's size: the original pixels where the mask is 0, the result where it is 1, faded along the mask's feather."
+    DESCRIPTION = "Puts an outpainted result back on its canvas at the canvas's size with AusBoss's blend in seam: colour, tone and detail hand over from the result to your picture across its edge, and deeper in the picture is yours bit for bit."
 
-    def blend(self, image, canvas, mask, match_tone):
+    def blend(self, image, canvas, mask, tone_match):
         height, width = canvas.shape[1:3]
         result = _resize(image, width, height)
         canvas = canvas[..., :3].to(result)
-        mask = _mask_at(mask, width, height).to(result)
-        if match_tone:
-            # The mean colour difference over the kept picture just inside the masked area.
-            near = F.max_pool2d(mask, (1, SEAM_RING * 2 + 1), stride=1, padding=(0, SEAM_RING))
-            near = F.max_pool2d(near, (SEAM_RING * 2 + 1, 1), stride=1, padding=(SEAM_RING, 0))
-            ring = ((near > 0) & (mask == 0)).movedim(1, -1).to(result)
-            offset = ((canvas - result) * ring).sum(dim=(1, 2), keepdim=True) / ring.sum(dim=(1, 2), keepdim=True).clamp(min=1)
-            result = result + offset
-        mask = mask.movedim(1, -1)
-        return ((canvas * (1 - mask) + result * mask).clamp(0, 1),)
+        return (blend_in(canvas, result, _mask_at(mask[:1], width, height)[0, 0], tone_match),)

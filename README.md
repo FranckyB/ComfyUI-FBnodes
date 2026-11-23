@@ -240,9 +240,9 @@ Outpaint with MiniMax H3 Image next to the core **MiniMax H3 Image Conditioning*
 
 1. **Load Image+** with **Pad**: its `image` (the picture, unpadded) goes to the conditioning's `image_1`, so the model never sees the gray. Its `canvas` (shown while Pad is on) goes to Outpaint Latent and Outpaint Blend, its `mask` (now the canvas's mask) to both. Leave width / height at 0, or set a resolution.
 2. **Outpaint Latent** sits between the conditioning and KSampler, on the model path after any LoRAs (`model`, `positive` and the conditioning's latent in; `model`, `positive`, `latent` out to KSampler, denoise 1.0). The canvas is VAE-encoded at the latent's resolution (keeping the canvas's aspect) with the pad mask as noise mask. Picture 1's reference becomes the picture alone, placed where it sits on the canvas, so the model continues it instead of zooming or copying it.
-3. **Outpaint Blend** takes the decoded image: it shifts its tone to meet the picture at the seam and puts it back on the canvas at full size, the original pixels kept where the mask is 0.
+3. **Outpaint Blend** takes the decoded image and puts it back on the canvas at full size with AusBoss's **blend in** seam: colour, tone and detail hand over from the result to your picture across its edge, and deeper in, the picture is yours bit for bit. **Tone match** (0 to 1) takes the result's tone drift off first, read from the strip of your picture the model repainted (it needs a feather).
 
-Inspired by [ComfyUI-H3VideoOutpaint](https://github.com/TwoAbove/ComfyUI-H3VideoOutpaint) and the Outpaint Anchor / Prepare of [ComfyUI-Aitrepreneur-Image-Tools](https://github.com/aitrepreneur/ComfyUI-Aitrepreneur-Image-Tools) (MIT).
+Inspired by [ComfyUI-H3VideoOutpaint](https://github.com/TwoAbove/ComfyUI-H3VideoOutpaint) and the Outpaint Anchor / Prepare of [ComfyUI-Aitrepreneur-Image-Tools](https://github.com/aitrepreneur/ComfyUI-Aitrepreneur-Image-Tools) (MIT); the seam and Tone match are adapted from [ComfyUI-AusBoss](https://github.com/ausboss/ComfyUI-AusBoss)' Stitch Inpaint (MIT, see `py/blend_in/LICENSE`).
 
 ## Replace with …+
 Right-click a core **Load Image**, **Load Video**, **Save Image** or **Save Video** node and pick **Replace with …+**: the FBnodes version takes its place with the same links, and the loaded file (or a filename prefix you changed) carried over.
@@ -310,7 +310,7 @@ git clone https://github.com/FranckyB/ComfyUI-FBnodes.git
 ```
 
 ## Requirements
-Nothing beyond ComfyUI itself (PyAV comes with it). Optional: `color-matcher` for VACE Stitcher's color matching.
+Nothing beyond ComfyUI itself (PyAV and SciPy come with it). Optional: `color-matcher` for VACE Stitcher's color matching.
 
 ## License
 GPL-3.0
