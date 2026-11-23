@@ -14,7 +14,7 @@ import { mountCard } from "./fbui/card.js";
 import { toast } from "./fbui/comfy.js";
 import { button } from "./fbui/controls.js";
 import { chainCallback, el } from "./fbui/dom.js";
-import { hideInputsInDef } from "./fbui/widgets.js";
+import { hideInputsInDef, widgetLinked } from "./fbui/widgets.js";
 import { countdown, ding, ensureReviewCss, nodeTitle, reviewQueue } from "./common/review.js";
 
 const NODE_NAME = "LTXReview";
@@ -303,13 +303,14 @@ app.registerExtension({
     beforeRegisterNodeDef(nodeType, nodeData) {
         if (nodeData.name !== NODE_NAME) return;
         hideInputsInDef(nodeData, ["fps", "timeout", "on_timeout", "enable"]);
-        const reviewing = (values) => values.enable !== false;
-        const onTimeout = (values) => reviewing(values) && Number(values.timeout) > 0;
+        // A linked Review is only known at run time: its settings stay shown.
+        const reviewing = (values, node) => values.enable !== false || widgetLinked(node, "enable");
+        const onTimeout = (values, node) => reviewing(values, node) && (Number(values.timeout) > 0 || widgetLinked(node, "timeout"));
         chainCallback(nodeType.prototype, "onNodeCreated", function () {
             mountCard(this, {
                 minWidth: 260,
                 rows: [
-                    { widget: "enable", label: "Review", offText: "pass through", onText: "on" },
+                    { widget: "enable", label: "Review", offText: "off", onText: "on" },
                     { widget: "fps", label: "FPS", when: reviewing },
                     { widget: "timeout", label: "Timeout", suffix: "s", title: "Seconds to wait for your decision (0 = until you decide)", when: reviewing },
                     { widget: "on_timeout", label: "Then", kind: "segment", labels: { proceed: "proceed", cancel: "cancel" }, title: "What happens when the timer runs out", when: onTimeout },
