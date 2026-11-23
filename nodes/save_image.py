@@ -116,8 +116,9 @@ def _expand_time(text: str, exec_start) -> str:
     return text.replace("%time%", str(int(round(elapsed))))
 
 
-def _expand_name(text: str, width: int, height: int, exec_start) -> str:
-    """Every token the Filename field understands. ComfyUI's save path knows
+def expand_name_tokens(text: str, width: int, height: int, exec_start) -> str:
+    """Every token a Save+ filename understands (Save Image+, Save Video+).
+    ComfyUI's save path knows
     %year% ... %height% too, but only when saving: expanding them here gives a
     preview (temp) name the same date and size."""
     text = _expand_time(_expand_date_format(text), exec_start)
@@ -218,7 +219,7 @@ class SaveImagePlus:
         first = images[0]
         height = first.shape[0]
         width = first.shape[1]
-        filename_prefix = _expand_name(filename_prefix, width, height, exec_start)
+        filename_prefix = expand_name_tokens(filename_prefix, width, height, exec_start)
 
         # Reviewed images are written to temp first; the picked ones move to output.
         reviewing = bool(save and review)

@@ -75,7 +75,7 @@ class SaveImageTests(unittest.TestCase):
         self.answer = None
         tree = ast.parse(SOURCE.read_text())
         selected = [node for node in tree.body if
-                    isinstance(node, (ast.ClassDef, ast.FunctionDef)) and node.name in ("SaveImagePlus", "_expand_date_format", "_expand_time", "_expand_name", "_wait_for_review")
+                    isinstance(node, (ast.ClassDef, ast.FunctionDef)) and node.name in ("SaveImagePlus", "_expand_date_format", "_expand_time", "expand_name_tokens", "_wait_for_review")
                     or isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == "IMAGE_FORMAT_OPTIONS" for target in node.targets)]
         exec(compile(ast.Module(body=selected, type_ignores=[]), str(SOURCE), "exec"), self.env)
         self.node = self.env["SaveImagePlus"]()

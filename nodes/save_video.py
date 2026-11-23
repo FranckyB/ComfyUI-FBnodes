@@ -9,14 +9,12 @@ from __future__ import annotations
 import os
 import re
 import sys
-import time
 import av
 import json
 import math
 import torch
 import hashlib
 import safetensors.torch
-from datetime import datetime
 import folder_paths
 import comfy.utils
 from fractions import Fraction
@@ -26,6 +24,8 @@ from comfy.cli_args import args
 from aiohttp import web
 
 import server
+
+from .save_image import expand_name_tokens
 
 
 def _get_cpu_encoder(codec: str) -> str:
@@ -386,8 +386,8 @@ class SaveVideoPlus:
             "required": {
                 "video": ("VIDEO", {"tooltip": "The video to save."}),
                 "filename_prefix": ("STRING", {
-                    "default": "Vids/%date:yy-MM-dd%/vid_%date:HH-mm-ss%",
-                    "tooltip": "The prefix for the file to save.\nSupports:\n%date:format% patterns (e.g. %date:yy-MM-dd%).\n%time% = workflow generation time."
+                    "default": "Vids/%year%-%month%-%day%/vid_%hour%-%minute%-%second%",
+                    "tooltip": "Where to save. / makes subfolders; %year% %month% %day% %hour% %minute% %second%, %width% %height%, %time% (seconds the run took) and %date:format% are filled in."
                 }),
                 "codec": (cls.CODECS, {
                     "default": "h264",
@@ -499,36 +499,6 @@ class SaveVideoPlus:
         return patched
 
     def save_video(self, video, filename_prefix, codec, chroma, crf, save, save_latent, browser_compat=True, auto_play=True, latent=None, metadata=None, prompt=None, extra_pnginfo=None, exec_start=""):
-        # Expand %date:format% patterns (e.g., %date:yy-MM-dd_hh-mm%)
-        # This mimics ComfyUI's frontend JS date expansion
-        def expand_date_format(text):
-            def replace_date(match):
-                fmt = match.group(1)
-                now = datetime.now()
-                # Convert common date format tokens to Python strftime
-                fmt = fmt.replace('yyyy', '%Y').replace('yy', '%y')
-                fmt = fmt.replace('MM', '%m').replace('dd', '%d')
-                fmt = fmt.replace('HH', '%H').replace('hh', '%I')
-                fmt = fmt.replace('mm', '%M').replace('ss', '%S')
-                return now.strftime(fmt)
-            return re.sub(r'%date:([^%]+)%', replace_date, text)
-
-        # Expand %time%: seconds from pressing Execute until this node starts
-        # saving (pure workflow generation time, excluding the encode itself).
-        # exec_start is stamped into a hidden widget by the JS at queue time.
-        def expand_time_format(text):
-            if '%time%' not in text:
-                return text
-            elapsed = 0.0
-            try:
-                start = float(str(exec_start).strip())
-                if start > 0:
-                    elapsed = max(0.0, time.time() - start)
-            except (ValueError, TypeError):
-                pass
-            return text.replace('%time%', str(int(round(elapsed))))
-
-        filename_prefix = expand_time_format(expand_date_format(filename_prefix))
 
         # Bit depth determined by codec: h264=8-bit, h265=10-bit
         is_10bit = (codec == "h265")
@@ -541,12 +511,13 @@ class SaveVideoPlus:
 
         # Get dimensions
         width, height = video.get_dimensions()
+        filename_prefix = expand_name_tokens(filename_prefix, width, height, exec_start)
 
         # Preview mode: save to temp with fast encoding
         if not save:
             temp_dir = folder_paths.get_temp_directory()
             # Use filename without subfolders, add counter if needed
-            base_filename = os.path.basename(expand_date_format(filename_prefix))
+            base_filename = os.path.basename(filename_prefix)
             file = f"{base_filename}.mp4"
             file_path_test = os.path.join(temp_dir, file)
             if os.path.exists(file_path_test):

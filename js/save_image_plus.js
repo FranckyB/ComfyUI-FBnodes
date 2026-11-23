@@ -37,7 +37,6 @@ const FILENAME_HELP = [
     ["%hour% %minute% %second%", "the time now"],
     ["%time%", "the seconds the run took, from pressing Queue"],
     ["%width% %height%", "the image size"],
-    ["%date:yy-MM-dd%", "date and time in any layout: yyyy yy MM dd HH hh mm ss"],
     "With Save off, only the name after the last / is used, in the temp folder.",
 ];
 
