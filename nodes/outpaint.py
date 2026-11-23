@@ -156,19 +156,20 @@ class OutpaintAnchorLatent:
                 "model": ("MODEL", {"tooltip": "The MiniMax H3 Image model, after any LoRAs."}),
                 "positive": ("CONDITIONING", {"tooltip": "From MiniMax H3 Image Conditioning."}),
                 "vae": ("VAE",),
+                "latent": ("LATENT", {"tooltip": "The latent of MiniMax H3 Image Conditioning: its size sets the resolution."}),
                 "mask": ("MASK", {"tooltip": "1 where to paint: the new area, and anything painted."}),
                 "canvas": ("IMAGE", {"tooltip": "The padded canvas (Load Image+'s canvas with Pad on). Its image output goes to the conditioning's image_1."}),
-                "latent": ("LATENT", {"tooltip": "The latent of MiniMax H3 Image Conditioning: its size sets the resolution."}),
             },
         }
 
-    RETURN_TYPES = ("MODEL", "CONDITIONING", "LATENT")
-    RETURN_NAMES = ("model", "positive", "latent")
+    RETURN_TYPES = ("MODEL", "CONDITIONING", "LATENT", "MASK", "IMAGE")
+    RETURN_NAMES = ("model", "positive", "latent", "mask", "canvas")
+    OUTPUT_TOOLTIPS = ("The model, placing the reference (MiniMax H3), to KSampler.", "The conditioning with the placed reference, to KSampler.", "The masked canvas latent, to KSampler (denoise 1.0).", "The mask, on to Outpaint Stitch.", "The canvas, on to Outpaint Stitch.")
     FUNCTION = "encode"
     CATEGORY = "FBnodes"
     DESCRIPTION = "VAE-encodes a padded canvas at the latent's resolution (keeping the canvas's aspect) with a noise mask, so KSampler paints only the new area; any model. With MiniMax H3 Image, Picture 1's reference also becomes the picture alone, placed where it sits on the canvas, so the model continues it instead of copying the pad. Give the conditioning the unpadded picture (Load Image+'s image) as image_1."
 
-    def encode(self, model, positive, vae, mask, canvas, latent):
+    def encode(self, model, positive, vae, latent, mask, canvas):
         cell = vae.spacial_compression_encode()
         latent_h, latent_w = latent["samples"].shape[-2:]
         width, height = _canvas_size(canvas.shape[2], canvas.shape[1], latent_w, latent_h, cell)
@@ -180,11 +181,11 @@ class OutpaintAnchorLatent:
 
         cells = _kept_cells(noise_mask, cell)
         if cells is None:
-            return (model, positive, out)
+            return (model, positive, out, mask, canvas)
         positive = [[text, {**values, "minimax_refs": _placed_refs(values.get("minimax_refs"), samples, cells)}] for text, values in positive]
         model = model.clone()
         model.add_wrapper_with_key(comfy.patcher_extension.WrappersMP.DIFFUSION_MODEL, "fbnodes_outpaint", _place_references)
-        return (model, positive, out)
+        return (model, positive, out, mask, canvas)
 
 
 class OutpaintStitch:
