@@ -14,7 +14,7 @@ import { mountCard } from "./fbui/card.js";
 import { notifyChange, toast } from "./fbui/comfy.js";
 import { button, ICONS, rail } from "./fbui/controls.js";
 import { chainCallback, el } from "./fbui/dom.js";
-import { openMenu, openViewer } from "./fbui/modal.js";
+import { modalOpen, openMenu } from "./fbui/modal.js";
 import { makeScrub } from "./fbui/scrub.js";
 import { findWidget, hideInputsInDef, hideWidget, suppressCorePreview } from "./fbui/widgets.js";
 import { createImageStage, drawStroke } from "./common/image_stage.js";
@@ -106,29 +106,6 @@ function fitNodeToImage(node) {
     const wanted = Math.min(640, Math.max(STAGE_MIN_HEIGHT, canvas.clientWidth * fb.image.height / fb.image.width + 24));
     node.setSize([node.size[0], node.size[1] + wanted - canvas.clientHeight]);
     node.setDirtyCanvas(true, true);
-}
-
-// The node's file for the large preview, with its place in the folder.
-function previewItem(node) {
-    const filename = imageValue(node);
-    if (!filename || filename === NONE || filename === BLANK) return null;
-    const source = sourceFolder(node);
-    const video = isVideoFile(filename);
-    const list = (findWidget(node, "image")?.options?.values ?? []).filter(files.isFile);
-    return {
-        url: previewUrl(filename, source),
-        title: basenameOf(filename),
-        video,
-        // H265 / yuv444 cannot play in the browser: show the backend's first frame.
-        fallback: video ? api.apiURL(`/fbnodes/video-frame?${new URLSearchParams({ filename, source, position: "0" })}`) : null,
-        where: list.length > 1 ? `${list.indexOf(filename) + 1} / ${list.length}` : "",
-    };
-}
-
-// ←/→ and ‹ › in the preview step the node itself, as over the node.
-function showPreviewModal(node) {
-    const item = previewItem(node);
-    if (item) openViewer([item], 0, { step: (direction) => (files.step(node, direction) ? previewItem(node) : null) });
 }
 
 // ---------------------------------------------------------------- crop / flip state
@@ -396,7 +373,7 @@ function stagePanel(node) {
     });
     fb.stage = stage;
     const tools = el("div", "fbui-stage-tools");
-    const open = button("", { icon: ICONS.open, small: true, title: "Open a large preview", onClick: () => showPreviewModal(node) });
+    const open = button("", { icon: ICONS.open, small: true, title: "Open a large preview", onClick: () => files.openPreview(node) });
     tools.append(open);
     stage.element.append(tools);
     return {
@@ -615,7 +592,7 @@ async function copyImage(node) {
 function showContextMenu(node, event) {
     const hasImage = Boolean(node._fb.image) && !node._fb.blank;
     openMenu(event.clientX, event.clientY, [
-        { label: "Open preview", disabled: !hasImage, action: () => showPreviewModal(node) },
+        { label: "Open preview", disabled: !hasImage, action: () => files.openPreview(node) },
         { label: "Copy image", disabled: !hasImage, action: () => copyImage(node) },
         {
             label: "Paste image",
@@ -644,7 +621,7 @@ const activeNode = () => files.hoveredNode();
 
 function installShortcuts() {
     window.addEventListener("keydown", (event) => {
-        if (event.defaultPrevented || typing(event.target) || event.ctrlKey || event.altKey || event.metaKey) return;
+        if (event.defaultPrevented || modalOpen() || typing(event.target) || event.ctrlKey || event.altKey || event.metaKey) return;
         const node = activeNode();
         if (!node) return;
         const fb = node._fb;

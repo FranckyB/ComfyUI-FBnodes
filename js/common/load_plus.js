@@ -5,9 +5,10 @@
 // source folder. Each node keeps node._fb = { card, reload(value) }.
 import { api } from "../../../scripts/api.js";
 import { createFileBrowserModal } from "../file_browser.js";
-import { basenameOf, classifySelection, getMediaRoots, isAbsolutePath, stripAnnotation } from "../path_browser.js";
+import { basenameOf, classifySelection, getMediaRoots, isAbsolutePath, isVideoFile, previewUrl, stripAnnotation } from "../path_browser.js";
 import { ICONS } from "../fbui/controls.js";
 import { chainCallback } from "../fbui/dom.js";
+import { modalOpen, openViewer } from "../fbui/modal.js";
 import { findWidget } from "../fbui/widgets.js";
 
 export const NONE = "(none)";
@@ -177,12 +178,36 @@ export function loadPlus({ widget, listKind = "media", navKind = "media", allowe
         listening = true;
         window.addEventListener("keydown", (event) => {
             if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
-            if (event.defaultPrevented || typing(event.target) || event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return;
+            if (event.defaultPrevented || modalOpen() || typing(event.target) || event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return;
             const node = hoveredNode();
             if (!node || !step(node, event.key === "ArrowRight" ? 1 : -1)) return;
             event.preventDefault();
             event.stopPropagation();
         }, true);
+    }
+
+    // The node's file in the full-screen viewer, with its place in the list.
+    function previewItem(node) {
+        const filename = current(node);
+        if (!isFile(filename)) return null;
+        const source = sourceFolder(node);
+        const video = isVideoFile(filename);
+        const list = (findWidget(node, widget)?.options?.values ?? []).filter(isFile);
+        return {
+            url: previewUrl(filename, source),
+            title: basenameOf(filename),
+            video,
+            // H265 / yuv444 cannot play in the browser: show the backend's first frame.
+            fallback: video ? api.apiURL(`/fbnodes/video-frame?${new URLSearchParams({ filename, source, position: "0" })}`) : null,
+            where: list.length > 1 ? `${list.indexOf(filename) + 1} / ${list.length}` : "",
+        };
+    }
+
+    // The viewer's ‹ › (and ← / → on a picture) step the node itself, as
+    // the keys do over the node.
+    function openPreview(node) {
+        const item = previewItem(node);
+        if (item) openViewer([item], 0, { step: (direction) => (step(node, direction) ? previewItem(node) : null) });
     }
 
     // The Source row's buttons: previous, next, browse.
@@ -192,5 +217,5 @@ export function loadPlus({ widget, listKind = "media", navKind = "media", allowe
         { text: "", icon: ICONS.folder, title: "Browse files anywhere on disk", onClick: (node) => openBrowser(node) },
     ];
 
-    return { isFile, sourceFolder, current, refreshForSource, refreshOptions, setFile, openBrowser, step, upload, absolutePath, track, hoveredNode, sourceButtons };
+    return { isFile, sourceFolder, current, refreshForSource, refreshOptions, setFile, openBrowser, step, upload, absolutePath, track, hoveredNode, sourceButtons, openPreview };
 }

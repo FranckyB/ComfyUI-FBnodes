@@ -8,6 +8,9 @@ import { ensureKitCss, T, Z_MODAL } from "./theme.js";
 // Open modals, newest last: Escape closes only the top one.
 const stack = [];
 
+// Whether a kit modal, menu or viewer is open: node shortcuts stand aside.
+export const modalOpen = () => stack.length > 0;
+
 // openModal({ title, body, footer, width, height, closable, onClose }) -> { overlay, modal, body, close, isTop }.
 // `body` and `footer` are elements (or arrays of elements). closable: false
 // takes away the close button, Escape and the backdrop click, for a dialog
@@ -145,8 +148,8 @@ export function openMenu(x, y, items) {
 
 // openViewer([{ url, title, video?, fallback?, where? }], index, { step? }):
 // the picture (or video) as large as the screen allows over a darkened
-// ComfyUI. ←/→ and the ‹ › buttons step through several, Esc or a click on
-// the dark closes. `fallback` is an image URL shown when the browser cannot
+// ComfyUI. ←/→ and the ‹ › buttons step through several (while a video
+// plays the keys seek it instead), Esc or a click on the dark closes. `fallback` is an image URL shown when the browser cannot
 // play a video. With `step(direction)` the caller does the stepping instead
 // and returns the item to show (null to stay); `where` labels its position.
 export function openViewer(items, index = 0, { step = null } = {}) {
@@ -188,6 +191,8 @@ export function openViewer(items, index = 0, { step = null } = {}) {
       media.draggable = false;
     }
     stage.replaceChildren(media);
+    // Focused, a video takes ← / → itself (seeking) and Space.
+    if (item.video) media.focus({ preventScroll: true });
     name.textContent = item.title ?? "";
     name.title = item.title ?? "";
     where.textContent = item.where ?? `${at + 1} / ${items.length}`;
@@ -203,6 +208,7 @@ export function openViewer(items, index = 0, { step = null } = {}) {
   const onKey = (event) => {
     if (stack[stack.length - 1] !== close) return;
     if (event.key === "Escape") close();
+    else if (stage.firstChild?.tagName === "VIDEO" && (event.key === "ArrowLeft" || event.key === "ArrowRight")) return;
     else if ((step || items.length > 1) && (event.key === "ArrowLeft" || event.key === "ArrowRight")) move(event.key === "ArrowRight" ? 1 : -1);
     else return;
     event.preventDefault();

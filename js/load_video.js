@@ -156,14 +156,17 @@ async function openInPlayer(node) {
 }
 
 // The player: a <video> (or a still <img>) fitted into the media frame, with
-// an "open in system player" tool and a notice for unplayable videos.
+// an open tool (large preview, or the system player for an unplayable video)
+// and a notice for unplayable videos.
 function stagePanel(node) {
     const fb = node._fb;
     const stage = el("div", "fbui-stage");
     const empty = el("div", "fbui-stage-empty");
     const tools = el("div", "fbui-stage-tools");
-    const player = button("", { icon: ICONS.open, small: true, title: "Open in the system player", onClick: () => openInPlayer(node) });
-    tools.append(player);
+    // A large preview in the browser; the system player for a video the
+    // browser cannot play (shown as its first frame).
+    const large = button("", { icon: ICONS.open, small: true, onClick: () => (fb.unplayable ? openInPlayer(node) : files.openPreview(node)) });
+    tools.append(large);
     const notice = el("div", "fbui-stage-empty");
     notice.style.cssText = "inset:auto 0 0 0;padding:8px;background:rgba(10,12,15,.78);pointer-events:auto;gap:6px";
     const noticeText = el("span", "", "This video can't play in the browser (H265 / yuv444).");
@@ -262,7 +265,8 @@ function stagePanel(node) {
     return {
         element: stage,
         sync() {
-            player.hidden = !files.isFile(files.current(node));
+            large.hidden = !files.isFile(files.current(node));
+            large.title = fb.unplayable ? "Open in the system player" : "Open a large preview";
         },
     };
 }
