@@ -5,35 +5,38 @@ A grab bag of handy ComfyUI nodes I built for my own workflows and figured someo
 ## Nodes
 
 ### Save Video+
-Save video with H.264 or H.265 (HEVC) codec and quality control. Includes audio muxing and workflow metadata embedding.
-If yuv444 is selected, will generate a preview clip, so it can still be seen in browser. (Saved in temp)
+Save video with workflow metadata, date-token filenames and a player on the node. Settings sit under **Options**.
 
-- **Codec**: H.264 (8-bit, max compatibility) or H.265/HEVC (10-bit, better compression)
-- **Chroma**: yuv420 / yuv422 / yuv444
-- **CRF**: Constant Rate Factor quality control (0=lossless, 18-23=high quality)
-- **Preview mode**: Toggle save off for fast preview-only encoding
+- **Encoding: auto** (default): saves with ComfyUI's own encoder, keeping the incoming video's settings from Create Video (bit depth, HDR / HDR PQ, chroma, H.264 / AV1 / ProRes). An already encoded video is copied, not re-encoded; unencoded frames get H.264, 4:2:0, CRF 16
+- **Encoding: custom**: H.264 (8-bit) or H.265/HEVC (10-bit), yuv420 / yuv422 / yuv444 and CRF
+- **Preview mode**: Save off writes a quick preview to temp; a video that is already browser-playable is shown as it is, without encoding
+- **Browser preview**: clips the browser cannot play get an H.264 preview copy, or a still frame with an "open in system player" button
 - **Latent saving**: Optionally save the latent alongside the video for easy re-generation
+- **Filename tokens**: `%yy%` `%year%` `%month%` `%day%` `%hour%` `%minute%` `%second%`, `%width%` `%height%`, `%time%` (seconds the run took); the (i) beside Filename lists them
 
 ### Save Image+
-Save images with date-token filenames, output/temp switching, and an optional Compare image input. Settings are hidden by default under **Controls**, matching Save Video+.
+Save images with date-token filenames, output/temp switching, an optional Compare image input and an optional review before saving. Settings sit under **Options**.
 
 - **PNG**: 8-bit (default) or 16-bit, sRGB input
 - **EXR**: 16-bit or 32-bit float; sRGB, HDR (HLG), or linear input. Files are stored scene-linear.
 - **AVIF**: Auto, 8-bit YUV420, or 10-bit YUV420; sRGB, HDR (HLG), or HDR PQ input, with CRF quality control. Saves one still image per batch item; RGBA inputs have alpha stripped for saving and preview, without compositing.
+- **Review**: the run pauses and the images fill the screen; click the ones to keep and Send (Skip, or Send with none picked, keeps none). When the timer runs out every image is saved; picking pauses it
+- **Compare**: hover the preview to wipe between the image and the Compare input; a grid shows a whole batch
+- **Filename tokens**: same as Save Video+
 - **Metadata**: Uses ComfyUI's advanced image encoders and metadata writers for the new formats. Requires a ComfyUI version with Save Image (Advanced); the original 8-bit PNG path remains available on older versions.
 - **Preview**: EXR and AVIF use separate 8-bit PNG input-tensor previews in temp. These are not color-managed HDR previews and do not alter the saved files.
-- **Workflow compatibility**: Existing filename/save widget positions and PNG defaults are unchanged. New settings are appended, with the nonserialized Controls toggle last.
 - **EXR workflow import**: Drop an EXR containing `workflow` or `prompt` header metadata onto ComfyUI to restore it through the normal JSON importer. FBnodes adds this reader because the core file-drop metadata reader does not currently handle EXR.
 
 ### Load Image+:
 - **Image/Video Screenshot Loading**: Image loader, based on Prompt Extractor from [Prompt Manager](https://github.com/FranckyB/ComfyUI-Prompt-Manager)
 - **Input/Output Folder Switching**: Toggle between browsing your input or output folder directly from the node
 - **File Browser**: Same thumbnail browser as Prompt Extractor with subfolder navigation
-- **Video Frame Scrubbing**: Load any frame from a video using the frame position slider
-- **Drag-and-Drop Support**: Drop images or videos directly onto the node
-- **Image Preview**: Built-in preview with click-to-enlarge modal for images and videos
-- **Mask Editor Support**: Painted masks can be drawn directly in-node and are displayed live in the preview
-- **Quick Crop + Flip Controls**: Optional in-node crop box plus Flip X / Flip Y toggles for fast framing adjustments without leaving the loader.  For more advanced controls use the Crop + node.
+- **Previous / Next**: ‹ › beside Source, or ← / → with the pointer over the node
+- **Video Frame Picking**: Load any frame of a video, frame-exact (the frame shown is the frame loaded)
+- **Drag-and-Drop / Paste**: Drop or paste images or videos onto the node
+- **Large Preview**: Full-screen preview; ‹ › (and ← / → on pictures) step through the folder
+- **Mask Painting**: Paint masks directly in-node; they show live in the preview
+- **Crop + Flip**: In-node crop with exact padding values, plus Flip X / Flip Y
 - **IMAGE + MASK Output**: Outputs both IMAGE and MASK tensors, with alpha channel extraction from images
 
 ### Load Video+
@@ -41,7 +44,9 @@ Video loader with the same file browser and UX as Load Image+, but for videos. O
 
 - **Input/Output Folder Switching**: Toggle between browsing your input or output folder
 - **File Browser**: Thumbnail browser with video-first filtering and subfolder navigation
-- **Video Preview**: Click-to-enlarge modal with playback controls
+- **Previous / Next**: ‹ › beside Source, or ← / → with the pointer over the node
+- **Trim**: Edit > Trim loads only frames In to Out (both included), frame-exact; the stage shows the exact edge frame while you move it
+- **Large Preview**: Full-screen player; ‹ › step through the folder. Videos the browser cannot play show their first frame and open in the system player
 - **Drag-and-Drop Support**: Drop video files directly onto the node
 - **VIDEO Output**: Outputs a VIDEO, ready to pipe into Get Video Components+
 
@@ -51,7 +56,8 @@ Audio loader with the same file browser and UX as Load Image+/Video+, plus in/ou
 - **Input/Output Folder Switching**: Toggle between browsing your input or output folder
 - **File Browser**: Thumbnail browser with audio-first filtering and subfolder navigation
 - **Drag-and-Drop Support**: Drop audio files directly onto the node
-- **Trim timeline**: Draggable in/out handles with playhead, scrubbing, and clip looping
+- **Previous / Next**: ‹ › beside Source, or ← / → with the pointer over the node
+- **Trim**: Edit > Trim shows draggable in/out handles on the waveform and In / Out fields; playback loops inside the clip
 - **Outputs**: `AUDIO` (trimmed) and `duration` (seconds)
 
 ### Video Review
@@ -169,7 +175,7 @@ Place models in `/models/diffusion_models/` or `/models/unet` if GGUF
 - **First run** generates and caches all transitions. Subsequent runs skip cached pairs.
 - **Delete Transitions** clears the cache so you can regenerate with different settings.
 - Without an **Options** node connected, the seed is random each run — just delete transitions and re-queue for a new result.
-- Connect a **VACE Stitcher Options** node to control context/replace frames, steps, sampler, crossfade, color matching, and more.
+- Connect a **VACE Stitcher Options** node to control context/replace frames, steps, sampler, crossfade, color matching, and more. Color matching needs the optional `color-matcher` package (`pip install color-matcher`); without it, it is skipped with a warning.
 - Disable clips in the list (uncheck) to skip them without removing.
 
 </details>
@@ -289,16 +295,25 @@ Search for "ComfyUI-FBnodes" in ComfyUI Manager.
 ```bash
 cd ComfyUI/custom_nodes
 git clone https://github.com/FranckyB/ComfyUI-FBnodes.git
-pip install -r ComfyUI-FBnodes/requirements.txt
 ```
 
 ## Requirements
-- `av` (PyAV) — for video encoding
+Nothing beyond ComfyUI itself (PyAV comes with it). Optional: `color-matcher` for VACE Stitcher's color matching.
 
 ## License
 GPL-3.0
 
 ## Changelog
+
+### version 1.6.0
+- **New look**: The loaders, savers and Video Review are rebuilt as one card each in a shared visual language, in Classic and Nodes 2.0. Older workflows load unchanged
+- **Load Image+ / Video+ / Audio+**: Previous / next file buttons and keys; Trim for video (frame-exact) and audio; full-screen preview that steps through the folder; frame-exact video frames in Load Image+
+- **Save Image+**: Review before saving, Compare wipe and grid, date and time filename tokens
+- **Save Video+**: Encoding auto keeps Create Video's settings; previews already playable videos without encoding
+- **Video Review** (was LTX Review): full-screen review with a pausable timer; outputs the review clip as `video` (review_path removed)
+- **If/Else Switch+** (was Switch Any Bool); **Replace with …+** on the right-click menu of core Load / Save Image and Video nodes
+- **Legacy**: Crop Audio+ (use Trim Audio Duration), Load LTX Latent File (use Load Latent File), LTX Review Preview (use Save Video+)
+- **Fixes**: Get Video Components+ follows a trimmed video and re-runs when an output is linked
 
 ### version 1.4.0
 - **Load Model+**: Added Load Checkpoint, Diffusion model and LoRA with filtering system.  Allowing, for example, to display only SDXL models.

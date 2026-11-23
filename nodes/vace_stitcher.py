@@ -1426,7 +1426,7 @@ class VACEStitcher:
 
                 return torch.stack(matched, dim=0).to(torch.float32).clamp_(0, 1)
             except ImportError:
-                print("[VACE Stitcher]   WARNING: color-matcher not installed. pip install color-matcher")
+                print("[VACE Stitcher]   WARNING: color-matcher is not installed, skipping color match (pip install color-matcher)")
                 return trans_px
             except Exception as e:
                 print(f"[VACE Stitcher]   WARNING: Color match failed: {e}")
