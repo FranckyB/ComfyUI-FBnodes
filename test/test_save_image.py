@@ -75,7 +75,7 @@ class SaveImageTests(unittest.TestCase):
         self.answer = None
         tree = ast.parse(SOURCE.read_text())
         selected = [node for node in tree.body if
-                    isinstance(node, (ast.ClassDef, ast.FunctionDef)) and node.name in ("SaveImagePlus", "_expand_date_format", "_expand_time", "_wait_for_review")
+                    isinstance(node, (ast.ClassDef, ast.FunctionDef)) and node.name in ("SaveImagePlus", "_expand_date_format", "_expand_time", "_expand_name", "_wait_for_review")
                     or isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == "IMAGE_FORMAT_OPTIONS" for target in node.targets)]
         exec(compile(ast.Module(body=selected, type_ignores=[]), str(SOURCE), "exec"), self.env)
         self.node = self.env["SaveImagePlus"]()
@@ -113,6 +113,12 @@ class SaveImageTests(unittest.TestCase):
         self.assertEqual(result["result"], ("image_00001.png",))
         self.assertEqual(self.env["_expand_time"]("run_%time%s", str(time.time() - 42)), "run_42s")
         self.assertEqual(self.env["_expand_time"]("run_%time%s", ""), "run_0s")
+
+    def test_name_tokens_expand_for_previews_too(self):
+        result = self.node.save_images(self.images[:1], "dir/shot_%year%-%month%_%width%x%height%", save=False)
+        name = result["result"][0]
+        self.assertRegex(name, r"^shot_\d{4}-\d{2}_48x32\.png$")
+        self.assertEqual(self.node.INPUT_TYPES()["required"]["filename_prefix"][1]["default"], "Pics/%year%-%month%-%day%/img_%hour%_%minute%_%second%")
 
     def test_review_is_skipped_when_not_saving(self):
         self.node.save_images(self.images, "prefix", save=False, review=True)

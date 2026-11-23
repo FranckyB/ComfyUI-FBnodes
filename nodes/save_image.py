@@ -116,6 +116,21 @@ def _expand_time(text: str, exec_start) -> str:
     return text.replace("%time%", str(int(round(elapsed))))
 
 
+def _expand_name(text: str, width: int, height: int, exec_start) -> str:
+    """Every token the Filename field understands. ComfyUI's save path knows
+    %year% ... %height% too, but only when saving: expanding them here gives a
+    preview (temp) name the same date and size."""
+    text = _expand_time(_expand_date_format(text), exec_start)
+    now = datetime.now()
+    for token, value in (
+        ("%year%", f"{now.year}"), ("%month%", f"{now.month:02}"), ("%day%", f"{now.day:02}"),
+        ("%hour%", f"{now.hour:02}"), ("%minute%", f"{now.minute:02}"), ("%second%", f"{now.second:02}"),
+        ("%width%", str(width)), ("%height%", str(height)),
+    ):
+        text = text.replace(token, value)
+    return text
+
+
 def _tensor_to_pil(image_tensor):
     """Convert a Comfy IMAGE tensor in [0,1] to a PIL image."""
     array = image_tensor.cpu().numpy()
@@ -132,7 +147,7 @@ class SaveImagePlus:
                 "filename_prefix": (
                     "STRING",
                     {
-                        "default": "Pics/%date:yy-MM-dd%/img_%date:HH_mm_ss%",
+                        "default": "Pics/%year%-%month%-%day%/img_%hour%_%minute%_%second%",
                         "tooltip": "Output path prefix. Supports %date:format% patterns.",
                     },
                 ),
@@ -198,12 +213,12 @@ class SaveImagePlus:
         if (format != "png" or bit_depth != "8-bit") and _encode_image is None:
             raise RuntimeError("Advanced image saving requires a ComfyUI version with Save Image (Advanced).")
 
-        filename_prefix = _expand_time(_expand_date_format(filename_prefix), exec_start)
         ext = format
 
         first = images[0]
         height = first.shape[0]
         width = first.shape[1]
+        filename_prefix = _expand_name(filename_prefix, width, height, exec_start)
 
         # Reviewed images are written to temp first; the picked ones move to output.
         reviewing = bool(save and review)

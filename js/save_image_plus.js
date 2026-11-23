@@ -31,14 +31,14 @@ const GRID_GAP = 6;
 
 // What the Filename field understands, shown from its (i).
 const FILENAME_HELP = [
-    "The default %date:yy-MM-dd%/img_%date:HH_mm_ss% saves 26-11-22/img_14_05_09_00001.png, _00002 … in the output folder.",
+    "The default Pics/%year%-%month%-%day%/img_%hour%_%minute%_%second% saves Pics/2026-11-22/img_14_05_09_00001.png, _00002 … in the output folder.",
     ["a/b/name", "a / makes subfolders"],
-    ["%date:yy-MM-dd%", "date and time in any layout: yyyy yy MM dd HH hh mm ss"],
+    ["%year% %month% %day%", "today's date"],
+    ["%hour% %minute% %second%", "the time now"],
     ["%time%", "the seconds the run took, from pressing Queue"],
     ["%width% %height%", "the image size"],
-    ["%year% %month% %day%", "today's date (ComfyUI's own tokens)"],
-    ["%hour% %minute% %second%", "the time now (ComfyUI's own tokens)"],
-    "With Save off, the name after the last / is used in the temp folder, and the image-size and ComfyUI tokens stay as typed.",
+    ["%date:yy-MM-dd%", "date and time in any layout: yyyy yy MM dd HH hh mm ss"],
+    "With Save off, only the name after the last / is used, in the temp folder.",
 ];
 
 // What each format can store; the Depth and Color pills follow the format.
