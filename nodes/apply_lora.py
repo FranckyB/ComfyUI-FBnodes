@@ -8,6 +8,7 @@ import comfy.lora
 import comfy.utils
 
 from ..py.lora_utils import resolve_lora_path
+from ..py.h3_adaln import fix_model, format_report
 
 
 class ApplyLoraPlus:
@@ -26,6 +27,12 @@ class ApplyLoraPlus:
                 # Accept both a LORA_STACK and STRING on this same socket.
                 "lora_stack": ("*",),
                 "strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 10.0, "step": 0.01}),
+            },
+            "optional": {
+                "h3_adaln_fix": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "MiniMax-H3 only: rebase the LoRAs' AdaLN (adaln_proj) weights onto the checkpoint's form, dense or pruned, so they apply instead of being skipped with 'ERROR lora ... adaln_proj' lines. Without a basis to rebase with, they are dropped quietly.",
+                }),
             },
         }
 
@@ -77,7 +84,7 @@ class ApplyLoraPlus:
             return candidate, True
         return resolve_lora_path(candidate)
 
-    def apply_stack(self, model, lora_stack, strength=1.0):
+    def apply_stack(self, model, lora_stack, strength=1.0, h3_adaln_fix=False):
         stack = self._coerce_lora_stack(lora_stack)
         if not stack:
             return (model,)
@@ -105,7 +112,26 @@ class ApplyLoraPlus:
                 model_out, None, lora, scaled_model_strength, 0
             )
 
+        if h3_adaln_fix and model_out is not model:
+            model_out = self._fix_h3_adaln(model_out)
         return (model_out,)
+
+    @staticmethod
+    def _fix_h3_adaln(model):
+        """Rebase the stack's AdaLN patches for a MiniMax-H3 model (a no-op on
+        any other). The fix must never stop a run: on failure the model goes
+        on as loaded, with ComfyUI's usual skipped-layer errors."""
+        try:
+            fixed, report = fix_model(model, "port")
+        except Exception as e:
+            print(f"[ApplyLoraPlus] H3 AdaLN fix failed, LoRAs applied without it: {e}")
+            return model
+        # Quiet unless there was something to fix (other models, matching LoRAs).
+        if report["status"] == "ok":
+            print(f"[ApplyLoraPlus] {format_report(report)}")
+            for note in report["notes"][:4]:
+                print(f"[ApplyLoraPlus]   {note}")
+        return fixed
 
 
 class ApplyLTXLoraPlus:

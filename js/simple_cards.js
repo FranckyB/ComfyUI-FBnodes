@@ -12,7 +12,10 @@ import { hideInputsInDef } from "./fbui/widgets.js";
 const LATENT_FILE = [{ widget: "file_path", label: "File", kind: "text" }];
 
 const CARDS = {
-    ApplyLoraPlus: [{ widget: "strength", label: "Strength" }],
+    ApplyLoraPlus: [
+        { widget: "strength", label: "Strength" },
+        { widget: "h3_adaln_fix", label: "H3 AdaLN", offText: "off", onText: "fix" },
+    ],
     ApplyLTXLoraPlus: [
         { widget: "video_strength", label: "Video" },
         { widget: "audio_strength", label: "Audio" },

@@ -217,6 +217,8 @@ Returns a boolean based on whether an optional any-type input is truthy.
 ### Apply LoRA+
 Apply a LORA_STACK (list of LoRA tuples) to a model and optional CLIP. Works with Prompt Manager Advanced's LoRA stack output.
 
+- **H3 AdaLN** (MiniMax-H3): when a LoRA and the checkpoint differ in form (dense / full vs pruned / curve), ComfyUI skips the LoRA's `adaln_proj` layers with ~51 `ERROR lora` lines. Turn this on to rebase them onto the checkpoint's form so they apply. The basis comes from an H3 checkpoint of the other form in `models/diffusion_models` (or an `h3_silu_temb_grid.safetensors`), cached in `models/h3_adaln`; without one, the layers are dropped quietly. Adapted from [ComfyUI-PlagueKind-Nodes](https://github.com/PlagueKind/ComfyUI-PlagueKind-Nodes)' H3 AdaLN LoRA Fix (MIT, see `py/h3_adaln/LICENSE`).
+
 ### LoRA List+
 Build a reorderable, toggleable list of LoRAs for quick testing workflows.
 
