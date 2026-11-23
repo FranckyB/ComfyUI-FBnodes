@@ -915,7 +915,7 @@ function resetCrop(node, ui) {
 }
 
 function cropResetControl(node, ui) {
-    const reset = button("Reset crop", { icon: ICONS.reset, grow: true, title: "Back to the whole picture", onClick: () => resetCrop(node, ui) });
+    const reset = button("", { icon: ICONS.reset, small: true, title: "Reset the crop: back to the whole picture", onClick: () => resetCrop(node, ui) });
     return {
         element: reset,
         sync() {
@@ -973,10 +973,9 @@ app.registerExtension({
                     { widget: "aspect_ratio", label: "Aspect", kind: "select" },
                     { widget: "portrait", label: "Portrait", when: fixedRatio },
                     { panel: () => ({ element: ui.state.root }), grow: true, height: STAGE_MIN_HEIGHT },
-                    { group: "crop", label: "Exact crop" },
+                    { group: "crop", label: "Exact crop", tools: (n) => cropResetControl(n, ui) },
                     { label: "Left · Right", control: (n) => cropPairControl(n, ui, "left", "right"), group: "crop" },
                     { label: "Top · Bottom", control: (n) => cropPairControl(n, ui, "top", "bottom"), group: "crop" },
-                    { label: "", control: (n) => cropResetControl(n, ui), group: "crop" },
                     { panel: () => ({ element: caption }), height: CAPTION_HEIGHT },
                 ],
             });

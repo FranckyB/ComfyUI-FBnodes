@@ -588,9 +588,10 @@ function cropPairControl(node, first, second) {
     };
 }
 
+// The resets beside the Exact crop / Exact pad headers.
 function cropResetControl(node) {
     const fb = node._fb;
-    const reset = button("Reset crop", { icon: ICONS.reset, grow: true, title: "Back to the whole picture", onClick: () => {
+    const reset = button("", { icon: ICONS.reset, small: true, title: "Reset the crop: back to the whole picture", onClick: () => {
         setDisplayCrop(node, FULL_CROP);
         fb.card.refresh();
         notifyChange();
@@ -603,7 +604,21 @@ function cropResetControl(node) {
     };
 }
 
-// The Pad row: the canvas's aspect, the feather, and no padding.
+function padResetControl(node) {
+    const fb = node._fb;
+    const reset = button("", { icon: ICONS.reset, small: true, title: "Reset the padding", onClick: () => {
+        setPad(node, { left: 0, right: 0, top: 0, bottom: 0 }, "");
+        notifyChange();
+    } });
+    return {
+        element: reset,
+        sync() {
+            reset.disabled = !(fb.pad.left || fb.pad.right || fb.pad.top || fb.pad.bottom);
+        },
+    };
+}
+
+// The Pad row: the canvas's aspect and the feather.
 function padControl(node) {
     const fb = node._fb;
     const tools = el("div", "fbui-field");
@@ -630,17 +645,12 @@ function padControl(node) {
         onSettle: notifyChange,
     });
     feather.root.style.cssText = "flex:none;width:76px";
-    const reset = button("", { icon: ICONS.reset, title: "Remove the padding", onClick: () => {
-        setPad(node, { left: 0, right: 0, top: 0, bottom: 0 }, "");
-        notifyChange();
-    } });
-    tools.append(aspect, featherIcon, feather.root, reset);
+    tools.append(aspect, featherIcon, feather.root);
     return {
         element: tools,
         sync() {
             aspect.value = fb.pad.aspect;
             feather.set(fb.pad.feather);
-            reset.disabled = !(fb.pad.left || fb.pad.right || fb.pad.top || fb.pad.bottom);
         },
     };
 }
@@ -838,11 +848,10 @@ function setupNode(node) {
             { label: "Pad", control: padControl, when: padTool },
             { panel: stagePanel, grow: true, height: STAGE_MIN_HEIGHT },
             { panel: framePanel, height: FRAME_PANEL_HEIGHT, when: (values) => isVideoFile(values.image) },
-            { group: "crop", label: "Exact crop", when: cropTool },
+            { group: "crop", label: "Exact crop", tools: cropResetControl, when: cropTool },
             { label: "Left · Right", control: (n) => cropPairControl(n, "left", "right"), group: "crop", when: cropTool },
             { label: "Top · Bottom", control: (n) => cropPairControl(n, "top", "bottom"), group: "crop", when: cropTool },
-            { label: "", control: cropResetControl, group: "crop", when: cropTool },
-            { group: "pad", label: "Exact pad", when: padTool },
+            { group: "pad", label: "Exact pad", tools: padResetControl, when: padTool },
             { label: "Left · Right", control: (n) => padPairControl(n, "left", "right"), group: "pad", when: padTool },
             { label: "Top · Bottom", control: (n) => padPairControl(n, "top", "bottom"), group: "pad", when: padTool },
             { panel: captionPanel, height: CAPTION_HEIGHT },
