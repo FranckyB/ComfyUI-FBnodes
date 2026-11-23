@@ -36,3 +36,22 @@ test("crop pixels mirror the backend's rounding", () => {
     assert.ok(isFullCrop(FULL));
     assert.deepEqual(cropViewRect({ left_pct: 50, right_pct: 100, top_pct: 0, bottom_pct: 50 }, { x: 10, y: 20, width: 200, height: 100 }), { x: 110, y: 20, width: 100, height: 50 });
 });
+
+import { bestGrid } from "../js/common/grid_math.mjs";
+
+test("a batch lays out at the largest size the box allows", () => {
+    // Four portraits in a wide box: one row of four.
+    assert.deepEqual(
+        (({ columns, rows }) => ({ columns, rows }))(bestGrid(4, 768, 1024, 2000, 700)),
+        { columns: 4, rows: 1 },
+    );
+    // Four squares in a square box: two by two.
+    const square = bestGrid(4, 512, 512, 1000, 1000);
+    assert.equal(square.columns, 2);
+    assert.equal(square.width, 500);
+    // One picture fills the box's limiting side.
+    const one = bestGrid(1, 1000, 500, 800, 800);
+    assert.deepEqual([one.columns, one.rows, one.width, one.height], [1, 1, 800, 400]);
+    // Gaps are left between cells.
+    assert.equal(bestGrid(2, 100, 100, 210, 100, 10).width, 100);
+});

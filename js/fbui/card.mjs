@@ -84,10 +84,22 @@ export function mountCard(node, { rows, minWidth = 280, first = false } = {}) {
     },
     segment(name, row, into) {
       const widget = findWidget(node, name);
-      const options = comboValues(widget);
-      const seg = segmented(options.map((value) => ({ value, label: choiceLabel(row, value, options, node), title: row.titles?.[value] })), { onPick: (value) => setWidget(name, value) });
-      into.append(seg.root);
-      return (vals) => seg.set(vals[name]);
+      // The choices can change (one widget's list following another's value):
+      // the pill is rebuilt whenever they do.
+      let shown = null;
+      let seg = null;
+      return (vals) => {
+        const options = comboValues(widget);
+        const key = options.join("\n");
+        if (key !== shown) {
+          shown = key;
+          const next = segmented(options.map((value) => ({ value, label: choiceLabel(row, value, options, node), title: row.titles?.[value] })), { onPick: (value) => setWidget(name, value) });
+          if (seg) seg.root.replaceWith(next.root);
+          else into.append(next.root);
+          seg = next;
+        }
+        seg.set(vals[name]);
+      };
     },
     switch(name, row, into) {
       const seg = segmented([{ value: false, label: row.offText ?? "off" }, { value: true, label: row.onText ?? "on" }], { bool: true, onPick: (value) => setWidget(name, value) });

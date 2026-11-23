@@ -1,1462 +1,481 @@
+/**
+ * Save Image+ (FBnodes): saves PNG / EXR / AVIF with date tokens in the
+ * prefix, optionally after you pick which images to keep (save_image_review.js),
+ * and shows what was saved: one image, a grid for a batch, and an A/B
+ * comparison against the Compare input under the pointer.
+ *
+ * The face is one fbui card; the stock widgets stay hidden and hold every
+ * saved value. The last results are kept on the node, so a reloaded
+ * workflow shows them again.
+ */
+
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
+import { mountCard } from "./fbui/card.mjs";
+import { toast } from "./fbui/comfy.mjs";
+import { button, ICONS, segmented } from "./fbui/controls.mjs";
+import { chainCallback, el } from "./fbui/dom.mjs";
+import { openMenu, openModal } from "./fbui/modal.mjs";
+import { findWidget, hideInputsInDef, suppressCorePreview } from "./fbui/widgets.mjs";
+import { CAPTION_HEIGHT, RADIUS, T } from "./fbui/theme.mjs";
+import { bestGrid } from "./common/grid_math.mjs";
+import { fitRect } from "./common/stage_math.mjs";
 
-const CONTROLS_TOGGLE_WIDGET_KEY = "__fb_save_image_controls_toggle";
-const CONTROLS_EXPANDED_PROP = "_saveImageControlsExpanded";
-const VUE_VIEW_WIDGET_NAME = "__fb_save_image_vue_view";
-// Classic frame margin; the Nodes 2.0 widget column is already inset, so the view is drawn shifted by it.
-const VUE_VIEW_INSET = 10;
-const IMAGE_FORMAT_OPTIONS = {
+const NODE_NAME = "SaveImagePlus";
+const MIN_WIDTH = 300;
+const STAGE_MIN_HEIGHT = 200;
+// More images than this get ‹ n / N › instead of one button each.
+const MANY = 8;
+const GRID_GAP = 6;
+
+// What each format can store; the Depth and Color pills follow the format.
+const FORMAT_OPTIONS = {
     png: { bit_depth: ["8-bit", "16-bit"], input_color_space: ["sRGB"] },
     exr: { bit_depth: ["16-bit float", "32-bit float"], input_color_space: ["sRGB", "HDR", "linear"] },
     avif: { bit_depth: ["auto", "8-bit YUV420", "10-bit YUV420"], input_color_space: ["sRGB", "HDR", "HDR PQ"] },
 };
 
-function getSettingsWidgets(node) {
-    return (node.widgets || []).filter(widget => widget.name !== CONTROLS_TOGGLE_WIDGET_KEY && widget.name !== VUE_VIEW_WIDGET_NAME);
+const CSS_ID = "fbnodes-save-image-css-v1";
+function ensureCss() {
+    if (document.getElementById(CSS_ID)) return;
+    const style = document.createElement("style");
+    style.id = CSS_ID;
+    style.textContent = `
+.fbnodes-save .single,.fbnodes-save .grid{position:absolute;inset:0}
+.fbnodes-save .single img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;display:block;pointer-events:none}
+.fbnodes-save .divider{position:absolute;top:0;width:2px;margin-left:-1px;background:${T.ink};box-shadow:0 0 0 1px rgba(0,0,0,.5);pointer-events:none}
+.fbnodes-save .divider::after{content:"";position:absolute;left:50%;top:50%;width:10px;height:10px;border-radius:50%;transform:translate(-50%,-50%);background:${T.ink};box-shadow:0 0 0 1px rgba(0,0,0,.5)}
+.fbnodes-save .tag{position:absolute;top:8px;padding:2px 7px;border-radius:999px;background:rgba(10,12,15,.75);color:${T.ink};font:600 10px system-ui;pointer-events:none}
+.fbnodes-save .grid{display:grid;gap:${GRID_GAP}px;justify-content:center;align-content:center}
+.fbnodes-save .grid img{width:100%;height:100%;object-fit:contain;border-radius:${RADIUS - 2}px;background:${T.card};outline:1px solid ${T.plateEdge};cursor:pointer;display:block}
+.fbnodes-save .grid img:hover{outline:2px solid ${T.brand}}
+.fbnodes-save-picker{display:flex;align-items:center;gap:6px;min-width:0;width:100%}
+.fbnodes-save-picker .fbui-seg{flex:1;min-width:0}
+.fbnodes-save-picker .where{flex:1;text-align:center;color:${T.label};font:600 11px system-ui;font-variant-numeric:tabular-nums}
+`;
+    document.head.append(style);
 }
 
-function getSettingsHeight(node) {
-    return getSettingsWidgets(node).reduce((height, widget) => height + (widget.hidden ? 0 : getWidgetHeight(node, widget) + 4), 0);
+function imageUrl(info) {
+    const shown = info?.preview ?? info;
+    if (!shown?.filename) return "";
+    const params = new URLSearchParams({ filename: shown.filename, type: shown.type || "output", subfolder: shown.subfolder || "" });
+    return api.apiURL(`/view?${params}`);
 }
 
-function applySaveImageControls(node, { skipSize = false } = {}) {
-    const previousHeight = getSettingsHeight(node);
-    const format = node.widgets?.find(widget => widget.name === "format")?.value || "png";
-    const options = IMAGE_FORMAT_OPTIONS[format];
-    if (options) {
-        for (const name of ["bit_depth", "input_color_space"]) {
-            const widget = node.widgets?.find(widget => widget.name === name);
-            if (!widget) continue;
-            widget.options.values = [...options[name]];
-            if (!options[name].includes(widget.value)) widget.value = options[name][0];
-        }
-    }
-    const expanded = !!node.properties?.[CONTROLS_EXPANDED_PROP];
-    const review = !!node.widgets?.find(widget => widget.name === "review")?.value;
-    for (const widget of getSettingsWidgets(node)) {
-        if (!widget._fbSaveImageSizeSaved) {
-            widget._fbSaveImageComputeSize = widget.computeSize;
-            widget._fbSaveImageSizeSaved = true;
-        }
-        const hidden = !expanded
-            || (widget.name === "crf" && format !== "avif")
-            || ((widget.name === "review_timeout" || widget.name === "on_timeout") && !review);
-        widget.hidden = hidden;
-        if (hidden) widget.computeSize = () => [0, -4];
-        else if (widget._fbSaveImageComputeSize) widget.computeSize = widget._fbSaveImageComputeSize;
-        else delete widget.computeSize;
-        if (widget.inputEl) widget.inputEl.style.display = hidden ? "none" : "";
-    }
-    const toggle = node.widgets?.find(widget => widget.name === CONTROLS_TOGGLE_WIDGET_KEY);
-    if (toggle) toggle.label = expanded ? "\u25B2 Controls" : "\u25B6 Controls";
-    if (!skipSize) {
-        const height = Math.max(1, Number(node.size?.[1] || 240) + getSettingsHeight(node) - previousHeight);
-        node.setSize?.([Number(node.size?.[0] || 320), height]);
-    }
-    node.setDirtyCanvas?.(true, true);
-}
-
-function ensureControlsToggleWidget(node, { skipSize = false } = {}) {
-    node.properties ||= {};
-    if (node.properties[CONTROLS_EXPANDED_PROP] === undefined) node.properties[CONTROLS_EXPANDED_PROP] = false;
-    let toggle = node.widgets?.find(widget => widget.name === CONTROLS_TOGGLE_WIDGET_KEY);
-    if (!toggle) {
-        toggle = node.addWidget("button", CONTROLS_TOGGLE_WIDGET_KEY, null, () => {
-            node.properties[CONTROLS_EXPANDED_PROP] = !node.properties[CONTROLS_EXPANDED_PROP];
-            applySaveImageControls(node);
-            ensureMinDisplaySize(node);
-        }, { serialize: false });
-        toggle.serialize = false;
-    }
-    applySaveImageControls(node, { skipSize });
-}
-
-function imageInfoToUrl(imageInfo) {
-    if (!imageInfo || !imageInfo.filename) {
-        return "";
-    }
-
-    const preview = imageInfo.preview || imageInfo;
-    let url = `/view?filename=${encodeURIComponent(preview.filename)}&type=${encodeURIComponent(preview.type || "output")}`;
-    if (preview.subfolder) {
-        url += `&subfolder=${encodeURIComponent(preview.subfolder)}`;
-    }
-    return url;
-}
-
-function clamp(value, min, max) {
-    const n = Number(value);
-    if (!Number.isFinite(n)) {
-        return min;
-    }
-    return Math.max(min, Math.min(max, n));
-}
-
-function clampIndex(index, length) {
-    if (!length) {
-        return 0;
-    }
-    return Math.max(0, Math.min(length - 1, Number(index || 0)));
-}
-
-function normalizeImageEntries(raw) {
-    if (!raw) {
-        return [];
-    }
+function flatImages(raw) {
     const out = [];
-    const stack = Array.isArray(raw) ? [...raw] : [raw];
-
+    const stack = Array.isArray(raw) ? [...raw] : raw ? [raw] : [];
     while (stack.length) {
         const item = stack.shift();
-        if (!item) {
-            continue;
-        }
-        if (Array.isArray(item)) {
-            stack.push(...item);
-            continue;
-        }
-        if (typeof item === "object" && typeof item.filename === "string") {
-            out.push(item);
-        }
+        if (Array.isArray(item)) stack.unshift(...item);
+        else if (item && typeof item.filename === "string") out.push(item);
     }
-
     return out;
 }
 
-function normalizeBool(raw) {
-    if (Array.isArray(raw)) {
-        return !!raw[0];
-    }
-    return !!raw;
+const clampIndex = (index, length) => (length ? Math.max(0, Math.min(length - 1, Number(index) || 0)) : 0);
+
+// ---------------------------------------------------------------- results
+
+function persist(node) {
+    const fb = node._fb;
+    const props = node.properties;
+    props._saveCompareSavedItems = JSON.stringify(fb.saved);
+    props._saveCompareCompareItems = JSON.stringify(fb.compare);
+    props._saveComparePaired = fb.paired;
+    props._saveCompareUnpaired = fb.unpaired;
+    props._saveCompareGrid = fb.grid;
+    props._saveCompareSavedIndex = fb.at;
+    props._saveCompareCompareIndex = fb.atCompare;
 }
 
-function extractSavePayload(message) {
-    if (!message || typeof message !== "object") {
-        return {};
-    }
-
-    const candidates = [
-        message,
-        message.ui,
-        message.output,
-        message.data,
-    ];
-
-    for (const candidate of candidates) {
-        if (!candidate || typeof candidate !== "object") {
-            continue;
-        }
-        if (
-            candidate.saved_images !== undefined ||
-            candidate.images !== undefined ||
-            candidate.compare_images !== undefined
-        ) {
-            return candidate;
-        }
-    }
-
-    return message;
-}
-
-function addRoundedRectPath(ctx, x, y, w, h, r = 8) {
-    const radius = Math.max(0, Math.min(r, w * 0.5, h * 0.5));
-    if (typeof ctx.roundRect === "function") {
-        ctx.roundRect(x, y, w, h, radius);
-        return;
-    }
-
-    ctx.moveTo(x + radius, y);
-    ctx.lineTo(x + w - radius, y);
-    ctx.quadraticCurveTo(x + w, y, x + w, y + radius);
-    ctx.lineTo(x + w, y + h - radius);
-    ctx.quadraticCurveTo(x + w, y + h, x + w - radius, y + h);
-    ctx.lineTo(x + radius, y + h);
-    ctx.quadraticCurveTo(x, y + h, x, y + h - radius);
-    ctx.lineTo(x, y + radius);
-    ctx.quadraticCurveTo(x, y, x + radius, y);
-    ctx.closePath();
-}
-
-function ensureCompareState(node) {
-    if (node._fbSaveCompareState) {
-        return node._fbSaveCompareState;
-    }
-
-    node._fbSaveCompareState = {
-        savedItems: [],
-        compareItems: [],
-        selectedSaved: 0,
-        selectedCompare: 0,
-        paired: false,
-        unpaired: false,
-        gridMode: false,
-        split: 0.5,
-        hovering: false,
-        imageCache: new Map(),
-        previewRect: null,
-        buttonZones: [],
-        gridZones: [],
-        drawDisabled: false,
-        drawErrorLogged: false,
-    };
-
-    return node._fbSaveCompareState;
-}
-
-function getWidgetHeight(node, widget) {
-    if (widget?.hidden) {
-        return 0;
-    }
-    if (typeof widget?.computeSize === "function") {
-        try {
-            const size = widget.computeSize(Number(node.size?.[0] || 320));
-            if (Array.isArray(size) && Number.isFinite(size[1])) {
-                return Number(size[1]);
-            }
-        } catch {
-            return 24;
-        }
-    }
-    return Number(LiteGraph?.NODE_WIDGET_HEIGHT || 24);
-}
-
-function getContentStartY(node) {
-    const titleH = Number(LiteGraph?.NODE_TITLE_HEIGHT || 30);
-    let y = titleH + 6;
-
-    for (const widget of node.widgets || []) {
-        if (widget.hidden || widget.name === VUE_VIEW_WIDGET_NAME) continue;
-        y += getWidgetHeight(node, widget) + 4;
-    }
-
-    return y + 4;
-}
-
-function estimateSelectionRowsHeight(state) {
-    const savedCount = state.savedItems.length;
-    const compareCount = state.compareItems.length;
-    if (!savedCount) {
-        return 0;
-    }
-
-    const hasCompare = compareCount > 0;
-    const pairedView = state.paired && !state.unpaired;
-
-    let rowCount = 0;
-    if (hasCompare && pairedView) {
-        if (savedCount > 1) {
-            rowCount = 1;
-        }
-    } else if (hasCompare) {
-        if (compareCount > 1) {
-            rowCount += 1;
-        }
-        if (savedCount > 1) {
-            rowCount += 1;
-        }
-    } else if (savedCount > 1) {
-        rowCount = 1;
-    }
-
-    const hasCheckboxes = savedCount > 1;
-    if (rowCount === 0 && !hasCheckboxes) {
-        return 0;
-    }
-
-    const btnH = 18;
-    const padY = 6;
-    const lineGap = 6;
-    const lines = Math.max(1, rowCount);
-    return lines * btnH + (lines - 1) * lineGap + padY * 2;
-}
-
-const COMPARE_FRAME_TOP_GAP = 8;
-
-function ensureMinDisplaySize(node) {
-    const state = ensureCompareState(node);
-    const contentTop = getContentStartY(node);
-    const controlsH = estimateSelectionRowsHeight(state);
-    const frameMinH = 140;
-    const footerH = 24;
-    const footerGap = 6;
-    const bottomPad = 8;
-
-    const minW = 260;
-    const minH = Math.ceil(contentTop + controlsH + COMPARE_FRAME_TOP_GAP + frameMinH + footerGap + footerH + bottomPad);
-
-    const curW = Number(node.size?.[0] || 0);
-    const curH = Number(node.size?.[1] || 0);
-    const nextW = Math.max(curW, minW);
-    const nextH = Math.max(curH, minH);
-
-    if (nextW !== curW || nextH !== curH) {
-        node.size = [nextW, nextH];
-        node.setDirtyCanvas?.(true, true);
-        return true;
-    }
-
-    return false;
-}
-
-function getCachedImage(state, url, node) {
-    if (!url) {
-        return null;
-    }
-
-    const cached = state.imageCache.get(url);
-    if (cached) {
-        return cached.complete ? cached : null;
-    }
-
-    const img = new Image();
-    img.onload = () => node.setDirtyCanvas?.(true, false);
-    img.src = url;
-    state.imageCache.set(url, img);
-    return null;
-}
-
-function drawContainImage(ctx, img, rect) {
-    if (!img || !img.naturalWidth || !img.naturalHeight) {
-        return null;
-    }
-
-    const imageAspect = img.naturalWidth / img.naturalHeight;
-    const rectAspect = rect.w / rect.h;
-
-    let drawW = rect.w;
-    let drawH = rect.h;
-    let drawX = rect.x;
-    let drawY = rect.y;
-
-    if (imageAspect > rectAspect) {
-        drawH = drawW / imageAspect;
-        drawY = rect.y + (rect.h - drawH) * 0.5;
-    } else {
-        drawW = drawH * imageAspect;
-        drawX = rect.x + (rect.w - drawW) * 0.5;
-    }
-
-    ctx.drawImage(img, drawX, drawY, drawW, drawH);
-    return { x: drawX, y: drawY, w: drawW, h: drawH };
-}
-
-function drawButton(ctx, rect, text, active) {
-    ctx.save();
-    ctx.beginPath();
-    addRoundedRectPath(ctx, rect.x, rect.y, rect.w, rect.h, 8);
-    ctx.fillStyle = active ? "rgba(49, 92, 130, 0.98)" : "rgba(34, 39, 48, 0.98)";
-    ctx.strokeStyle = active ? "rgba(66, 153, 225, 0.95)" : "rgba(86, 103, 122, 0.6)";
-    ctx.lineWidth = 1;
-    ctx.fill();
-    ctx.stroke();
-
-    ctx.font = "600 10px Segoe UI";
-    ctx.fillStyle = active ? "rgba(245, 250, 255, 1)" : "rgba(210, 224, 238, 0.96)";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText(text, rect.x + rect.w * 0.5, rect.y + rect.h * 0.5 + 0.5);
-    ctx.restore();
-}
-
-function drawSelectionRows(ctx, node, state, topY, width) {
-    state.buttonZones = [];
-    state.gridZones = [];
-
-    const savedCount = state.savedItems.length;
-    const compareCount = state.compareItems.length;
-    if (!savedCount) {
-        return 0;
-    }
-
-    const hasCompare = compareCount > 0;
-    const pairedView = state.paired && !state.unpaired;
-    const MANY = 8;
-
-    const rows = [];
-    if (hasCompare && pairedView) {
-        if (savedCount > 1) {
-            rows.push({ label: "Pair", count: savedCount, selected: state.selectedSaved, type: "pair" });
-        }
-    } else if (hasCompare) {
-        if (compareCount > 1) {
-            rows.push({ label: "A", count: compareCount, selected: state.selectedCompare, type: "A" });
-        }
-        if (savedCount > 1) {
-            rows.push({ label: "B", count: savedCount, selected: state.selectedSaved, type: "B" });
-        }
-    } else if (savedCount > 1) {
-        rows.push({ label: "", count: savedCount, selected: state.selectedSaved, type: "B" });
-    }
-
-    const showGridToggle = savedCount > 1;
-    const showPairToggle = state.paired && savedCount > 1;
-    const hasCheckboxes = showGridToggle || showPairToggle;
-
-    if (!rows.length && !hasCheckboxes) {
-        return 0;
-    }
-
-    const labelFont = "600 10px Segoe UI";
-    const btnFont = "600 10px Segoe UI";
-    const cbFont = "500 10px Segoe UI";
-    const btnH = 18;
-    const btnGap = 5;
-    const groupGap = 16;
-    const labelGap = 7;
-    const padX = 10;
-    const padY = 6;
-    const lineGap = 6;
-    const navBtnW = 22;
-    const cbSize = 13;
-
-    const panelX = 10;
-    const panelW = Math.max(40, width - 20);
-    const innerW = panelW - padX * 2;
-
-    // Width of the checkbox cluster drawn right-aligned on the first line.
-    let cbClusterW = 0;
-    ctx.save();
-    ctx.font = cbFont;
-    if (showGridToggle) {
-        cbClusterW += Math.ceil(ctx.measureText("Grid").width) + 5 + cbSize;
-    }
-    if (showPairToggle) {
-        if (cbClusterW > 0) {
-            cbClusterW += 14;
-        }
-        cbClusterW += Math.ceil(ctx.measureText("Pair").width) + 5 + cbSize;
-    }
-    ctx.restore();
-
-    const measureRow = (row) => {
-        ctx.save();
-        ctx.font = labelFont;
-        let w = row.label ? Math.ceil(ctx.measureText(row.label).width) + labelGap : 0;
-        ctx.font = btnFont;
-        if (row.count > MANY) {
-            const navText = `${row.selected + 1} / ${row.count}`;
-            w += navBtnW + btnGap + Math.ceil(ctx.measureText(navText).width) + 16 + btnGap + navBtnW;
-        } else {
-            for (let i = 0; i < row.count; i += 1) {
-                const text = String(i + 1);
-                w += Math.max(24, Math.ceil(ctx.measureText(text).width) + 14) + btnGap;
-            }
-        }
-        ctx.restore();
-        return w;
-    };
-
-    const rowWidths = rows.map(measureRow);
-
-    let sideBySide = false;
-    if (rows.length === 2 && rows[0].count <= MANY && rows[1].count <= MANY) {
-        sideBySide = rowWidths[0] + groupGap + rowWidths[1] + cbClusterW + groupGap <= innerW;
-    }
-
-    const lines = (sideBySide ? 1 : rows.length) || 1;
-    const totalH = lines * btnH + (lines - 1) * lineGap + padY * 2;
-    const panelY = topY;
-
-    ctx.save();
-    ctx.beginPath();
-    addRoundedRectPath(ctx, panelX, panelY, panelW, totalH, 10);
-    ctx.fillStyle = "rgba(34, 39, 48, 0.98)";
-    ctx.strokeStyle = "rgba(66, 72, 84, 0.95)";
-    ctx.lineWidth = 1;
-    ctx.fill();
-    ctx.stroke();
-    ctx.restore();
-
-    const drawRow = (row, startX, lineY) => {
-        let x = startX;
-
-        if (row.label) {
-            ctx.save();
-            ctx.font = labelFont;
-            ctx.fillStyle = "rgba(192, 206, 222, 0.95)";
-            ctx.textBaseline = "middle";
-            ctx.fillText(row.label, x, lineY + btnH * 0.5);
-            x += Math.ceil(ctx.measureText(row.label).width) + labelGap;
-            ctx.restore();
-        }
-
-        ctx.save();
-        ctx.font = btnFont;
-        if (row.count > MANY) {
-            const prevRect = { x, y: lineY, w: navBtnW, h: btnH };
-            drawButton(ctx, prevRect, "\u2039", false);
-            state.buttonZones.push({ ...prevRect, type: "nav", navTarget: row.type, navDir: -1, index: 0 });
-            x += navBtnW + btnGap;
-
-            const navText = `${row.selected + 1} / ${row.count}`;
-            const tw = Math.ceil(ctx.measureText(navText).width) + 16;
-            ctx.fillStyle = "rgba(210, 224, 238, 0.96)";
-            ctx.textBaseline = "middle";
-            ctx.fillText(navText, x + 8, lineY + btnH * 0.5);
-            x += tw + btnGap;
-
-            const nextRect = { x, y: lineY, w: navBtnW, h: btnH };
-            drawButton(ctx, nextRect, "\u203A", false);
-            state.buttonZones.push({ ...nextRect, type: "nav", navTarget: row.type, navDir: 1, index: 0 });
-            x += navBtnW + btnGap;
-        } else {
-            for (let i = 0; i < row.count; i += 1) {
-                const text = String(i + 1);
-                const w = Math.max(24, Math.ceil(ctx.measureText(text).width) + 14);
-                const rect = { x, y: lineY, w, h: btnH };
-                drawButton(ctx, rect, text, !state.gridMode && i === row.selected);
-                state.buttonZones.push({ ...rect, type: row.type, index: i });
-                x += w + btnGap;
-            }
-        }
-        ctx.restore();
-        return x;
-    };
-
-    if (rows.length) {
-        if (sideBySide) {
-            const lineY = panelY + padY;
-            let x = panelX + padX;
-            x = drawRow(rows[0], x, lineY);
-            x += groupGap - btnGap;
-            drawRow(rows[1], x, lineY);
-        } else {
-            let lineY = panelY + padY;
-            for (const row of rows) {
-                drawRow(row, panelX + padX, lineY);
-                lineY += btnH + lineGap;
-            }
-        }
-    }
-
-    if (hasCheckboxes) {
-        const midY = panelY + padY + btnH * 0.5;
-        let rightX = panelX + panelW - padX;
-
-        const drawCheckbox = (label, checked, type) => {
-            ctx.save();
-            ctx.font = cbFont;
-            const labelW = Math.ceil(ctx.measureText(label).width);
-            const boxX = rightX - cbSize;
-            const boxY = midY - cbSize / 2;
-            const labelX = boxX - 5 - labelW;
-
-            ctx.fillStyle = "rgba(192, 206, 222, 0.95)";
-            ctx.textBaseline = "middle";
-            ctx.fillText(label, labelX, midY);
-
-            ctx.beginPath();
-            addRoundedRectPath(ctx, boxX, boxY, cbSize, cbSize, 3);
-            ctx.fillStyle = checked ? "rgba(49, 92, 130, 0.98)" : "rgba(34, 39, 48, 0.98)";
-            ctx.strokeStyle = checked ? "rgba(66, 153, 225, 0.95)" : "rgba(86, 103, 122, 0.7)";
-            ctx.lineWidth = 1;
-            ctx.fill();
-            ctx.stroke();
-
-            if (checked) {
-                ctx.strokeStyle = "rgba(245, 250, 255, 1)";
-                ctx.lineWidth = 1.6;
-                ctx.beginPath();
-                ctx.moveTo(boxX + 3, boxY + cbSize * 0.55);
-                ctx.lineTo(boxX + cbSize * 0.42, boxY + cbSize - 3);
-                ctx.lineTo(boxX + cbSize - 2.5, boxY + 3);
-                ctx.stroke();
-            }
-            ctx.restore();
-
-            state.buttonZones.push({
-                x: labelX,
-                y: boxY - 2,
-                w: boxX + cbSize - labelX,
-                h: cbSize + 4,
-                type,
-                index: 0,
-            });
-            rightX = labelX - 14;
-        };
-
-        if (showGridToggle) {
-            drawCheckbox("Grid", state.gridMode, "gridToggle");
-        }
-        if (showPairToggle) {
-            drawCheckbox("Pair", !state.unpaired, "unpairToggle");
-        }
-    }
-
-    return totalH;
-}
-
-function drawImageGrid(ctx, state, node, rect) {
-    state.gridZones = [];
-    const items = state.savedItems;
-    const n = items.length;
-    if (!n) {
-        return;
-    }
-
-    const cols = Math.ceil(Math.sqrt(n));
-    const rowCount = Math.ceil(n / cols);
-    const gap = 4;
-    const cellW = (rect.w - gap * (cols - 1)) / cols;
-    const cellH = (rect.h - gap * (rowCount - 1)) / rowCount;
-    if (cellW <= 1 || cellH <= 1) {
-        return;
-    }
-
-    for (let i = 0; i < n; i += 1) {
-        const c = i % cols;
-        const r = Math.floor(i / cols);
-        const cx = rect.x + c * (cellW + gap);
-        const cy = rect.y + r * (cellH + gap);
-        const cellRect = { x: cx, y: cy, w: cellW, h: cellH };
-
-        ctx.save();
-        ctx.fillStyle = "rgba(34, 39, 48, 0.98)";
-        ctx.fillRect(cx, cy, cellW, cellH);
-        const url = imageInfoToUrl(items[i]);
-        const img = getCachedImage(state, url, node);
-        if (img) {
-            drawContainImage(ctx, img, cellRect);
-        }
-        ctx.strokeStyle = "rgba(78, 90, 108, 0.5)";
-        ctx.lineWidth = 1;
-        ctx.strokeRect(cx + 0.5, cy + 0.5, cellW - 1, cellH - 1);
-        ctx.restore();
-
-        state.gridZones.push({ x: cx, y: cy, w: cellW, h: cellH, index: i });
-    }
-}
-
-function drawCompareCanvas(ctx, node, layout = null) {
-    const state = ensureCompareState(node);
-    if (state.drawDisabled) {
-        return;
-    }
-    node.imgs = [];
-    const hasSavedItems = state.savedItems.length > 0;
-
-    ensureMinDisplaySize(node);
-
-    state.selectedSaved = clampIndex(state.selectedSaved, state.savedItems.length);
-    state.selectedCompare = clampIndex(state.selectedCompare, state.compareItems.length);
-
-    const contentTop = layout ? layout.top : getContentStartY(node);
-    const contentBottom = layout ? layout.bottom : Number(node.size?.[1] || 320) - 8;
-    const width = layout ? layout.width : Number(node.size?.[0] || 320);
-    if (contentBottom <= contentTop + 20) {
-        return;
-    }
-
-    const controlsH = drawSelectionRows(ctx, node, state, contentTop, width);
-
-    const footerH = 24;
-    const footerGap = 6;
-    const frameX = 10;
-    const frameY = contentTop + controlsH + COMPARE_FRAME_TOP_GAP;
-    const frameW = Math.max(40, width - 20);
-    const frameH = Math.max(80, contentBottom - frameY - footerH - footerGap);
-
-    ctx.save();
-    ctx.beginPath();
-    addRoundedRectPath(ctx, frameX, frameY, frameW, frameH, 10);
-    ctx.fillStyle = "rgba(34, 39, 48, 0.98)";
-    ctx.strokeStyle = "rgba(78, 90, 108, 0.72)";
-    ctx.lineWidth = 1;
-    ctx.fill();
-    ctx.stroke();
-    ctx.clip();
-
-    let savedImg = null;
-    const drawRect = { x: frameX + 1, y: frameY + 1, w: frameW - 2, h: frameH - 2 };
-
-    if (!hasSavedItems) {
-        state.previewRect = null;
-        state.buttonZones = [];
-        state.gridZones = [];
-        ctx.restore();
-    } else {
-        const savedItem = state.savedItems[state.selectedSaved];
-        const savedUrl = imageInfoToUrl(savedItem);
-        savedImg = getCachedImage(state, savedUrl, node);
-
-        if (state.gridMode && state.savedItems.length > 1) {
-            drawImageGrid(ctx, state, node, drawRect);
-            state.previewRect = null;
-            ctx.restore();
-        } else {
-            state.gridZones = [];
-            const savedDraw = drawContainImage(ctx, savedImg, drawRect);
-
-            const hasCompare = state.compareItems.length > 0;
-            const pairedView = state.paired && !state.unpaired;
-            const compareIndex = pairedView ? clampIndex(state.selectedSaved, state.compareItems.length) : state.selectedCompare;
-            const compareItem = hasCompare ? state.compareItems[compareIndex] : null;
-
-            if (compareItem && savedDraw && state.hovering) {
-                const compareUrl = imageInfoToUrl(compareItem);
-                const compareImg = getCachedImage(state, compareUrl, node);
-
-                if (compareImg && compareImg.naturalWidth && compareImg.naturalHeight) {
-                    const splitX = savedDraw.x + clamp(state.split, 0, 1) * savedDraw.w;
-
-                    ctx.save();
-                    ctx.beginPath();
-                    ctx.rect(savedDraw.x, savedDraw.y, Math.max(0, splitX - savedDraw.x), savedDraw.h);
-                    ctx.clip();
-                    drawContainImage(ctx, compareImg, drawRect);
-                    ctx.restore();
-
-                    ctx.fillStyle = "rgba(245, 249, 255, 0.95)";
-                    ctx.fillRect(splitX - 1, savedDraw.y, 2, savedDraw.h);
-                    ctx.beginPath();
-                    ctx.arc(splitX, savedDraw.y + savedDraw.h * 0.5, 5, 0, Math.PI * 2);
-                    ctx.fill();
-
-                    state.previewRect = savedDraw;
-                } else {
-                    state.previewRect = savedDraw;
-                }
-            } else {
-                state.previewRect = savedDraw;
-            }
-
-            ctx.restore();
-        }
-    }
-
-    // Store the frame rectangle so context-menu code can map clicks to images.
-    state.frameRect = { x: frameX, y: frameY, w: frameW, h: frameH };
-
-    // Footer: image size box. Shows the displayed image's size, or the first
-    // image's size in grid mode (one size for the whole batch).
-    const footerImg = state.gridMode
-        ? getCachedImage(state, imageInfoToUrl(state.savedItems[0]), node)
-        : savedImg;
-    const footerX = frameX;
-    const footerY = frameY + frameH + footerGap;
-    const footerW = frameW;
-    ctx.save();
-    ctx.beginPath();
-    addRoundedRectPath(ctx, footerX, footerY, footerW, footerH, 8);
-    ctx.fillStyle = "rgba(34, 39, 48, 0.98)";
-    ctx.strokeStyle = "rgba(66, 72, 84, 0.95)";
-    ctx.lineWidth = 1;
-    ctx.fill();
-    ctx.stroke();
-
-    let sizeText = "—";
-    if (footerImg && footerImg.naturalWidth && footerImg.naturalHeight) {
-        sizeText = `${footerImg.naturalWidth} × ${footerImg.naturalHeight}`;
-    }
-    ctx.font = "600 10px Segoe UI";
-    ctx.fillStyle = "rgba(192, 206, 222, 0.95)";
-    ctx.textBaseline = "middle";
-    const tw = ctx.measureText(sizeText).width;
-    ctx.fillText(sizeText, footerX + (footerW - tw) * 0.5, footerY + footerH * 0.5);
-    ctx.restore();
-}
-
-function drawCompareSafely(ctx, node, layout = null) {
-    const state = ensureCompareState(node);
-    if (state.drawDisabled) {
-        return;
-    }
-    // Always restore so a leaked clip/transform can't corrupt the rest of Comfy's UI.
-    ctx.save();
-    try {
-        drawCompareCanvas(ctx, node, layout);
-    } catch (error) {
-        state.drawDisabled = true;
-        state.previewRect = null;
-        state.buttonZones = [];
-        if (!state.drawErrorLogged) {
-            state.drawErrorLogged = true;
-            console.error("[FBnodes SaveImagePlus] compare draw disabled after error:", error);
-        }
-    } finally {
-        ctx.restore();
-    }
-}
-
-function drawVueView(node) {
-    const canvas = node._fbSaveImageVueCanvas;
-    const cssW = canvas?.clientWidth || 0;
-    const cssH = canvas?.clientHeight || 0;
-    // Zero-sized on the classic canvas, where this widget is never shown.
-    if (!cssW || !cssH) return;
-
-    const rect = canvas.getBoundingClientRect();
-    const scale = (rect.width / cssW || 1) * (window.devicePixelRatio || 1);
-    const pxW = Math.max(1, Math.round(cssW * scale));
-    const pxH = Math.max(1, Math.round(cssH * scale));
-    if (canvas.width !== pxW) canvas.width = pxW;
-    if (canvas.height !== pxH) canvas.height = pxH;
-
-    const ctx = canvas.getContext("2d");
-    ctx.setTransform(scale, 0, 0, scale, 0, 0);
-    ctx.clearRect(0, 0, cssW, cssH);
-    ctx.translate(-VUE_VIEW_INSET, 0);
-    drawCompareSafely(ctx, node, { top: 0, width: cssW + VUE_VIEW_INSET * 2, bottom: cssH });
-}
-
-function scheduleVueDraw(node) {
-    if (node._fbSaveImageVueDrawPending || !node._fbSaveImageVueCanvas) return;
-    node._fbSaveImageVueDrawPending = true;
-    requestAnimationFrame(() => {
-        node._fbSaveImageVueDrawPending = false;
-        drawVueView(node);
-    });
-}
-
-function vueViewLocalPos(node, event) {
-    const canvas = node._fbSaveImageVueCanvas;
-    const rect = canvas.getBoundingClientRect();
-    const k = canvas.clientWidth ? rect.width / canvas.clientWidth : 1;
-    return [(event.clientX - rect.left) / k + VUE_VIEW_INSET, (event.clientY - rect.top) / k];
-}
-
-// Nodes 2.0 never calls onDrawForeground or canvas mouse hooks, so it gets a DOM canvas using the same draw/hit-test code.
-function ensureVueView(node) {
-    if (node._fbSaveImageVueCanvas) return;
-
-    const host = document.createElement("div");
-    host.style.cssText = "position: relative; min-height: 200px;";
-    const canvas = document.createElement("canvas");
-    canvas.style.cssText = "position: absolute; inset: 0; width: 100%; height: 100%; display: block;";
-    host.appendChild(canvas);
-    node._fbSaveImageVueCanvas = canvas;
-
-    const widget = node.addDOMWidget(VUE_VIEW_WIDGET_NAME, "fb_save_image_view", host, {
-        serialize: false,
-        hideOnZoom: false,
-        surfaces: { canvas: "never", vueNode: "shown", panel: "never" },
-    });
-    widget.serialize = false;
-
-    const setDirtyCanvas = node.setDirtyCanvas;
-    node.setDirtyCanvas = function () {
-        scheduleVueDraw(this);
-        return setDirtyCanvas?.apply(this, arguments);
-    };
-    new ResizeObserver(() => scheduleVueDraw(node)).observe(host);
-    // Canvas zoom is a CSS transform (no resize event); re-render at the current zoom when the pointer arrives.
-    host.addEventListener("pointerenter", () => scheduleVueDraw(node));
-
-    host.addEventListener("pointermove", (event) => {
-        _fbHoveredSaveImageNode = node;
-        const localPos = vueViewLocalPos(node, event);
-        ensureCompareState(node).vueLocalPos = localPos;
-        host.style.cursor = handlePointer(node, localPos) ? "ew-resize" : "";
-    });
-    host.addEventListener("pointerleave", () => {
-        const state = ensureCompareState(node);
-        if (_fbHoveredSaveImageNode === node) _fbHoveredSaveImageNode = null;
-        if (state.hovering) {
-            state.hovering = false;
-            scheduleVueDraw(node);
-        }
-    });
-    host.addEventListener("pointerdown", (event) => {
-        if (event.button !== 0) return;
-        if (clickSelectionButton(node, vueViewLocalPos(node, event))) {
-            event.preventDefault();
-            event.stopPropagation();
-        }
-    });
-}
-
-function setResultData(node, message) {
-    const state = ensureCompareState(node);
-    const payload = extractSavePayload(message);
-
-    const savedItems = normalizeImageEntries(payload?.saved_images ?? payload?.images);
-    const compareItems = normalizeImageEntries(payload?.compare_images);
-
-    state.savedItems = savedItems;
-    state.compareItems = compareItems;
-    state.paired = normalizeBool(payload?.compare_paired) && compareItems.length === savedItems.length;
-    if (!state.paired) {
-        state.paired = compareItems.length > 0 && compareItems.length === savedItems.length;
-    }
-
-    state.selectedSaved = clampIndex(state.selectedSaved, savedItems.length);
-    state.selectedCompare = clampIndex(state.selectedCompare, compareItems.length);
-    if (state.paired) {
-        state.selectedCompare = clampIndex(state.selectedSaved, compareItems.length);
-    }
-
-    // Default to grid view when a new execution returns multiple saved images.
-    state.gridMode = savedItems.length > 1;
-
-    state.imageCache.clear();
-    node.imgs = [];
-
-    persistCompareData(node, state);
-    ensureMinDisplaySize(node);
-}
-
-const _fbSaveImageExecutedCache = new Map();
-let _fbSaveImageExecutedListenerInstalled = false;
-
-function cacheExecutedPayload(detail) {
-    const nodeId = detail?.node;
-    if (nodeId === undefined || nodeId === null) {
-        return;
-    }
-
-    const payload = extractSavePayload(detail?.output);
-    const hasSaved = normalizeImageEntries(payload?.saved_images ?? payload?.images).length > 0;
-    const hasCompare = normalizeImageEntries(payload?.compare_images).length > 0;
-    if (!hasSaved && !hasCompare) {
-        return;
-    }
-
-    _fbSaveImageExecutedCache.set(String(nodeId), payload);
-}
-
-function restoreFromExecutedCache(node) {
-    const nodeId = node?.id;
-    if (nodeId === undefined || nodeId === null) {
-        return false;
-    }
-
-    const cached = _fbSaveImageExecutedCache.get(String(nodeId));
-    if (!cached) {
-        return false;
-    }
-
-    setResultData(node, cached);
-    node.imgs = [];
-    node.setDirtyCanvas?.(true, true);
-    return true;
-}
-
-function installExecutedSync() {
-    if (_fbSaveImageExecutedListenerInstalled) {
-        return;
-    }
-    _fbSaveImageExecutedListenerInstalled = true;
-
-    api.addEventListener("executed", (event) => {
-        cacheExecutedPayload(event?.detail || {});
-    });
-}
-
-function persistCompareData(node, state) {
-    if (!node.properties) {
-        node.properties = {};
-    }
-    try {
-        node.properties._saveCompareSavedItems = JSON.stringify(state.savedItems || []);
-        node.properties._saveCompareCompareItems = JSON.stringify(state.compareItems || []);
-    } catch (error) {
-        node.properties._saveCompareSavedItems = "[]";
-        node.properties._saveCompareCompareItems = "[]";
-    }
-    node.properties._saveComparePaired = !!state.paired;
-    node.properties._saveCompareUnpaired = !!state.unpaired;
-    node.properties._saveCompareGrid = !!state.gridMode;
-    node.properties._saveCompareSavedIndex = state.selectedSaved;
-    node.properties._saveCompareCompareIndex = state.selectedCompare;
-}
-
-function restoreCompareData(node, state) {
+function restore(node) {
+    const fb = node._fb;
+    const props = node.properties;
     const parse = (raw) => {
-        if (!raw) {
-            return [];
-        }
         try {
-            const parsed = JSON.parse(raw);
-            return Array.isArray(parsed) ? parsed : [];
-        } catch (error) {
+            const value = JSON.parse(raw || "[]");
+            return Array.isArray(value) ? value : [];
+        } catch {
             return [];
         }
     };
-
-    state.savedItems = parse(node.properties?._saveCompareSavedItems);
-    state.compareItems = parse(node.properties?._saveCompareCompareItems);
-    state.paired = normalizeBool(node.properties?._saveComparePaired);
-    state.unpaired = normalizeBool(node.properties?._saveCompareUnpaired);
-    state.gridMode = normalizeBool(node.properties?._saveCompareGrid);
-    state.selectedSaved = clampIndex(node.properties?._saveCompareSavedIndex || 0, state.savedItems.length);
-    state.selectedCompare = clampIndex(node.properties?._saveCompareCompareIndex || 0, state.compareItems.length);
-    if (state.paired && !state.unpaired) {
-        state.selectedCompare = clampIndex(state.selectedSaved, state.compareItems.length);
-    }
+    fb.saved = parse(props._saveCompareSavedItems);
+    fb.compare = parse(props._saveCompareCompareItems);
+    fb.paired = Boolean(props._saveComparePaired);
+    fb.unpaired = Boolean(props._saveCompareUnpaired);
+    fb.grid = Boolean(props._saveCompareGrid) && fb.saved.length > 1;
+    fb.at = clampIndex(props._saveCompareSavedIndex, fb.saved.length);
+    fb.atCompare = clampIndex(props._saveCompareCompareIndex, fb.compare.length);
 }
 
-
-function handlePointer(node, localPos) {
-    const state = ensureCompareState(node);
-    if (!state.previewRect || !state.compareItems.length) {
-        if (state.hovering) {
-            state.hovering = false;
-            node.setDirtyCanvas?.(true, false);
-        }
-        return false;
-    }
-
-    const r = state.previewRect;
-    const inside = localPos[0] >= r.x && localPos[0] <= r.x + r.w && localPos[1] >= r.y && localPos[1] <= r.y + r.h;
-    if (!inside || r.w <= 0) {
-        if (state.hovering) {
-            state.hovering = false;
-            node.setDirtyCanvas?.(true, false);
-        }
-        return false;
-    }
-
-    const split = (localPos[0] - r.x) / r.w;
-    const clamped = Math.max(0, Math.min(1, split));
-    let dirty = false;
-    if (!state.hovering) {
-        state.hovering = true;
-        dirty = true;
-    }
-    if (Math.abs(clamped - state.split) > 0.001) {
-        state.split = clamped;
-        dirty = true;
-    }
-    if (dirty) {
-        node.setDirtyCanvas?.(true, false);
-    }
-
-    return true;
+function setResults(node, payload) {
+    const fb = node._fb;
+    fb.saved = flatImages(payload?.saved_images ?? payload?.images);
+    fb.compare = flatImages(payload?.compare_images);
+    fb.paired = fb.compare.length > 0 && fb.compare.length === fb.saved.length;
+    fb.at = clampIndex(fb.at, fb.saved.length);
+    fb.atCompare = fb.paired ? fb.at : clampIndex(fb.atCompare, fb.compare.length);
+    // A new batch opens on the grid.
+    fb.grid = fb.saved.length > 1;
+    persist(node);
+    fb.card.refresh();
 }
 
-function clickSelectionButton(node, localPos) {
-    const state = ensureCompareState(node);
-
-    // Grid cell selection: pick the clicked image and return to single view.
-    for (const zone of state.gridZones || []) {
-        const hit = localPos[0] >= zone.x && localPos[0] <= zone.x + zone.w && localPos[1] >= zone.y && localPos[1] <= zone.y + zone.h;
-        if (!hit) {
-            continue;
-        }
-        state.selectedSaved = clampIndex(zone.index, state.savedItems.length);
-        if (state.paired && !state.unpaired) {
-            state.selectedCompare = clampIndex(zone.index, state.compareItems.length);
-        }
-        state.gridMode = false;
-        persistCompareData(node, state);
-        node.setDirtyCanvas?.(true, true);
-        return true;
-    }
-
-    for (const zone of state.buttonZones) {
-        const hit = localPos[0] >= zone.x && localPos[0] <= zone.x + zone.w && localPos[1] >= zone.y && localPos[1] <= zone.y + zone.h;
-        if (!hit) {
-            continue;
-        }
-
-        if (zone.type === "gridToggle") {
-            state.gridMode = !state.gridMode;
-            persistCompareData(node, state);
-            node.setDirtyCanvas?.(true, true);
-            return true;
-        }
-
-        if (zone.type === "unpairToggle") {
-            state.unpaired = !state.unpaired;
-            if (!state.unpaired) {
-                state.selectedCompare = clampIndex(state.selectedSaved, state.compareItems.length);
-            }
-            persistCompareData(node, state);
-            node.setDirtyCanvas?.(true, true);
-            return true;
-        }
-
-        if (zone.type === "nav") {
-            if (zone.navTarget === "A") {
-                const len = state.compareItems.length || 1;
-                state.selectedCompare = ((state.selectedCompare + zone.navDir) % len + len) % len;
-            } else {
-                const len = state.savedItems.length || 1;
-                state.selectedSaved = ((state.selectedSaved + zone.navDir) % len + len) % len;
-                if (state.paired && !state.unpaired) {
-                    state.selectedCompare = clampIndex(state.selectedSaved, state.compareItems.length);
-                }
-            }
-            persistCompareData(node, state);
-            node.setDirtyCanvas?.(true, true);
-            return true;
-        }
-
-        if (zone.type === "pair") {
-            const target = clampIndex(zone.index, state.savedItems.length);
-            if (!state.gridMode && target === state.selectedSaved) {
-                state.gridMode = true;
-            } else {
-                state.selectedSaved = target;
-                state.selectedCompare = clampIndex(target, state.compareItems.length);
-                state.gridMode = false;
-            }
-        } else if (zone.type === "A") {
-            const target = clampIndex(zone.index, state.compareItems.length);
-            if (!state.gridMode && target === state.selectedCompare) {
-                state.gridMode = true;
-            } else {
-                state.selectedCompare = target;
-                state.gridMode = false;
-            }
-        } else if (zone.type === "B") {
-            const target = clampIndex(zone.index, state.savedItems.length);
-            if (!state.gridMode && target === state.selectedSaved) {
-                state.gridMode = true;
-            } else {
-                state.selectedSaved = target;
-                if (state.paired && !state.unpaired) {
-                    state.selectedCompare = clampIndex(target, state.compareItems.length);
-                }
-                state.gridMode = false;
-            }
-        }
-
-        if (!node.properties) {
-            node.properties = {};
-        }
-        persistCompareData(node, state);
-
-        node.setDirtyCanvas?.(true, true);
-        return true;
-    }
-
-    return false;
+// The compare image shown against the current saved one.
+function compareItem(node) {
+    const fb = node._fb;
+    if (!fb.compare.length) return null;
+    return fb.compare[fb.paired && !fb.unpaired ? clampIndex(fb.at, fb.compare.length) : fb.atCompare] ?? null;
 }
 
-function stepSelectedImage(node, dir) {
-    const state = ensureCompareState(node);
-    if (state.gridMode) {
-        return false;
-    }
-
-    const usingCompareRow = state.compareItems.length > 0 && !(state.paired && !state.unpaired);
-    if (usingCompareRow) {
-        // In unpaired/A-B view the saved (B) row drives the main image.
-        const len = state.savedItems.length;
-        if (len <= 1) {
-            return false;
+function select(node, which, index) {
+    const fb = node._fb;
+    if (which === "saved") {
+        // The image already shown, clicked again, goes back to the grid.
+        if (index === fb.at && !fb.grid && fb.saved.length > 1) fb.grid = true;
+        else {
+            fb.at = clampIndex(index, fb.saved.length);
+            fb.grid = false;
         }
-        state.selectedSaved = ((state.selectedSaved + dir) % len + len) % len;
     } else {
-        const len = state.savedItems.length;
-        if (len <= 1) {
-            return false;
-        }
-        state.selectedSaved = ((state.selectedSaved + dir) % len + len) % len;
-        if (state.paired && !state.unpaired) {
-            state.selectedCompare = clampIndex(state.selectedSaved, state.compareItems.length);
-        }
+        fb.atCompare = clampIndex(index, fb.compare.length);
+        fb.grid = false;
     }
+    persist(node);
+    fb.card.refresh();
+}
 
-    persistCompareData(node, state);
-    node.setDirtyCanvas?.(true, true);
+function step(node, direction) {
+    const fb = node._fb;
+    if (fb.grid || fb.saved.length < 2) return false;
+    fb.at = (fb.at + direction + fb.saved.length) % fb.saved.length;
+    persist(node);
+    fb.card.refresh();
     return true;
 }
 
-let _fbHoveredSaveImageNode = null;
-let _fbKeyListenerInstalled = false;
+// ---------------------------------------------------------------- settings
 
-function isSaveImageNodeInGraph(node) {
-    if (!node || !app.graph?._nodes) return false;
-    return app.graph._nodes.includes(node);
+// Keep Depth and Color to what the format can store.
+function applyFormat(node) {
+    const options = FORMAT_OPTIONS[findWidget(node, "format")?.value] ?? FORMAT_OPTIONS.png;
+    for (const name of ["bit_depth", "input_color_space"]) {
+        const widget = findWidget(node, name);
+        if (!widget) continue;
+        widget.options.values = [...options[name]];
+        if (!options[name].includes(widget.value)) widget.value = options[name][0];
+    }
 }
 
-function getActiveSaveImageNode(nodeType) {
-    // Hover-only: only react when the cursor is actually over this node.
-    if (_fbHoveredSaveImageNode && !_fbHoveredSaveImageNode.flags?.collapsed && isSaveImageNodeInGraph(_fbHoveredSaveImageNode)) {
-        return _fbHoveredSaveImageNode;
-    }
-    if (_fbHoveredSaveImageNode && !isSaveImageNodeInGraph(_fbHoveredSaveImageNode)) {
-        _fbHoveredSaveImageNode = null;
-    }
-    return null;
+// ---------------------------------------------------------------- panels
+
+// Pick the image shown: a button per image (or ‹ n / N › for many), and
+// for the saved row, Grid and Pair toggles.
+function pickerControl(which) {
+    return (node) => {
+        const fb = node._fb;
+        const field = el("div", "fbnodes-save-picker");
+        const holder = el("div", "fbnodes-save-picker");
+        holder.style.flex = "1";
+        const grid = button("", { icon: ICONS.grid, title: "All images (Esc)", onClick: () => { fb.grid = !fb.grid; persist(node); fb.card.refresh(); } });
+        const pair = button("Pair", { title: "Compare each image with its own Compare image", onClick: () => {
+            fb.unpaired = !fb.unpaired;
+            if (!fb.unpaired) fb.atCompare = clampIndex(fb.at, fb.compare.length);
+            persist(node);
+            fb.card.refresh();
+        } });
+        field.append(holder);
+        if (which === "saved") field.append(pair, grid);
+        let built = "";
+        let seg = null;
+        let where = null;
+        const count = () => (which === "saved" ? fb.saved.length : fb.compare.length);
+        const index = () => (which === "saved" ? fb.at : fb.atCompare);
+        return {
+            element: field,
+            sync() {
+                const n = count();
+                const key = `${n}`;
+                if (key !== built) {
+                    built = key;
+                    holder.replaceChildren();
+                    seg = null;
+                    where = null;
+                    if (n <= MANY) {
+                        seg = segmented(Array.from({ length: n }, (_, i) => ({ value: i, label: String(i + 1) })), { onPick: (i) => select(node, which, i) });
+                        holder.append(seg.root);
+                    } else {
+                        where = el("span", "where");
+                        holder.append(
+                            button("", { icon: ICONS.chevronLeft, onClick: () => select(node, which, (index() - 1 + n) % n) }),
+                            where,
+                            button("", { icon: ICONS.chevronRight, onClick: () => select(node, which, (index() + 1) % n) }),
+                        );
+                    }
+                }
+                const showing = which === "saved" && fb.grid ? -1 : index();
+                seg?.set(showing);
+                if (where) where.textContent = `${index() + 1} / ${n}`;
+                grid.hidden = which !== "saved";
+                grid.classList.toggle("on", fb.grid);
+                pair.hidden = which !== "saved" || !fb.paired;
+                pair.classList.toggle("on", fb.paired && !fb.unpaired);
+            },
+        };
+    };
 }
 
-function findImageAtPosition(node, localPos) {
-    const state = ensureCompareState(node);
-    if (!state.savedItems.length || !state.frameRect) {
-        return null;
-    }
-
-    const frame = state.frameRect;
-    if (localPos[0] < frame.x || localPos[0] > frame.x + frame.w ||
-        localPos[1] < frame.y || localPos[1] > frame.y + frame.h) {
-        return null;
-    }
-
-    // Grid mode: pick the cell under the cursor.
-    if (state.gridMode && state.savedItems.length > 1) {
-        for (const zone of state.gridZones || []) {
-            if (localPos[0] >= zone.x && localPos[0] <= zone.x + zone.w &&
-                localPos[1] >= zone.y && localPos[1] <= zone.y + zone.h) {
-                return state.savedItems[zone.index] || null;
-            }
-        }
-        return null;
-    }
-
-    // Compare split view: left half = compare image (A), right half = saved (B)
-    // when hovering and a compare image exists. Otherwise use selected saved image.
-    const hasCompare = state.compareItems.length > 0;
-    const pairedView = state.paired && !state.unpaired;
-    const compareIndex = pairedView ? clampIndex(state.selectedSaved, state.compareItems.length) : state.selectedCompare;
-
-    if (hasCompare && state.previewRect && state.hovering) {
-        const splitX = state.previewRect.x + clamp(state.split, 0, 1) * state.previewRect.w;
-        if (localPos[0] < splitX && state.compareItems[compareIndex]) {
-            return state.compareItems[compareIndex];
-        }
-    }
-
-    return state.savedItems[state.selectedSaved] || null;
+function showLarge(info) {
+    const img = el("img");
+    img.src = imageUrl(info);
+    img.style.cssText = "display:block;max-width:86vw;max-height:78vh;margin:auto;border-radius:6px";
+    openModal({ title: info.filename, body: img });
 }
 
-function openImageInNewTab(imageInfo) {
-    const url = imageInfoToUrl(imageInfo);
-    if (url) window.open(url, "_blank");
-}
-
-async function copyImageToClipboard(imageInfo) {
-    const url = imageInfoToUrl(imageInfo);
-    if (!url) return;
-
+async function copyImage(info) {
     try {
-        if (typeof ClipboardItem === "undefined" || !navigator.clipboard?.write) {
-            throw new Error("Clipboard image write is not supported in this browser context");
-        }
-        const response = await fetch(url);
-        if (!response.ok) throw new Error(`Fetch failed: ${response.status}`);
+        const response = await fetch(imageUrl(info));
         const blob = await response.blob();
-        const mimeType = blob.type || "image/png";
-        await navigator.clipboard.write([new ClipboardItem({ [mimeType]: blob })]);
+        await navigator.clipboard.write([new ClipboardItem({ [blob.type || "image/png"]: blob })]);
     } catch (error) {
-        console.error("[SaveImagePlus] Failed to copy image:", error);
+        toast(`Could not copy the image: ${error.message}`, { severity: "error" });
     }
 }
 
-function getHoveredImageForContextMenu(node, canvas) {
-    if (!node || !canvas) {
-        return null;
+// The view: the shown image (with the compare image revealed left of the
+// pointer), or the batch as a grid; the size footnote reads fb.shownSize.
+function stagePanel(node) {
+    ensureCss();
+    const fb = node._fb;
+    const stage = el("div", "fbui-stage fbnodes-save");
+    const single = el("div", "single");
+    const main = el("img");
+    const other = el("img");
+    const divider = el("div", "divider");
+    const tagA = el("span", "tag", "A");
+    const tagB = el("span", "tag", "B");
+    tagA.style.left = "8px";
+    tagB.style.right = "8px";
+    single.append(main, other, divider, tagA, tagB);
+    const grid = el("div", "grid");
+    const empty = el("div", "fbui-stage-empty", "Run the workflow to see the saved images");
+    const tools = el("div", "fbui-stage-tools");
+    const large = button("", { icon: ICONS.open, small: true, title: "Open a large preview", onClick: () => fb.saved[fb.at] && showLarge(fb.saved[fb.at]) });
+    tools.append(large);
+    stage.append(single, grid, empty, tools);
+
+    let hoverX = null;
+    let gridKey = "";
+    const naturalSize = (img) => (img.naturalWidth ? [img.naturalWidth, img.naturalHeight] : null);
+
+    function layoutGrid() {
+        const first = grid.firstChild;
+        if (!first?.naturalWidth) return;
+        const fit = bestGrid(fb.saved.length, first.naturalWidth, first.naturalHeight, stage.clientWidth - 12, stage.clientHeight - 12, GRID_GAP);
+        grid.style.gridTemplateColumns = `repeat(${fit.columns}, ${Math.floor(fit.width)}px)`;
+        grid.style.gridTemplateRows = `repeat(${fit.rows}, ${Math.floor(fit.height)}px)`;
     }
 
-    if (LiteGraph.vueNodesMode) {
-        const localPos = ensureCompareState(node).vueLocalPos;
-        return localPos ? findImageAtPosition(node, localPos) : null;
+    function drawCompare() {
+        const item = compareItem(node);
+        const size = naturalSize(main);
+        const show = Boolean(item && size && hoverX !== null && !fb.grid);
+        other.hidden = divider.hidden = tagA.hidden = tagB.hidden = !show;
+        if (!show) return;
+        const rect = fitRect(size[0], size[1], stage.clientWidth, stage.clientHeight, 0);
+        const x = Math.max(rect.x, Math.min(rect.x + rect.width, hoverX));
+        other.style.clipPath = `inset(0 ${stage.clientWidth - x}px 0 0)`;
+        divider.style.left = `${x}px`;
+        divider.style.top = `${rect.y}px`;
+        divider.style.height = `${rect.height}px`;
     }
 
-    const graphPos = canvas.graph_mouse;
-    if (!Array.isArray(graphPos) || graphPos.length < 2) {
-        return null;
-    }
-
-    const nodePos = [graphPos[0] - node.pos[0], graphPos[1] - node.pos[1]];
-    return findImageAtPosition(node, nodePos);
-}
-
-function appendImageContextMenuOptions(node, options, canvas) {
-    if (!node || !Array.isArray(options) || node.flags?.collapsed) {
-        return;
-    }
-
-    const imageInfo = getHoveredImageForContextMenu(node, canvas);
-    if (!imageInfo) {
-        return;
-    }
-
-    // Keep node-level actions, but pin them near the top of Comfy's menu.
-    options.unshift(null);
-    options.unshift({
-        content: "Copy Image",
-        callback: () => {
-            copyImageToClipboard(imageInfo);
-        },
-    });
-    options.unshift({
-        content: "Open Image",
-        callback: () => openImageInNewTab(imageInfo),
-    });
-}
-
-function installKeyNavigation() {
-    if (_fbKeyListenerInstalled) {
-        return;
-    }
-    _fbKeyListenerInstalled = true;
-
-    window.addEventListener("keydown", (event) => {
-        if (event.key !== "ArrowLeft" && event.key !== "ArrowRight" && event.key !== "Escape") {
+    function sync() {
+        const has = fb.saved.length > 0;
+        empty.hidden = has;
+        large.hidden = !has || fb.grid;
+        single.hidden = !has || fb.grid;
+        grid.hidden = !has || !fb.grid;
+        if (!has) {
+            fb.shownSize = null;
             return;
         }
-
-        const target = event.target;
-        if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) {
-            return;
-        }
-
-        const node = getActiveSaveImageNode();
-        if (!node) {
-            return;
-        }
-
-        const state = ensureCompareState(node);
-
-        if (event.key === "Escape") {
-            if (!state.gridMode && state.savedItems.length > 1) {
-                state.gridMode = true;
-                persistCompareData(node, state);
-                node.setDirtyCanvas?.(true, true);
-                event.preventDefault();
-                event.stopPropagation();
+        if (fb.grid) {
+            const key = fb.saved.map((info) => info.filename).join("\n");
+            if (key !== gridKey) {
+                gridKey = key;
+                grid.replaceChildren(...fb.saved.map((info, index) => {
+                    const thumb = el("img");
+                    thumb.src = imageUrl(info);
+                    thumb.draggable = false;
+                    thumb.title = info.filename;
+                    thumb.addEventListener("load", () => { layoutGrid(); fb.card.refresh(); });
+                    thumb.addEventListener("click", () => select(node, "saved", index));
+                    return thumb;
+                }));
             }
-            return;
+            layoutGrid();
+            fb.shownSize = naturalSize(grid.firstChild);
+        } else {
+            const url = imageUrl(fb.saved[fb.at]);
+            if (main.dataset.url !== url) {
+                main.dataset.url = url;
+                main.src = url;
+            }
+            const item = compareItem(node);
+            const otherUrl = item ? imageUrl(item) : "";
+            if (other.dataset.url !== otherUrl) {
+                other.dataset.url = otherUrl;
+                if (otherUrl) other.src = otherUrl;
+            }
+            fb.shownSize = naturalSize(main);
+            drawCompare();
         }
+    }
 
-        if (stepSelectedImage(node, event.key === "ArrowRight" ? 1 : -1)) {
+    main.addEventListener("load", () => fb.card.refresh());
+    stage.addEventListener("pointermove", (event) => {
+        const box = stage.getBoundingClientRect();
+        hoverX = ((event.clientX - box.left) / Math.max(1, box.width)) * stage.clientWidth;
+        drawCompare();
+    });
+    stage.addEventListener("pointerleave", () => {
+        hoverX = null;
+        drawCompare();
+    });
+    stage.addEventListener("contextmenu", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const info = fb.grid ? fb.saved[[...grid.children].indexOf(event.target)] : fb.saved[fb.at];
+        if (!info) return;
+        const against = fb.grid ? null : compareItem(node);
+        openMenu(event.clientX, event.clientY, [
+            { label: "Open image", action: () => window.open(imageUrl(info), "_blank") },
+            { label: "Copy image", action: () => copyImage(info) },
+            { label: "Open large preview", action: () => showLarge(info) },
+            ...(against ? [{ label: "Open compare image", action: () => window.open(imageUrl(against), "_blank") }] : []),
+        ]);
+    });
+    new ResizeObserver(() => {
+        if (fb.grid) layoutGrid();
+        else drawCompare();
+    }).observe(stage);
+
+    return { element: stage, sync };
+}
+
+function captionPanel(node) {
+    const fb = node._fb;
+    const caption = el("div", "fbui-caption");
+    return {
+        element: caption,
+        sync() {
+            const size = fb.shownSize;
+            const count = fb.saved.length;
+            if (!size) {
+                caption.textContent = "—";
+                return;
+            }
+            caption.textContent = `${size[0]} × ${size[1]}${fb.grid && count > 1 ? ` · ${count} images` : ""}`;
+        },
+    };
+}
+
+// ---------------------------------------------------------------- node
+
+// ← / → step through a batch and Esc shows them all, while hovering the node.
+let hovered = null;
+function installKeys() {
+    window.addEventListener("keydown", (event) => {
+        if (event.defaultPrevented || event.ctrlKey || event.altKey || event.metaKey) return;
+        if (/^(INPUT|TEXTAREA|SELECT)$/.test(event.target?.tagName ?? "") || event.target?.isContentEditable) return;
+        const node = hovered?.graph && !hovered.flags?.collapsed ? hovered : null;
+        if (!node) return;
+        const fb = node._fb;
+        let handled = false;
+        if (event.key === "ArrowLeft" || event.key === "ArrowRight") handled = step(node, event.key === "ArrowRight" ? 1 : -1);
+        else if (event.key === "Escape" && !fb.grid && fb.saved.length > 1) {
+            fb.grid = true;
+            persist(node);
+            fb.card.refresh();
+            handled = true;
+        }
+        if (handled) {
             event.preventDefault();
             event.stopPropagation();
         }
     }, true);
 }
 
+// Results that arrive while the node's workflow is not open are kept here
+// and shown when it is.
+const lastResults = new Map();
+
+function setupNode(node) {
+    node.properties ??= {};
+    suppressCorePreview(node);
+    const fb = { saved: [], compare: [], paired: false, unpaired: false, grid: false, at: 0, atCompare: 0, shownSize: null };
+    node._fb = fb;
+    restore(node);
+    applyFormat(node);
+    chainCallback(findWidget(node, "format"), "callback", () => {
+        applyFormat(node);
+        fb.card.refresh();
+    });
+
+    const saving = (values) => values.save !== false;
+    fb.card = mountCard(node, {
+        minWidth: MIN_WIDTH,
+        rows: [
+            { widget: "filename_prefix", label: "Prefix", kind: "text" },
+            { widget: "save", label: "Save", offText: "preview only", onText: "save" },
+            { widget: "format", label: "Format", kind: "segment", labels: { png: "PNG", exr: "EXR", avif: "AVIF" }, when: saving },
+            { widget: "review", label: "Review", when: saving },
+            { pair: ["review_timeout", "on_timeout"], label: "Timeout", suffix: "s", when: (values) => saving(values) && values.review },
+            { group: "more", label: "More", when: saving },
+            { widget: "bit_depth", label: "Depth", kind: "segment", group: "more", when: saving },
+            { widget: "input_color_space", label: "Color", kind: "segment", group: "more", when: saving },
+            { widget: "crf", label: "CRF", group: "more", when: (values) => saving(values) && values.format === "avif" },
+            { label: "Image", control: pickerControl("saved"), when: (_values, n) => n._fb.saved.length > 1 },
+            { label: "Compare", control: pickerControl("compare"), when: (_values, n) => n._fb.compare.length > 1 && (!n._fb.paired || n._fb.unpaired) },
+            { panel: stagePanel, grow: true, height: STAGE_MIN_HEIGHT },
+            { panel: captionPanel, height: CAPTION_HEIGHT },
+        ],
+    });
+
+    const card = fb.card.root;
+    card.addEventListener("pointerenter", () => { hovered = node; });
+    card.addEventListener("pointerleave", () => { if (hovered === node) hovered = null; });
+    chainCallback(node, "onRemoved", () => { if (hovered === node) hovered = null; });
+
+    chainCallback(node, "onExecuted", (message) => setResults(node, message));
+    chainCallback(node, "onConfigure", () => {
+        restore(node);
+        applyFormat(node);
+        const kept = lastResults.get(String(node.id));
+        if (kept) setResults(node, kept);
+        else fb.card.refresh();
+    });
+}
+
 app.registerExtension({
     name: "FBnodes.SaveImagePlus",
+    setup() {
+        installKeys();
+        api.addEventListener("executed", (event) => {
+            const { node, output } = event.detail ?? {};
+            if (node != null && (output?.saved_images?.length || output?.compare_images?.length)) lastResults.set(String(node), output);
+        });
+    },
     beforeRegisterNodeDef(nodeType, nodeData) {
-        if (nodeData?.name !== "SaveImagePlus") {
-            return;
-        }
-
-        const onNodeCreated = nodeType.prototype.onNodeCreated;
-        nodeType.prototype.onNodeCreated = function () {
-            const result = onNodeCreated?.apply(this, arguments);
-            const node = this;
-
-            // Review's timer settings only show while review is on.
-            const reviewWidget = this.widgets?.find((w) => w?.name === "review");
-            if (reviewWidget) {
-                const reviewCallback = reviewWidget.callback;
-                reviewWidget.callback = function () {
-                    reviewCallback?.apply(this, arguments);
-                    applySaveImageControls(node);
-                    ensureMinDisplaySize(node);
-                };
-            }
-
-            const formatWidget = this.widgets?.find((w) => w?.name === "format");
-            if (formatWidget && !formatWidget._fbnodesSaveImagePlusWrapped) {
-                const originalCallback = formatWidget.callback;
-                formatWidget.callback = function () {
-                    originalCallback?.apply(this, arguments);
-                    applySaveImageControls(node);
-                    ensureMinDisplaySize(node);
-                };
-                formatWidget._fbnodesSaveImagePlusWrapped = true;
-            }
-
-            ensureCompareState(this);
-            this.imgs = [];
-            // Only read by Nodes 2.0: our view replaces core's output preview there.
-            this.hideOutputImages = true;
-            ensureControlsToggleWidget(this);
-            ensureVueView(this);
-            installKeyNavigation();
-            installExecutedSync();
-            restoreFromExecutedCache(this);
-            ensureMinDisplaySize(this);
-            return result;
-        };
-
-        const getExtraMenuOptions = nodeType.prototype.getExtraMenuOptions;
-        nodeType.prototype.getExtraMenuOptions = function (canvas, options) {
-            const result = getExtraMenuOptions?.apply(this, arguments);
-            appendImageContextMenuOptions(this, options, canvas);
-            return result;
-        };
-
-        const onConfigure = nodeType.prototype.onConfigure;
-        nodeType.prototype.onConfigure = function () {
-            const result = onConfigure?.apply(this, arguments);
-            const state = ensureCompareState(this);
-
-            if (!this.properties) {
-                this.properties = {};
-            }
-            restoreCompareData(this, state);
-
-            this.imgs = [];
-            ensureControlsToggleWidget(this, { skipSize: true });
-            restoreFromExecutedCache(this);
-            ensureMinDisplaySize(this);
-            return result;
-        };
-
-        const onExecuted = nodeType.prototype.onExecuted;
-        nodeType.prototype.onExecuted = function (message) {
-            const result = onExecuted?.apply(this, arguments);
-
-            const payload = extractSavePayload(message || {});
-            setResultData(this, payload);
-            if (this.id !== undefined && this.id !== null) {
-                _fbSaveImageExecutedCache.set(String(this.id), payload);
-            }
-            const state = ensureCompareState(this);
-
-            if (!this.properties) {
-                this.properties = {};
-            }
-            this.properties._saveCompareSavedIndex = state.selectedSaved;
-            this.properties._saveCompareCompareIndex = state.selectedCompare;
-
-            this.imgs = [];
-            this.setDirtyCanvas?.(true, true);
-            return result;
-        };
-
-        const onDrawForeground = nodeType.prototype.onDrawForeground;
-        nodeType.prototype.onDrawForeground = function (ctx) {
-            const result = onDrawForeground?.apply(this, arguments);
-            drawCompareSafely(ctx, this);
-            return result;
-        };
-
-        const onMouseMove = nodeType.prototype.onMouseMove;
-        nodeType.prototype.onMouseMove = function (event, localPos, canvas) {
-            const result = onMouseMove?.apply(this, arguments);
-            _fbHoveredSaveImageNode = this;
-            const handled = handlePointer(this, localPos);
-            if (canvas?.canvas) {
-                canvas.canvas.style.cursor = handled ? "ew-resize" : "";
-            }
-            return result;
-        };
-
-        const onMouseEnter = nodeType.prototype.onMouseEnter;
-        nodeType.prototype.onMouseEnter = function () {
-            _fbHoveredSaveImageNode = this;
-            return onMouseEnter?.apply(this, arguments);
-        };
-
-        const onMouseDown = nodeType.prototype.onMouseDown;
-        nodeType.prototype.onMouseDown = function (event, localPos, canvas) {
-            if (clickSelectionButton(this, localPos)) {
-                return true;
-            }
-            return onMouseDown?.apply(this, arguments);
-        };
-
-        const onMouseLeave = nodeType.prototype.onMouseLeave;
-        nodeType.prototype.onMouseLeave = function () {
-            const result = onMouseLeave?.apply(this, arguments);
-            const state = ensureCompareState(this);
-            if (_fbHoveredSaveImageNode === this) {
-                _fbHoveredSaveImageNode = null;
-            }
-            if (state.hovering) {
-                state.hovering = false;
-                this.setDirtyCanvas?.(true, false);
-            }
-            return result;
-        };
+        if (nodeData.name !== NODE_NAME) return;
+        hideInputsInDef(nodeData, [
+            "filename_prefix", "save", "format", "bit_depth", "input_color_space", "crf", "review", "review_timeout", "on_timeout",
+        ]);
+        chainCallback(nodeType.prototype, "onNodeCreated", function () {
+            setupNode(this);
+        });
     },
 });

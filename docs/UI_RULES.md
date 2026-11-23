@@ -29,6 +29,13 @@ These rules apply to FBnodes, Prompt Manager and H3RefModPicker. Each pack ships
 - **Spacing.** Keep the kit's spacing; don't squeeze rows. Buttons in a row with a label use icon-only squares (Browse, flips) so the main control keeps its width.
 - Overlays drawn on a picture (crop outline, guides) are dotted while their tool is active.
 
+## Review screens
+A run that pauses for a choice (Save Image+ review; Video Review next) uses the same screen:
+- It is full screen. The media fill the space as large as possible (`bestGrid` in `js/common/grid_math.mjs`).
+- A small floating panel holds the node's name, the pick count, the timer pill with its bar, and two buttons: **Send** (the picked ones; none picked sends none) and **Skip**.
+- A click picks. Space shows one item at full size (←/→ to step, Space or Esc back), and Enter sends.
+- Picking pauses the timer. A queue cancel ends the wait at once.
+
 ## Workflow compatibility
 - Never rename, reorder or remove Python inputs. Append new inputs at the end.
 - Widgets added in JS must have `serialize = false`. The frontend skips them when saving `widgets_values`, so adding or removing them never shifts saved values.
