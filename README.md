@@ -54,8 +54,8 @@ Audio loader with the same file browser and UX as Load Image+/Video+, plus in/ou
 - **Trim timeline**: Draggable in/out handles with playhead, scrubbing, and clip looping
 - **Outputs**: `AUDIO` (trimmed) and `duration` (seconds)
 
-### LTX Review
-Review gate node for 2-pass LTX-style workflows. It pauses execution, decodes video/audio latents internally, opens a review popup with playback, and continues only when you proceed (or timeout policy allows it).
+### Video Review
+Review gate node for 2-pass video workflows (formerly LTX Review). It pauses execution, decodes video/audio latents internally, opens a review popup with playback, and continues only when you proceed (or timeout policy allows it).
 
 - **Inputs**: `video_latent`, `audio_latent`, `video_vae`, `audio_vae`, `fps`, `timeout`, `on_timeout`, `enable`
 - **Popup controls**: Proceed, Cancel, Requeue
@@ -63,15 +63,11 @@ Review gate node for 2-pass LTX-style workflows. It pauses execution, decodes vi
 - **Timeout behavior**: Auto-proceeds or auto-cancels based on `on_timeout`
 - **Enable switch**: When OFF, passes through latents immediately and skips both VAE decodes/review popup
 - **Preview passthrough when disabled**: Optional `preview_video` preserves `review_path` output for preview workflows without running decode
-- **Outputs**: `video_latent`, `audio_latent`, `review_path`
+- **Outputs**: `video_latent`, `audio_latent`, `review_path`, `video`
 - **review_path**: Path to the generated temp preview clip
+- **video**: The review clip; plug it into **Save Video+** with Save off to show it on the canvas (no re-encode). It is a quick H.264 copy, so save final videos from the latents.
 
-### LTX Review Preview
-Minimal companion preview node for displaying a video from a path, useful with `LTX Review`'s `review_path` output.
-
-- **Input**: `review_path` (supports absolute paths and optional `[input]/[output]/[temp]` annotations)
-- **Behavior**: Resolves the path and displays the video preview when executed
-- **No pass-through outputs**: This node is display-only
+LTX Review Preview is now legacy: use Save Video+ on the `video` output instead.
 
 ### Load Checkpoint+
 Checkpoint loader with a searchable, grouped dropdown designed for large model libraries.
@@ -185,7 +181,7 @@ Place models in `/models/diffusion_models/` or `/models/unet` if GGUF
 </details>
 
 ### Load Latent File
-Load a `.latent` file saved by Save Video+. Companion node for video+latent workflows.
+Load a `.latent` file saved by Save Video+, LTX audio/video latents included (Load LTX Latent File is now legacy). Companion node for video+latent workflows.
 
 ### Get Video Components+
 Memory-efficient video inspector/extractor for VIDEO inputs.
@@ -205,8 +201,8 @@ Universal switch with up to 10 named inputs. True lazy evaluation — only the s
 - Dynamic input count (1-10)
 - Names display on input slots
 
-### Switch Any (Boolean)
-Boolean switch — passes through `on_true` or `on_false` based on a condition toggle. Only the active branch is evaluated.
+### If/Else Switch+
+Boolean switch — passes through `on_true` or `on_false` based on a condition toggle. Only the active branch is evaluated. Like the core If/Else Switch, plus a `bool` output passing the condition on.
 
 - Uses a normal boolean `condition` input
 

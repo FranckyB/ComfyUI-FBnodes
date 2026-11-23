@@ -13,7 +13,6 @@ import av
 import json
 import math
 import torch
-import hashlib
 import safetensors.torch
 import folder_paths
 import comfy.utils
@@ -73,6 +72,19 @@ def _native_metadata(metadata_dict: dict) -> dict:
                 pass
         decoded[key] = value
     return decoded
+
+
+def _temp_preview_path(filename_prefix: str) -> str:
+    """Where a preview (Save off) goes: the name after the last /, in temp,
+    then _00001, _00002 … when taken."""
+    temp_dir = folder_paths.get_temp_directory()
+    base_filename = os.path.basename(filename_prefix)
+    file = f"{base_filename}.mp4"
+    if os.path.exists(os.path.join(temp_dir, file)):
+        pattern = re.compile(rf"^{re.escape(base_filename)}_?(\d+)\.mp4$")
+        existing_counters = [int(match.group(1)) for match in map(pattern.match, os.listdir(temp_dir)) if match]
+        file = f"{base_filename}_{max(existing_counters, default=0) + 1:05}.mp4"
+    return os.path.join(temp_dir, file)
 
 
 def _browser_playable(path: str) -> bool:
@@ -537,6 +549,30 @@ class SaveVideoPlus:
         return patched
 
     def save_video(self, video, filename_prefix, codec, chroma, crf, save, save_latent, browser_compat=True, auto_play=True, latent=None, metadata=None, prompt=None, extra_pnginfo=None, exec_start="", custom_encoding=False):
+        # Nothing came in (e.g. Video Review with review off).
+        if video is None:
+            return {"ui": {}, "result": ("",)}
+
+        width, height = video.get_dimensions()
+        filename_prefix = expand_name_tokens(filename_prefix, width, height, exec_start)
+
+        # Preview of a video that is already encoded and plays in the browser:
+        # its streams are copied to temp as they are, no frames decoded.
+        if not save and not isinstance(video, InputImpl.VideoFromComponents):
+            file_path = _temp_preview_path(filename_prefix)
+            video.save_to(file_path)
+            if _browser_playable(file_path):
+                _log(f"Preview without encoding: {file_path}")
+                return {
+                    "ui": {
+                        "images": [{"filename": os.path.basename(file_path), "subfolder": "", "type": "temp"}],
+                        "animated": (True,),
+                        "saved_video_path": (file_path,),
+                        "needs_external_player": (False,),
+                    },
+                    "result": (file_path,),
+                }
+            os.remove(file_path)
 
         # Bit depth determined by codec: h264=8-bit, h265=10-bit
         is_10bit = (codec == "h265")
@@ -547,31 +583,13 @@ class SaveVideoPlus:
         audio = components.audio
         frame_rate = components.frame_rate
 
-        # Get dimensions
-        width, height = video.get_dimensions()
-        filename_prefix = expand_name_tokens(filename_prefix, width, height, exec_start)
-
         native = save and not custom_encoding
         ext, native_crf = _native_target(video) if native else ("mp4", None)
 
         # Preview mode: save to temp with fast encoding
         if not save:
-            temp_dir = folder_paths.get_temp_directory()
-            # Use filename without subfolders, add counter if needed
-            base_filename = os.path.basename(filename_prefix)
-            file = f"{base_filename}.mp4"
-            file_path_test = os.path.join(temp_dir, file)
-            if os.path.exists(file_path_test):
-                # Find next available counter
-                pattern = re.compile(rf"^{re.escape(base_filename)}_?(\d+)\.mp4$")
-                existing_counters = []
-                for f in os.listdir(temp_dir):
-                    match = pattern.match(f)
-                    if match:
-                        existing_counters.append(int(match.group(1)))
-                next_counter = max(existing_counters, default=0) + 1
-                file = f"{base_filename}_{next_counter:05}.mp4"
-            file_path = os.path.join(temp_dir, file)
+            file_path = _temp_preview_path(filename_prefix)
+            file = os.path.basename(file_path)
             subfolder = ""
             output_type = "temp"
             # Override to fast settings for preview
@@ -1042,7 +1060,7 @@ class LoadLatentFile:
             "required": {
                 "file_path": ("STRING", {
                     "default": "",
-                    "tooltip": "Path to the .latent file to load."
+                    "tooltip": "Path to the .latent file to load (LTX audio/video latents included)."
                 })
             }
         }
@@ -1062,52 +1080,24 @@ class LoadLatentFile:
         samples = _latent_from_file_tensors(latent)
         return (samples,)
 
-
-class LoadLTXLatentFile:
-    """
-    Load a latent from a file, preserving additional tensor fields used by LTX
-    workflows (e.g. separate audio/video latent tensors).
-    """
-
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "required": {
-                "file_path": ("STRING", {
-                    "default": "",
-                    "tooltip": "Path to the .latent file to load. Supports LTX-style latent payloads."
-                })
-            }
-        }
-
-    RETURN_TYPES = ("LATENT",)
-    FUNCTION = "load"
-    CATEGORY = "FBnodes"
-    DESCRIPTION = "Load an LTX latent from a file, preserving extra latent tensors (audio/video)."
-
-    def load(self, file_path):
-        if not file_path or not os.path.exists(file_path):
-            raise FileNotFoundError(f"Latent file not found: {file_path}")
-
-        latent_data = safetensors.torch.load_file(file_path, device="cpu")
-        return (_latent_from_file_tensors(latent_data),)
-
     @classmethod
     def IS_CHANGED(cls, file_path):
         if not file_path or not os.path.exists(file_path):
             return ""
-        m = hashlib.sha256()
-        with open(file_path, 'rb') as f:
-            m.update(f.read())
-        return m.digest().hex()
+        return os.path.getmtime(file_path)
 
     @classmethod
     def VALIDATE_INPUTS(cls, file_path):
-        if not file_path:
-            return True
-        if not os.path.exists(file_path):
+        if file_path and not os.path.exists(file_path):
             return f"Latent file not found: {file_path}"
         return True
+
+
+class LoadLTXLatentFile(LoadLatentFile):
+    """Kept for older workflows: Load Latent File keeps the LTX audio/video
+    tensors too."""
+
+    DEPRECATED = True
 
 
 class MonoToStereo:

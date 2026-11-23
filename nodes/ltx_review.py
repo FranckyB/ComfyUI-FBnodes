@@ -24,6 +24,7 @@ import torch
 import folder_paths
 import server
 from comfy.model_management import InterruptProcessingException
+from comfy_api.input_impl import VideoFromFile
 
 
 _REVIEW_LOCK = threading.Lock()
@@ -297,11 +298,17 @@ class LTXReview:
             },
         }
 
-    RETURN_TYPES = ("LATENT", "LATENT", "STRING")
-    RETURN_NAMES = ("video_latent", "audio_latent", "review_path")
+    RETURN_TYPES = ("LATENT", "LATENT", "STRING", "VIDEO")
+    RETURN_NAMES = ("video_latent", "audio_latent", "review_path", "video")
+    OUTPUT_TOOLTIPS = (
+        "The video latent, unchanged.",
+        "The audio latent, unchanged.",
+        "Path of the review clip.",
+        "The review clip (a quick H.264 copy, not for final saves); plug it into Save Video+ with Save off to show it. Nothing when enable is off.",
+    )
     FUNCTION = "review"
     CATEGORY = "FBnodes"
-    DESCRIPTION = "Pause for user review of an LTX pass. Decodes video/audio latents with VAEs and generates review clip internally, then proceed/cancel while preserving latents."
+    DESCRIPTION = "Pause to review a video pass. Decodes the video/audio latents with the VAEs into a review clip, then proceed or cancel while keeping the latents."
 
     def review(self, video_latent, audio_latent, video_vae, audio_vae, fps=24.0, timeout=120, on_timeout="proceed", enable=True, unique_id=None, extra_pnginfo=None):
         review_metadata = _build_review_metadata(extra_pnginfo)
@@ -323,7 +330,7 @@ class LTXReview:
             ui = {
                 "ltx_review_video_path": [passthrough_path],
             }
-            return {"ui": ui, "result": (video_latent, audio_latent, passthrough_path)}
+            return {"ui": ui, "result": (video_latent, audio_latent, passthrough_path, None)}
 
         review_video_url = None
         review_clip_path = ""
@@ -392,7 +399,7 @@ class LTXReview:
             "ltx_review_video_path": [review_clip_path],
         }
 
-        return {"ui": ui, "result": (video_latent, audio_latent, review_clip_path)}
+        return {"ui": ui, "result": (video_latent, audio_latent, review_clip_path, VideoFromFile(review_clip_path))}
 
 
 def _parse_path_annotation(path_value: str) -> tuple[str, str | None]:
@@ -496,7 +503,8 @@ class LTXReviewPreview:
     FUNCTION = "preview"
     OUTPUT_NODE = True
     CATEGORY = "FBnodes"
-    DESCRIPTION = "Display a video from review_path input."
+    DESCRIPTION = "Display a video from review_path input. Use Save Video+ with Save off on Video Review's video output instead."
+    DEPRECATED = True
 
     def preview(self, review_path=""):
         if isinstance(review_path, (list, tuple)):

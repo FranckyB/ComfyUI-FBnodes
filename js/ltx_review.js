@@ -198,7 +198,7 @@ function buildDialog(detail) {
     header.style.background = "linear-gradient(180deg, #1a2230, #151b24)";
 
     const title = document.createElement("div");
-    title.textContent = "LTX Review";
+    title.textContent = "Video Review";
     title.style.color = "#e8eef9";
     title.style.font = "700 18px 'Segoe UI', sans-serif";
 

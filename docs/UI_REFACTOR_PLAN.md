@@ -111,7 +111,7 @@ The three packs grew independently and each node builds its UI differently. Some
 **Phase 4: lists and the rest**
 - Merge the Clip Stitcher and VACE Stitcher list UI into `js/common/clip_list.js`.
 - LoRA List+ uses `file_browser.js` instead of its own second modal.
-- Convert the LTX Review modal, Show Text and Switch Any.
+- Convert the Video Review (was LTX Review) modal to the Save Image+ review style, Show Text and Switch Any.
 - Give the native-only nodes (Load Models+, VACE Options, Apply LoRA+) card faces for uniformity; the colour already applies from Phase 0.
 
 **Phase 5: shared modals**
