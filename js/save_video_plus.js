@@ -96,7 +96,7 @@ async function openInPlayer(node) {
 function stagePanel(node) {
     const fb = node._fb;
     const stage = el("div", "fbui-stage");
-    const empty = el("div", "fbui-stage-empty", "Run the workflow to see the saved video");
+    const empty = el("div", "fbui-stage-empty");
     const tools = el("div", "fbui-stage-tools");
     const player = button("", { icon: ICONS.open, small: true, title: "Open in the system player", onClick: () => openInPlayer(node) });
     tools.append(player);
@@ -110,27 +110,41 @@ function stagePanel(node) {
     let media = null;
 
     // A still of the saved file (decoded by the backend) for a clip the
-    // browser cannot play.
+    // browser cannot play. A file that is gone (temp is cleared when ComfyUI
+    // restarts) says so instead of showing a broken picture.
     const showStill = (result) => {
         media?.remove();
-        media = el("img");
-        media.draggable = false;
-        media.src = api.apiURL(`/fbnodes/video-frame?${new URLSearchParams({ filename: result.path, position: "0" })}`);
-        media.addEventListener("load", () => {
-            fb.size = [media.naturalWidth, media.naturalHeight];
+        const still = el("img");
+        media = still;
+        still.draggable = false;
+        still.src = api.apiURL(`/fbnodes/video-frame?${new URLSearchParams({ filename: result.path, position: "0" })}`);
+        still.addEventListener("load", () => {
+            fb.size = [still.naturalWidth, still.naturalHeight];
             fb.card.refresh();
         });
-        stage.prepend(media);
+        still.addEventListener("error", () => {
+            if (media !== still) return;
+            still.remove();
+            media = null;
+            notice.remove();
+            fb.gone = true;
+            empty.textContent = "This video is no longer available";
+            empty.hidden = false;
+            fb.card.refresh();
+        });
+        stage.prepend(still);
         stage.append(notice);
     };
 
     fb.show = (result, { fresh = false } = {}) => {
         fb.result = result;
+        fb.gone = false;
         fb.size = null;
         fb.duration = 0;
         media?.remove();
         media = null;
         notice.remove();
+        empty.textContent = "Run the workflow to see the saved video";
         empty.hidden = Boolean(result);
         if (result) {
             const url = viewUrl(result);
@@ -163,7 +177,7 @@ function stagePanel(node) {
     return {
         element: stage,
         sync() {
-            player.hidden = !fb.result;
+            player.hidden = !fb.result || fb.gone;
         },
     };
 }
@@ -192,7 +206,7 @@ const lastResults = new Map();
 function setupNode(node) {
     node.properties ??= {};
     suppressCorePreview(node);
-    const fb = { result: null, size: null, duration: 0 };
+    const fb = { result: null, gone: false, size: null, duration: 0 };
     node._fb = fb;
 
     // The last result, saved with the workflow; created last so it stays the

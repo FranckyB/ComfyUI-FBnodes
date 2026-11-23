@@ -270,7 +270,7 @@ function stagePanel(node) {
     const canvas = el("canvas");
     single.append(canvas);
     const grid = el("div", "grid");
-    const empty = el("div", "fbui-stage-empty", "Run the workflow to see the saved images");
+    const empty = el("div", "fbui-stage-empty");
     const tools = el("div", "fbui-stage-tools");
     const large = button("", { icon: ICONS.open, small: true, title: "Open a large preview", onClick: () => fb.saved[fb.at] && showLarge(node, fb.saved[fb.at]) });
     tools.append(large);
@@ -278,6 +278,9 @@ function stagePanel(node) {
 
     const main = new Image();
     const other = new Image();
+    // Temp files are cleared when ComfyUI restarts, so a reloaded result can
+    // point at files that are gone: those are left out, never shown broken.
+    let mainLost = false;
     let hoverX = null;
     let gridKey = "";
     let frame = 0;
@@ -288,7 +291,7 @@ function stagePanel(node) {
     function layoutGrid() {
         const first = grid.firstChild;
         if (!first?.naturalWidth) return;
-        const fit = bestGrid(fb.saved.length, first.naturalWidth, first.naturalHeight, stage.clientWidth - 12, stage.clientHeight - 12, GRID_GAP);
+        const fit = bestGrid(grid.childElementCount, first.naturalWidth, first.naturalHeight, stage.clientWidth - 12, stage.clientHeight - 12, GRID_GAP);
         grid.style.gridTemplateColumns = `repeat(${fit.columns}, ${Math.floor(fit.width)}px)`;
         grid.style.gridTemplateRows = `repeat(${fit.rows}, ${Math.floor(fit.height)}px)`;
     }
@@ -351,14 +354,19 @@ function stagePanel(node) {
         if (!frame) frame = requestAnimationFrame(draw);
     };
 
+    const showEmpty = (text) => {
+        empty.textContent = text;
+        empty.hidden = !text;
+    };
+
     function sync() {
         const has = fb.saved.length > 0;
-        empty.hidden = has;
         large.hidden = !has || fb.grid;
         single.hidden = !has || fb.grid;
         grid.hidden = !has || !fb.grid;
         if (!has) {
             fb.shownSize = null;
+            showEmpty("Run the workflow to see the saved images");
             return;
         }
         if (fb.grid) {
@@ -371,16 +379,19 @@ function stagePanel(node) {
                     thumb.draggable = false;
                     thumb.title = info.filename;
                     thumb.addEventListener("load", () => { layoutGrid(); fb.card.refresh(); });
+                    thumb.addEventListener("error", () => { thumb.remove(); layoutGrid(); fb.card.refresh(); });
                     thumb.addEventListener("click", () => select(node, "saved", index));
                     return thumb;
                 }));
             }
             layoutGrid();
             fb.shownSize = naturalSize(grid.firstChild);
+            showEmpty(grid.childElementCount ? "" : "These images are no longer available");
         } else {
             const url = imageUrl(fb.saved[fb.at]);
             if (main.dataset.url !== url) {
                 main.dataset.url = url;
+                mainLost = false;
                 main.src = url;
             }
             const item = compareItem(node);
@@ -391,11 +402,18 @@ function stagePanel(node) {
                 else other.removeAttribute("src");
             }
             fb.shownSize = naturalSize(main);
+            large.hidden = mainLost;
+            showEmpty(mainLost ? "This image is no longer available" : "");
             redraw();
         }
     }
 
     main.addEventListener("load", () => fb.card.refresh());
+    main.addEventListener("error", () => {
+        mainLost = true;
+        canvas.getContext("2d").clearRect(0, 0, canvas.width, canvas.height);
+        fb.card.refresh();
+    });
     other.addEventListener("load", redraw);
     stage.addEventListener("pointermove", (event) => {
         const box = stage.getBoundingClientRect();
