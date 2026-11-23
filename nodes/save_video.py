@@ -50,7 +50,7 @@ def _log(message: str):
 
 
 def _native_target(video) -> tuple[str, int | None]:
-    """Auto saves through ComfyUI's own encoder, which honours Create Video's
+    """Custom encoding off saves through ComfyUI's own encoder, which honours Create Video's
     bit depth, color space, chroma and codec. Returns the extension and CRF:
     unencoded video gets CRF 16 (H.264, 4:2:0 unless set); an encoded one
     keeps its stream, in a .mov when it is ProRes."""
@@ -462,9 +462,9 @@ class SaveVideoPlus:
                     "default": "",
                     "tooltip": "Unix timestamp stamped by the UI when Execute is pressed. Enables %time% in filename_prefix (workflow generation seconds, excluding save/encode)."
                 }),
-                "auto": ("BOOLEAN", {
-                    "default": False,
-                    "tooltip": "Save with ComfyUI's own encoder, using the incoming video's settings (Create Video's bit depth, color space, chroma and codec). Not set there: h264, yuv420, CRF 16."
+                "custom_encoding": ("BOOLEAN", {
+                    "default": True,
+                    "tooltip": "On: encode with codec, chroma and crf above.\nOff: save with ComfyUI's own encoder, using the incoming video's settings (Create Video's bit depth, color space, chroma and codec). Not set there: h264, yuv420, CRF 16."
                 }),
             },
             "hidden": {
@@ -536,7 +536,7 @@ class SaveVideoPlus:
 
         return patched
 
-    def save_video(self, video, filename_prefix, codec, chroma, crf, save, save_latent, browser_compat=True, auto_play=True, latent=None, metadata=None, prompt=None, extra_pnginfo=None, exec_start="", auto=False):
+    def save_video(self, video, filename_prefix, codec, chroma, crf, save, save_latent, browser_compat=True, auto_play=True, latent=None, metadata=None, prompt=None, extra_pnginfo=None, exec_start="", custom_encoding=True):
 
         # Bit depth determined by codec: h264=8-bit, h265=10-bit
         is_10bit = (codec == "h265")
@@ -551,7 +551,7 @@ class SaveVideoPlus:
         width, height = video.get_dimensions()
         filename_prefix = expand_name_tokens(filename_prefix, width, height, exec_start)
 
-        native = auto and save
+        native = save and not custom_encoding
         ext, native_crf = _native_target(video) if native else ("mp4", None)
 
         # Preview mode: save to temp with fast encoding

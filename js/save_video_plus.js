@@ -206,19 +206,19 @@ function setupNode(node) {
     hideWidget(findWidget(node, "exec_start"));
 
     const saving = (values) => values.save !== false;
-    const manual = (values) => saving(values) && !values.auto;
+    const custom = (values) => saving(values) && values.custom_encoding !== false;
     fb.card = mountCard(node, {
         minWidth: MIN_WIDTH,
         rows: [
             { group: "options", label: "Options" },
             { widget: "filename_prefix", label: "Filename", kind: "text", info: FILENAME_HELP, group: "options" },
             { widget: "save", label: "Save", offText: "preview only", onText: "save", group: "options" },
-            { widget: "auto", label: "Auto", offText: "off", onText: "from video", group: "options", when: saving },
-            { widget: "codec", label: "Codec", kind: "segment", labels: { h264: "H.264", h265: "H.265" }, group: "options", when: manual },
-            { widget: "chroma", label: "Chroma", kind: "segment", labels: { yuv420: "4:2:0", yuv422: "4:2:2", yuv444: "4:4:4" }, group: "options", when: manual },
-            { widget: "crf", label: "CRF", group: "options", when: manual },
+            { widget: "custom_encoding", label: "Encoding", offText: "from video", onText: "custom", group: "options", when: saving },
+            { widget: "codec", label: "Codec", kind: "segment", labels: { h264: "H.264", h265: "H.265" }, group: "options", when: custom },
+            { widget: "chroma", label: "Chroma", kind: "segment", labels: { yuv420: "4:2:0", yuv422: "4:2:2", yuv444: "4:4:4" }, group: "options", when: custom },
+            { widget: "crf", label: "CRF", group: "options", when: custom },
             { widget: "save_latent", label: "Latent", offText: "off", onText: "save beside", group: "options", when: saving },
-            { widget: "browser_compat", label: "Preview", offText: "original", onText: "H.264 copy", group: "options", when: (values) => saving(values) && (values.auto || values.codec === "h265") },
+            { widget: "browser_compat", label: "Preview", offText: "original", onText: "H.264 copy", group: "options", when: (values) => saving(values) && (values.custom_encoding === false || values.codec === "h265") },
             { widget: "auto_play", label: "Autoplay", group: "options" },
             { panel: stagePanel, grow: true, height: STAGE_MIN_HEIGHT },
             { panel: captionPanel, height: CAPTION_HEIGHT },
@@ -229,12 +229,12 @@ function setupNode(node) {
     chainCallback(node, "onConfigure", () => {
         // A workflow saved with the canvas face's Controls open opens Options.
         if (node.properties._saveVideoControlsExpanded && node.properties.fbui_open_options === undefined) node.properties.fbui_open_options = true;
-        // Saved before Auto existed: values restore by position, so the last
-        // result landed in Auto.
-        const auto = findWidget(node, "auto");
-        if (typeof auto.value !== "boolean") {
-            findWidget(node, LAST_RESULT_WIDGET).value = typeof auto.value === "string" ? auto.value : "";
-            auto.value = false;
+        // Saved before Encoding existed: values restore by position, so the
+        // last result landed in Encoding.
+        const encoding = findWidget(node, "custom_encoding");
+        if (typeof encoding.value !== "boolean") {
+            findWidget(node, LAST_RESULT_WIDGET).value = typeof encoding.value === "string" ? encoding.value : "";
+            encoding.value = true;
         }
         hideWidget(findWidget(node, LAST_RESULT_WIDGET));
         const kept = lastResults.get(String(node.id));
@@ -257,7 +257,7 @@ app.registerExtension({
     },
     beforeRegisterNodeDef(nodeType, nodeData) {
         if (nodeData.name !== NODE_NAME) return;
-        hideInputsInDef(nodeData, ["filename_prefix", "codec", "chroma", "crf", "save", "save_latent", "browser_compat", "auto_play", "exec_start", "auto"]);
+        hideInputsInDef(nodeData, ["filename_prefix", "codec", "chroma", "crf", "save", "save_latent", "browser_compat", "auto_play", "exec_start", "custom_encoding"]);
         chainCallback(nodeType.prototype, "onNodeCreated", function () {
             setupNode(this);
         });
