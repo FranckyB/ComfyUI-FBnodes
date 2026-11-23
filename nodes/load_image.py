@@ -926,8 +926,8 @@ class LoadImagePlus:
     CATEGORY = "FBnodes"
     DESCRIPTION = "A better image/video loader with file browser, preview, and input/output folder switching."
     RETURN_TYPES = ("IMAGE", "MASK", "IMAGE")
-    RETURN_NAMES = ("image", "mask", "source")
-    OUTPUT_TOOLTIPS = ("The picture, padded when Pad is on.", "The painted mask (or the file's alpha); with Pad on, also the new area.", "The picture before padding: image_1 of MiniMax H3 Image Conditioning when outpainting.")
+    RETURN_NAMES = ("image", "mask", "canvas")
+    OUTPUT_TOOLTIPS = ("The picture (crop and flips applied, never padded).", "The painted mask (or the file's alpha); with Pad on, the canvas's mask: the new area, the feather and anything painted.", "With Pad on, the padded canvas to outpaint (the picture itself otherwise).")
     FUNCTION = "load"
     OUTPUT_NODE = False
 
@@ -1013,15 +1013,14 @@ class LoadImagePlus:
             flip_x=flip_x,
             flip_y=flip_y,
         )
-        source_tensor = image_tensor
-        image_tensor, mask_tensor = _apply_pad(image_tensor, mask_tensor, pad_data)
+        canvas_tensor, mask_tensor = _apply_pad(image_tensor, mask_tensor, pad_data)
 
         if is_blank and not preview_images:
             preview_images = self._save_preview_images(image_tensor, None)
 
         return {
             "ui": {"images": preview_images},
-            "result": (image_tensor, mask_tensor, source_tensor)
+            "result": (image_tensor, mask_tensor, canvas_tensor)
         }
 
     def _direct_preview_images(self, resolved_path, source_folder="input"):

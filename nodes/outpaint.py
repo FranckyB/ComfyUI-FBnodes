@@ -1,7 +1,7 @@
 '''
 Outpainting beside MiniMax H3 Image Conditioning. Load Image+'s Pad makes the
-canvas and its mask, and its source (the picture before padding) is the
-conditioning's image_1, so the text encoder never sees the pad:
+canvas and its mask; its image (the picture, unpadded) is the conditioning's
+image_1, so the text encoder never sees the pad:
 
   Outpaint Latent  the canvas, VAE-encoded at the conditioning's resolution,
                    with a noise mask that frees the new area for KSampler.
@@ -122,7 +122,7 @@ class OutpaintLatent:
                 "model": ("MODEL", {"tooltip": "The MiniMax H3 Image model, after any LoRAs."}),
                 "positive": ("CONDITIONING", {"tooltip": "From MiniMax H3 Image Conditioning."}),
                 "vae": ("VAE",),
-                "image": ("IMAGE", {"tooltip": "The padded canvas (Load Image+ with Pad). Its source output goes to the conditioning's image_1."}),
+                "canvas": ("IMAGE", {"tooltip": "The padded canvas (Load Image+'s canvas with Pad on). Its image output goes to the conditioning's image_1."}),
                 "mask": ("MASK", {"tooltip": "1 where to paint: the new area, and anything painted."}),
                 "latent": ("LATENT", {"tooltip": "The latent of MiniMax H3 Image Conditioning: its size sets the resolution."}),
             },
@@ -132,13 +132,13 @@ class OutpaintLatent:
     RETURN_NAMES = ("model", "positive", "latent")
     FUNCTION = "encode"
     CATEGORY = "FBnodes"
-    DESCRIPTION = "VAE-encodes a padded canvas at the conditioning latent's resolution (keeping the canvas's aspect) with a noise mask, so KSampler paints only the new area. Picture 1's reference becomes the picture alone, placed where it sits on the canvas, so the model continues it instead of copying the pad. Give the conditioning the unpadded picture (Load Image+'s source) as image_1."
+    DESCRIPTION = "VAE-encodes a padded canvas at the conditioning latent's resolution (keeping the canvas's aspect) with a noise mask, so KSampler paints only the new area. Picture 1's reference becomes the picture alone, placed where it sits on the canvas, so the model continues it instead of copying the pad. Give the conditioning the unpadded picture (Load Image+'s image) as image_1."
 
-    def encode(self, model, positive, vae, image, mask, latent):
+    def encode(self, model, positive, vae, canvas, mask, latent):
         cell = vae.spacial_compression_encode()
         latent_h, latent_w = latent["samples"].shape[-2:]
-        width, height = _canvas_size(image.shape[2], image.shape[1], latent_w, latent_h, cell)
-        samples = vae.encode(_resize(_edge_context(image[:1], mask), width, height))
+        width, height = _canvas_size(canvas.shape[2], canvas.shape[1], latent_w, latent_h, cell)
+        samples = vae.encode(_resize(_edge_context(canvas[:1], mask), width, height))
         noise_mask = _mask_at(mask[:1], width, height)
         out = latent.copy()
         out["samples"] = samples
