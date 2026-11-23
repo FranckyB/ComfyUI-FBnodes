@@ -1,4 +1,4 @@
-// Pure geometry for the image stage (image_stage.mjs): fitting the picture
+// Pure geometry for the image stage (image_stage.js): fitting the picture
 // into the view, and grabbing and dragging a crop rect. No DOM, for node:test.
 // A crop rect is in percent of the displayed picture:
 // { left_pct, right_pct, top_pct, bottom_pct }.

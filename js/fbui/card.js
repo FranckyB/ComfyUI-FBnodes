@@ -19,14 +19,14 @@
 //       grow takes the node's spare height
 //   { group: "more", label: "More" }   later rows with group: "more" fold under it
 // Options: minWidth, first (place before the node's other DOM widgets).
-import { chainCallback, el, keepDomWidgetWidthAuto, keepKeyInField } from "./dom.mjs";
-import { notifyChange } from "./comfy.mjs";
-import { button as makeButton, info as infoIcon, segmented } from "./controls.mjs";
-import { cardHeight, choiceLabel, isGroupHeader, rowHeight, rowKind, rowTops, socketWidgetY, visibleRows } from "./card_math.mjs";
-import { ensureNodeMinHeight, fillNodeHeight, pinHeight, WIDGET_FRAME } from "./layout.mjs";
-import { makeScrub, scrubSteps } from "./scrub.mjs";
-import { ensureKitCss, GROUP_HEIGHT, ROW_HEIGHT, UNIT_SLOT_WIDTH } from "./theme.mjs";
-import { comboValues, commitWidgetValue, findWidget, hideWidget, widgetLinked, widgetSlot, widgetTooltip } from "./widgets.mjs";
+import { chainCallback, el, keepDomWidgetWidthAuto, keepKeyInField } from "./dom.js";
+import { notifyChange } from "./comfy.js";
+import { button as makeButton, info as infoIcon, segmented } from "./controls.js";
+import { cardHeight, choiceLabel, isGroupHeader, rowHeight, rowKind, rowTops, socketWidgetY, visibleRows } from "./card_math.js";
+import { ensureNodeMinHeight, fillNodeHeight, pinHeight, WIDGET_FRAME } from "./layout.js";
+import { makeScrub, scrubSteps } from "./scrub.js";
+import { ensureKitCss, GROUP_HEIGHT, ROW_HEIGHT, UNIT_SLOT_WIDTH } from "./theme.js";
+import { comboValues, commitWidgetValue, findWidget, hideWidget, widgetLinked, widgetSlot, widgetTooltip } from "./widgets.js";
 
 export const CARD_WIDGET = "fbui_card";
 const WRAPPER_TOP = 10;

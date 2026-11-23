@@ -6,7 +6,7 @@
 import { api } from "../../../scripts/api.js";
 import { createFileBrowserModal } from "../file_browser.js";
 import { basenameOf, classifySelection, getMediaRoots, isAbsolutePath, stripAnnotation } from "../path_browser.js";
-import { findWidget } from "../fbui/widgets.mjs";
+import { findWidget } from "../fbui/widgets.js";
 
 export const NONE = "(none)";
 export const BLANK = "(blank)";

@@ -6,7 +6,7 @@
 // scheme's pair; a colour picked in ComfyUI's own colour menu is the user's
 // and wins.
 import { app } from "../../../scripts/app.js";
-import { chainCallback } from "./dom.mjs";
+import { chainCallback } from "./dom.js";
 
 export const NODE_COLOR_SCHEMES = [
   { name: "FB Blue", colors: { title: "#1b3350", body: "#161b22" } },

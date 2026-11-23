@@ -11,15 +11,15 @@
 
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
-import { mountCard } from "./fbui/card.mjs";
-import { toast } from "./fbui/comfy.mjs";
-import { button, ICONS, segmented } from "./fbui/controls.mjs";
-import { chainCallback, el } from "./fbui/dom.mjs";
-import { openMenu, openModal } from "./fbui/modal.mjs";
-import { findWidget, hideInputsInDef, suppressCorePreview } from "./fbui/widgets.mjs";
-import { CAPTION_HEIGHT, RADIUS, T } from "./fbui/theme.mjs";
-import { bestGrid } from "./common/grid_math.mjs";
-import { fitRect } from "./common/stage_math.mjs";
+import { mountCard } from "./fbui/card.js";
+import { toast } from "./fbui/comfy.js";
+import { button, ICONS, segmented } from "./fbui/controls.js";
+import { chainCallback, el } from "./fbui/dom.js";
+import { openMenu, openModal } from "./fbui/modal.js";
+import { findWidget, hideInputsInDef, suppressCorePreview } from "./fbui/widgets.js";
+import { CAPTION_HEIGHT, RADIUS, T } from "./fbui/theme.js";
+import { bestGrid } from "./common/grid_math.js";
+import { fitRect } from "./common/stage_math.js";
 
 const NODE_NAME = "SaveImagePlus";
 const MIN_WIDTH = 300;
@@ -444,7 +444,7 @@ function setupNode(node) {
         rows: [
             { group: "options", label: "Options" },
             { widget: "filename_prefix", label: "Filename", kind: "text", info: FILENAME_HELP, group: "options" },
-            { widget: "save", label: "Save", offText: "preview only", onText: "save", group: "options" },
+            { widget: "save", label: "Save", offText: "preview", onText: "save", group: "options" },
             { widget: "format", label: "Format", kind: "segment", labels: { png: "PNG", exr: "EXR", avif: "AVIF" }, group: "options", when: saving },
             { widget: "bit_depth", label: "Depth", kind: "segment", group: "options", when: saving },
             { widget: "input_color_space", label: "Color", kind: "segment", group: "options", when: saving },

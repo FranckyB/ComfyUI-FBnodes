@@ -1,9 +1,9 @@
 // Modals and context menus in the kit's look. One backdrop, one z-index
 // scale, Escape and a click outside close, and keys typed inside stay out of
 // the canvas.
-import { el } from "./dom.mjs";
-import { button, ICONS } from "./controls.mjs";
-import { ensureKitCss, T, Z_MODAL } from "./theme.mjs";
+import { el } from "./dom.js";
+import { button, ICONS } from "./controls.js";
+import { ensureKitCss, T, Z_MODAL } from "./theme.js";
 
 // Open modals, newest last: Escape closes only the top one.
 const stack = [];

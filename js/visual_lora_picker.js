@@ -12,12 +12,12 @@ import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { createFileBrowserModal } from "./file_browser.js";
 import { basenameOf, mediaFileUrl, stripAnnotation } from "./path_browser.js";
-import { mountCard } from "./fbui/card.mjs";
-import { button, ICONS } from "./fbui/controls.mjs";
-import { chainCallback, el } from "./fbui/dom.mjs";
-import { findWidget, hideInputsInDef } from "./fbui/widgets.mjs";
-import { CAPTION_HEIGHT } from "./fbui/theme.mjs";
-import { sourceLabel } from "./common/load_plus.mjs";
+import { mountCard } from "./fbui/card.js";
+import { button, ICONS } from "./fbui/controls.js";
+import { chainCallback, el } from "./fbui/dom.js";
+import { findWidget, hideInputsInDef } from "./fbui/widgets.js";
+import { CAPTION_HEIGHT } from "./fbui/theme.js";
+import { sourceLabel } from "./common/load_plus.js";
 
 const NODE_NAME = "VisualLoraPicker";
 const NONE = "(none)";

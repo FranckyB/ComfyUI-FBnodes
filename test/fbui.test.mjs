@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { quantize, scrubbedValue, scrubSteps, sumValue } from "../js/fbui/scrub.mjs";
-import { cardHeight, rowKind, rowTops, segmentFits, visibleRows } from "../js/fbui/card_math.mjs";
-import { CARD_PADDING, GROUP_HEIGHT, ROW_GAP, ROW_HEIGHT } from "../js/fbui/theme.mjs";
+import { quantize, scrubbedValue, scrubSteps, sumValue } from "../js/fbui/scrub.js";
+import { cardHeight, rowKind, rowTops, segmentFits, visibleRows } from "../js/fbui/card_math.js";
+import { CARD_PADDING, GROUP_HEIGHT, ROW_GAP, ROW_HEIGHT } from "../js/fbui/theme.js";
 
 test("scrub values are clamped and rounded", () => {
     assert.equal(quantize(0.1 + 0.2, { decimals: 2 }), 0.3);

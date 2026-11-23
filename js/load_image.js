@@ -10,17 +10,17 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { basenameOf, isAbsolutePath, isImageFile, isVideoFile, previewUrl, stripAnnotation } from "./path_browser.js";
-import { mountCard } from "./fbui/card.mjs";
-import { notifyChange, toast } from "./fbui/comfy.mjs";
-import { button, ICONS, rail } from "./fbui/controls.mjs";
-import { chainCallback, el } from "./fbui/dom.mjs";
-import { openMenu, openModal } from "./fbui/modal.mjs";
-import { makeScrub } from "./fbui/scrub.mjs";
-import { findWidget, hideInputsInDef, hideWidget, suppressCorePreview } from "./fbui/widgets.mjs";
-import { createImageStage, drawStroke } from "./common/image_stage.mjs";
-import { BLANK, loadPlus, NONE, sourceLabel } from "./common/load_plus.mjs";
-import { cropPixels, isFullCrop } from "./common/stage_math.mjs";
-import { CAPTION_HEIGHT, ROW_HEIGHT } from "./fbui/theme.mjs";
+import { mountCard } from "./fbui/card.js";
+import { notifyChange, toast } from "./fbui/comfy.js";
+import { button, ICONS, rail } from "./fbui/controls.js";
+import { chainCallback, el } from "./fbui/dom.js";
+import { openMenu, openModal } from "./fbui/modal.js";
+import { makeScrub } from "./fbui/scrub.js";
+import { findWidget, hideInputsInDef, hideWidget, suppressCorePreview } from "./fbui/widgets.js";
+import { createImageStage, drawStroke } from "./common/image_stage.js";
+import { BLANK, loadPlus, NONE, sourceLabel } from "./common/load_plus.js";
+import { cropPixels, isFullCrop } from "./common/stage_math.js";
+import { CAPTION_HEIGHT, ROW_HEIGHT } from "./fbui/theme.js";
 
 const NODE_NAME = "LoadImagePlus";
 const PLACEHOLDER_IMAGE_PATH = new URL("./placeholder.png", import.meta.url).href;

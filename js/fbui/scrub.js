@@ -1,7 +1,7 @@
 // The kit's number control: drag left/right to scrub, click to type a value
 // or a sum (1024*1.5), chevrons or ArrowUp/Down to step, Shift for the fine
 // step. Pure math first (node:test), DOM factory below.
-import { keepKeyInField } from "./dom.mjs";
+import { keepKeyInField } from "./dom.js";
 
 export const SCRUB_DEAD_ZONE = 3;
 export const SCRUB_PIXELS_PER_STEP = 4;

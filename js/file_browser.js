@@ -18,11 +18,11 @@
 
 import { api } from "../../scripts/api.js";
 import { getCustomPresetPath, mediaFileUrl, setCustomPresetPath } from "./path_browser.js";
-import { toast } from "./fbui/comfy.mjs";
-import { button, ICONS } from "./fbui/controls.mjs";
-import { el } from "./fbui/dom.mjs";
-import { confirm, openMenu, openModal, prompt } from "./fbui/modal.mjs";
-import { FONT, RADIUS, RADIUS_CARD, ROW_HEIGHT, T } from "./fbui/theme.mjs";
+import { toast } from "./fbui/comfy.js";
+import { button, ICONS } from "./fbui/controls.js";
+import { el } from "./fbui/dom.js";
+import { confirm, openMenu, openModal, prompt } from "./fbui/modal.js";
+import { FONT, RADIUS, RADIUS_CARD, ROW_HEIGHT, T } from "./fbui/theme.js";
 
 const PLACEHOLDER = new URL("./placeholder.png", import.meta.url).href;
 const VIEW_KEY = "FBnodes.FileBrowser.ViewMode";

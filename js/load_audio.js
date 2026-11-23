@@ -10,13 +10,13 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { previewUrl, stripAnnotation } from "./path_browser.js";
-import { mountCard } from "./fbui/card.mjs";
-import { notifyChange, toast } from "./fbui/comfy.mjs";
-import { ICONS } from "./fbui/controls.mjs";
-import { chainCallback, el } from "./fbui/dom.mjs";
-import { findWidget, hideInputsInDef, hideWidget } from "./fbui/widgets.mjs";
-import { CAPTION_HEIGHT, FONT, RADIUS, RADIUS_CARD, T } from "./fbui/theme.mjs";
-import { loadPlus, NONE, sourceLabel } from "./common/load_plus.mjs";
+import { mountCard } from "./fbui/card.js";
+import { notifyChange, toast } from "./fbui/comfy.js";
+import { ICONS } from "./fbui/controls.js";
+import { chainCallback, el } from "./fbui/dom.js";
+import { findWidget, hideInputsInDef, hideWidget } from "./fbui/widgets.js";
+import { CAPTION_HEIGHT, FONT, RADIUS, RADIUS_CARD, T } from "./fbui/theme.js";
+import { loadPlus, NONE, sourceLabel } from "./common/load_plus.js";
 
 const NODE_NAME = "LoadAudioPlus";
 const MIN_WIDTH = 300;

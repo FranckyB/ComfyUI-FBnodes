@@ -1,6 +1,6 @@
-// Pure decisions behind card.mjs: which rows show, how tall the card is,
+// Pure decisions behind card.js: which rows show, how tall the card is,
 // where each row sits and what control a widget gets. No DOM, for node:test.
-import { CARD_PADDING, GROUP_HEIGHT, ROW_GAP, ROW_HEIGHT, SECTION_HEIGHT } from "./theme.mjs";
+import { CARD_PADDING, GROUP_HEIGHT, ROW_GAP, ROW_HEIGHT, SECTION_HEIGHT } from "./theme.js";
 
 // A widget input socket is drawn at the widget's y plus half a slot.
 export const SLOT_OFFSET = 10;

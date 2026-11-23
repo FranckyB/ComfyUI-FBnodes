@@ -11,11 +11,11 @@
 
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
-import { toast } from "./fbui/comfy.mjs";
-import { button, ICONS } from "./fbui/controls.mjs";
-import { el } from "./fbui/dom.mjs";
-import { ensureKitCss, FONT, RADIUS, RADIUS_CARD, T, Z_MODAL } from "./fbui/theme.mjs";
-import { bestGrid } from "./common/grid_math.mjs";
+import { toast } from "./fbui/comfy.js";
+import { button, ICONS } from "./fbui/controls.js";
+import { el } from "./fbui/dom.js";
+import { ensureKitCss, FONT, RADIUS, RADIUS_CARD, T, Z_MODAL } from "./fbui/theme.js";
+import { bestGrid } from "./common/grid_math.js";
 
 const DING_URL = new URL("./audio/ding.mp3", import.meta.url).href;
 const CSS_ID = "fbnodes-review-css-v2";

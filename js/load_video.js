@@ -11,13 +11,13 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { isVideoFile, previewUrl, stripAnnotation } from "./path_browser.js";
-import { mountCard } from "./fbui/card.mjs";
-import { toast } from "./fbui/comfy.mjs";
-import { button, ICONS } from "./fbui/controls.mjs";
-import { chainCallback, el } from "./fbui/dom.mjs";
-import { findWidget, hideInputsInDef, hideWidget, suppressCorePreview } from "./fbui/widgets.mjs";
-import { CAPTION_HEIGHT } from "./fbui/theme.mjs";
-import { BLANK, loadPlus, NONE, sourceLabel } from "./common/load_plus.mjs";
+import { mountCard } from "./fbui/card.js";
+import { toast } from "./fbui/comfy.js";
+import { button, ICONS } from "./fbui/controls.js";
+import { chainCallback, el } from "./fbui/dom.js";
+import { findWidget, hideInputsInDef, hideWidget, suppressCorePreview } from "./fbui/widgets.js";
+import { CAPTION_HEIGHT } from "./fbui/theme.js";
+import { BLANK, loadPlus, NONE, sourceLabel } from "./common/load_plus.js";
 
 const NODE_NAME = "LoadVideoPlus";
 const PLACEHOLDER_IMAGE_PATH = new URL("./placeholder.png", import.meta.url).href;

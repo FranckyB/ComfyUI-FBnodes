@@ -1,6 +1,6 @@
 // Stand-alone controls for panels that are not card rows (a toolbar over a
 // preview, a modal footer). Card rows build on the same classes.
-import { el } from "./dom.mjs";
+import { el } from "./dom.js";
 
 // button("Browse", { icon, title, primary, danger, small, grow, onClick })
 export function button(label, { icon = "", title = "", primary = false, danger = false, small = false, grow = false, onClick = null } = {}) {

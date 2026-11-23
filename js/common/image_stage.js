@@ -16,9 +16,9 @@
 //   onClick()          a plain click while no tool is active
 //   onContextMenu(event)
 //   emptyText()
-import { el } from "../fbui/dom.mjs";
-import { FONT, T } from "../fbui/theme.mjs";
-import { cropCursor, cropViewRect, dragCrop, fitRect, hitCrop } from "./stage_math.mjs";
+import { el } from "../fbui/dom.js";
+import { FONT, T } from "../fbui/theme.js";
+import { cropCursor, cropViewRect, dragCrop, fitRect, hitCrop } from "./stage_math.js";
 
 // The picture fills the frame edge to edge, as the video players do; crop
 // edges stay grabbable there because their band reaches inside the picture.

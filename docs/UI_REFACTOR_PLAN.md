@@ -28,7 +28,7 @@ The three packs grew independently and each node builds its UI differently. Some
 4. Stay on the **V1 schema** for existing nodes. The UI work doesn't need V3, and a schema change risks compatibility.
 
 ## The shared kit: `js/fbui/` (vendored, identical in each pack)
-- **Canonical copy:** `ComfyUI-FBnodes/js/fbui/`. A tiny `tools/sync_fbui.py <pack_dir>` copies it into the other packs. Files are `.mjs`, so ComfyUI does not auto-load them; they are import-only, matching AusBoss.
+- **Canonical copy:** `ComfyUI-FBnodes/js/fbui/`. A tiny `tools/sync_fbui.py <pack_dir>` copies it into the other packs. Files are `.js` with no side effects at import (ComfyUI auto-imports every `.js`, and `.mjs` gets no `no-store` header, so the browser served stale copies; see UI_RULES).
 - **No collisions between packs:**
   - Each pack serves its own copy from its own URL.
   - `KIT_VERSION` is a constant. CSS is injected as `<style id="fbui-css-v{KIT_VERSION}">`, so identical copies inject once.
@@ -48,7 +48,7 @@ The three packs grew independently and each node builds its UI differently. Some
 
 ## Rules (committed as `docs/UI_RULES.md`, identical in each pack)
 1. Node faces are **one fbui card**. No visible native widget rows on a converted node, no plain-object widgets pushed into `node.widgets`, no `onDrawForeground`/`onDrawBackground` UI, no `widget.draw` overrides.
-2. Every colour, radius and size comes from `fbui/theme.mjs` tokens. No hex literals in node files. Node colour is set only by `appearance.mjs`.
+2. Every colour, radius and size comes from `fbui/theme.js` tokens. No hex literals in node files. Node colour is set only by `appearance.mjs`.
 3. Controls:
    - INT and FLOAT values use `scrub` with the unit inside.
    - Booleans use an off|on pill.
@@ -79,7 +79,7 @@ The three packs grew independently and each node builds its UI differently. Some
   - Phase 0: kit, colours, rules and hygiene.
   - Phase 1: the Load Image+ pilot, with frame-exact PyAV video frames.
   - The file browser.
-  - Phase 2: Load Video+, Load Audio+ and Visual LoRA Picker+, with the Load+ source handling shared in `js/common/load_plus.mjs`.
+  - Phase 2: Load Video+, Load Audio+ and Visual LoRA Picker+, with the Load+ source handling shared in `js/common/load_plus.js`.
   - Save Image+ review: pick the images to keep before saving.
 - **Next:**
   - Phase 3: convert the Save Image+ and Save Video+ faces, Crop Image+ and Crop Audio+.
@@ -98,18 +98,18 @@ The three packs grew independently and each node builds its UI differently. Some
 **Phase 1: pilot Load Image+ (`js/load_image.js`, 3.4k lines)**
 - Card rows: Source (file select plus Browse button), a Mask | Crop action row, a preview `panel` (grow) holding the mask overlay as a DOM canvas instead of `onDrawForeground`, and a frame-position scrub that shows only for video.
 - Remove the spliced plain-object buttons and the `widget.draw` hack. The play icon becomes `media.mjs`'s overlay button.
-- Pull the Load+ scaffold (file combo, browse path, `classifySelection`, drag-drop upload) into `js/common/load_plus.mjs`, so that Video and Audio reuse it in Phase 2.
+- Pull the Load+ scaffold (file combo, browse path, `classifySelection`, drag-drop upload) into `js/common/load_plus.js`, so that Video and Audio reuse it in Phase 2.
 
 **Phase 2: Load Video+, Load Audio+, Visual LoRA Picker+**
 - Reuse `load_plus.mjs` and `media.mjs`.
 - Drop `canvasOnly`, the `canvas.canvas.title` tooltip hack and the wheel-forwarding copies.
 
 **Phase 3: Save Image+, Save Video+, Crop Image+, Crop Audio+**
-- Share the result-cache, restore and Controls fold logic in `js/common/save_result.mjs`.
+- Share the result-cache, restore and Controls fold logic in `js/common/save_result.js`.
 - Save Image's compare view becomes a card `panel` hosting its existing canvas in both renderers (generalising the Vue path from commit 3246735), and the separate classic `onDrawForeground` path goes away.
 
 **Phase 4: lists and the rest**
-- Merge the Clip Stitcher and VACE Stitcher list UI into `js/common/clip_list.mjs`.
+- Merge the Clip Stitcher and VACE Stitcher list UI into `js/common/clip_list.js`.
 - LoRA List+ uses `file_browser.js` instead of its own second modal.
 - Convert the LTX Review modal, Show Text and Switch Any.
 - Give the native-only nodes (Load Models+, VACE Options, Apply LoRA+) card faces for uniformity; the colour already applies from Phase 0.

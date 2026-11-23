@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { cropPixels, cropViewRect, dragCrop, fitRect, hitCrop, isFullCrop } from "../js/common/stage_math.mjs";
+import { cropPixels, cropViewRect, dragCrop, fitRect, hitCrop, isFullCrop } from "../js/common/stage_math.js";
 
 const FULL = { left_pct: 0, right_pct: 100, top_pct: 0, bottom_pct: 100 };
 
@@ -37,7 +37,7 @@ test("crop pixels mirror the backend's rounding", () => {
     assert.deepEqual(cropViewRect({ left_pct: 50, right_pct: 100, top_pct: 0, bottom_pct: 50 }, { x: 10, y: 20, width: 200, height: 100 }), { x: 110, y: 20, width: 100, height: 50 });
 });
 
-import { bestGrid } from "../js/common/grid_math.mjs";
+import { bestGrid } from "../js/common/grid_math.js";
 
 test("a batch lays out at the largest size the box allows", () => {
     // Four portraits in a wide box: one row of four.
