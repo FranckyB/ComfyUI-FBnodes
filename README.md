@@ -37,6 +37,7 @@ Save images with date-token filenames, output/temp switching, an optional Compar
 - **Large Preview**: Full-screen preview; ‹ › (and ← / → on pictures) step through the folder
 - **Mask Painting**: Paint masks directly in-node; they show live in the preview
 - **Crop + Flip**: In-node crop with exact padding values, plus Flip X / Flip Y
+- **Pad**: Extend the canvas for outpainting by dragging any edge outward (or exact pixels, or an aspect ratio). The new area repeats the edge pixels, and the MASK marks it, fading into the picture over the feather and joined with any painted mask
 - **IMAGE + MASK Output**: Outputs both IMAGE and MASK tensors, with alpha channel extraction from images
 
 ### Load Video+
@@ -234,6 +235,15 @@ Display any input as text in-node, with values persisted in the workflow.
 - Useful for inspecting intermediate values without extra conversion nodes
 - Persists displayed text across workflow reloads and tab switching
 
+### Outpaint Latent / Outpaint Blend
+Outpaint with MiniMax H3 Image next to the core **MiniMax H3 Image Conditioning**, which stays as it is:
+
+1. **Load Image+** with **Pad**: its IMAGE goes to the conditioning's `image_1`, to Outpaint Latent and to Outpaint Blend's `canvas`; its MASK to both outpaint nodes. Leave width / height at 0 for the canvas's size, or set a resolution.
+2. **Outpaint Latent** takes the conditioning's latent: the canvas is VAE-encoded at that latent's resolution (keeping the canvas's aspect) with a noise mask, so KSampler (denoise 1.0) paints only the new area and the seam.
+3. **Outpaint Blend** takes the decoded image: it shifts its tone to meet the picture at the seam and puts it back on the canvas at full size, the original pixels kept where the mask is 0.
+
+Inspired by [ComfyUI-H3VideoOutpaint](https://github.com/TwoAbove/ComfyUI-H3VideoOutpaint).
+
 ## Replace with …+
 Right-click a core **Load Image**, **Load Video**, **Save Image** or **Save Video** node and pick **Replace with …+**: the FBnodes version takes its place with the same links, and the loaded file (or a filename prefix you changed) carried over.
 
@@ -313,6 +323,7 @@ GPL-3.0
 - **Save Image+**: Review before saving, Compare wipe and grid, date and time filename tokens
 - **Save Video+**: Encoding auto keeps Create Video's settings; previews already playable videos without encoding
 - **Video Review** (was LTX Review): full-screen review with a pausable timer; outputs the review clip as `video` (review_path removed)
+- **Outpainting**: Pad in Load Image+, and Outpaint Latent / Outpaint Blend for MiniMax H3 Image
 - **If/Else Switch+** (was Switch Any Bool); **Replace with …+** on the right-click menu of core Load / Save Image and Video nodes
 - **Legacy**: Crop Audio+ (use Trim Audio Duration), Load LTX Latent File (use Load Latent File), LTX Review Preview (use Save Video+)
 - **Fixes**: Get Video Components+ follows a trimmed video and re-runs when an output is linked

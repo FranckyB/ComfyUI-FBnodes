@@ -1,10 +1,11 @@
 /**
  * Load Image+ (FBnodes): image / video-frame loader with a file browser, an
- * on-node preview, a painted mask, a crop and flips.
+ * on-node preview, a painted mask, a crop, flips and padding for outpainting.
  *
  * The face is one fbui card. The stock widgets stay (hidden) and hold every
  * saved value: source_folder, image, frame_position, mask_data, crop_data,
- * flip_x, flip_y. The stage draws the picture, mask and crop on one canvas.
+ * flip_x, flip_y, pad_data. The stage draws the picture, mask, crop and
+ * padding on one canvas.
  */
 
 import { app } from "../../scripts/app.js";
@@ -19,8 +20,8 @@ import { makeScrub } from "./fbui/scrub.js";
 import { findWidget, hideInputsInDef, hideWidget, suppressCorePreview } from "./fbui/widgets.js";
 import { createImageStage, drawStroke } from "./common/image_stage.js";
 import { BLANK, loadPlus, NONE, sourceLabel } from "./common/load_plus.js";
-import { cropPixels, isFullCrop } from "./common/stage_math.js";
-import { CAPTION_HEIGHT, ROW_HEIGHT } from "./fbui/theme.js";
+import { cropPixels, isFullCrop, lockPad } from "./common/stage_math.js";
+import { CAPTION_HEIGHT, ROW_HEIGHT, T } from "./fbui/theme.js";
 
 const NODE_NAME = "LoadImagePlus";
 const PLACEHOLDER_IMAGE_PATH = new URL("./placeholder.png", import.meta.url).href;
@@ -30,6 +31,14 @@ const STAGE_MIN_HEIGHT = 200;
 // The frame picker: its rail (24) over the FRAME line, 6 apart.
 const FRAME_PANEL_HEIGHT = 24 + 6 + ROW_HEIGHT;
 const BRUSH_MAX = 512;
+const PAD_FEATHER = 24;
+const PAD_MAX = 16384;
+// The padded canvas's aspect: free, the picture's own, or a fixed ratio.
+const ASPECTS = ["free", "source", "1:1", "4:3", "3:4", "3:2", "2:3", "16:9", "9:16", "21:9"];
+// Below this the Edit row's tools show their icons only.
+const EDIT_LABELS_MIN = 290;
+// Which tool the stage edits when the node loads, or when the active one turns off.
+const TOOLS = ["crop", "mask", "pad"];
 
 const sourceFolder = (node) => findWidget(node, "source_folder")?.value || "input";
 const imageValue = (node) => stripAnnotation(findWidget(node, "image")?.value);
@@ -185,6 +194,59 @@ function setDisplayCrop(node, rect) {
     syncCropData(node);
 }
 
+// ---------------------------------------------------------------- pad state
+
+// Pixels added beyond the output on each side (as displayed, flips
+// included) and how far the outpaint mask fades into the picture.
+function parsePad(value) {
+    let data = null;
+    try {
+        data = typeof value === "string" && value ? JSON.parse(value) : null;
+    } catch { /* an empty pad */ }
+    const px = (entry) => Math.max(0, Math.min(PAD_MAX, Math.round(Number(entry) || 0)));
+    return {
+        enabled: Boolean(data?.enabled),
+        left: px(data?.left), right: px(data?.right), top: px(data?.top), bottom: px(data?.bottom),
+        feather: px(data?.feather ?? PAD_FEATHER),
+        aspect: ASPECTS.includes(data?.aspect) ? data.aspect : "free",
+    };
+}
+
+function syncPadData(node) {
+    const { enabled, left, right, top, bottom, feather, aspect } = node._fb.pad;
+    findWidget(node, "pad_data").value = JSON.stringify({ version: 1, enabled, left, right, top, bottom, feather, aspect });
+}
+
+// Width / height the canvas is held to, or null while the aspect is free.
+function padRatio(node) {
+    const aspect = node._fb.pad.aspect;
+    if (aspect === "free") return null;
+    const { width, height } = croppedSize(node);
+    if (aspect === "source") return width / height;
+    const [w, h] = aspect.split(":").map(Number);
+    return w / h;
+}
+
+// Sides edited by `handle` ("" for none), held to the aspect.
+function setPad(node, sides, handle = null) {
+    const fb = node._fb;
+    const ratio = handle !== null && fb.image ? padRatio(node) : null;
+    const next = { ...fb.pad, ...sides };
+    if (ratio) {
+        const { width, height } = croppedSize(node);
+        Object.assign(next, lockPad(next, handle, width, height, ratio));
+    }
+    Object.assign(fb.pad, next);
+    syncPadData(node);
+    fb.card.refresh();
+}
+
+// The output size before padding.
+function croppedSize(node) {
+    const { crop, image } = node._fb;
+    return crop.enabled && !isFullCrop(crop) ? cropPixels(crop, image.width, image.height) : { width: image.width, height: image.height };
+}
+
 // ---------------------------------------------------------------- mask state
 
 // Vector strokes (for editing and undo) live in properties._maskStrokes; the
@@ -247,13 +309,12 @@ function syncMaskData(node) {
 
 // ---------------------------------------------------------------- tools
 
-// Mask and Crop are each on or off (what the node outputs); the tool is which
-// of them the stage edits. Pressing an enabled tool that is not the active
-// one switches to it; pressing the active one turns it off.
+// Mask, Crop and Pad are each on or off (what the node outputs); the tool is
+// which of them the stage edits. Pressing an enabled tool that is not the
+// active one switches to it; pressing the active one turns it off.
 function pressTool(node, name) {
     const fb = node._fb;
     const state = fb[name];
-    const other = name === "mask" ? "crop" : "mask";
     if (!state.enabled) {
         state.enabled = true;
         fb.tool = name;
@@ -261,10 +322,9 @@ function pressTool(node, name) {
         fb.tool = name;
     } else {
         state.enabled = false;
-        fb.tool = fb[other].enabled ? other : null;
+        fb.tool = TOOLS.find((tool) => fb[tool].enabled) ?? null;
     }
-    if (name === "mask") syncMaskData(node);
-    else syncCropData(node);
+    ({ mask: syncMaskData, crop: syncCropData, pad: syncPadData })[name](node);
     fb.card.refreshByHand();
     fb.stage.redraw();
     notifyChange();
@@ -284,6 +344,7 @@ function editControl(node) {
     const tools = el("div", "fbui-field");
     const mask = button("Mask", { icon: ICONS.brush, grow: true, title: "Paint a mask. Press again to stop painting, once more to turn it off.", onClick: () => pressTool(node, "mask") });
     const crop = button("Crop", { icon: ICONS.crop, grow: true, title: "Crop by dragging any edge or corner. Press again to turn it off.", onClick: () => pressTool(node, "crop") });
+    const pad = button("Pad", { icon: ICONS.pad, grow: true, title: "Extend the canvas to outpaint: drag any edge outward. The mask output marks the new area. Press again to turn it off.", onClick: () => pressTool(node, "pad") });
     const flip = (axis) => () => {
         setFlip(node, axis, !getFlips(node)[axis === "flip_x" ? "x" : "y"]);
         syncCropData(node);
@@ -293,12 +354,17 @@ function editControl(node) {
     };
     const flipX = button("", { icon: ICONS.flipX, title: "Flip horizontally", onClick: flip("flip_x") });
     const flipY = button("", { icon: ICONS.flipY, title: "Flip vertically", onClick: flip("flip_y") });
-    tools.append(mask, crop, flipX, flipY);
+    tools.append(mask, crop, pad, flipX, flipY);
+    // A narrow node keeps the icons; the words come back when it widens.
+    new ResizeObserver(() => {
+        const compact = tools.clientWidth < EDIT_LABELS_MIN;
+        for (const control of [mask, crop, pad]) control.querySelector("span").hidden = compact;
+    }).observe(tools);
     return {
         element: tools,
         sync() {
             const flips = getFlips(node);
-            for (const [control, name] of [[mask, "mask"], [crop, "crop"]]) {
+            for (const [control, name] of [[mask, "mask"], [crop, "crop"], [pad, "pad"]]) {
                 control.classList.toggle("primary", fb.tool === name);
                 control.classList.toggle("on", fb[name].enabled && fb.tool !== name);
             }
@@ -345,6 +411,7 @@ function stagePanel(node) {
         image: () => fb.image,
         flips: () => getFlips(node),
         crop: () => ({ shown: fb.crop.enabled && Boolean(fb.image), editable: fb.tool === "crop", rect: displayCrop(node) }),
+        pad: () => ({ shown: fb.pad.enabled && Boolean(fb.image), editable: fb.tool === "pad", sides: fb.pad }),
         mask: () => ({
             shown: fb.mask.enabled && !fb.mask.hidden,
             editable: fb.tool === "mask",
@@ -357,6 +424,8 @@ function stagePanel(node) {
             fb.card.refresh();
         },
         onCropEnd: notifyChange,
+        onPad: (sides, handle) => setPad(node, sides, handle),
+        onPadEnd: notifyChange,
         onStrokeStart: (stroke) => {
             fb.mask.redo = [];
             fb.mask.strokes.push(stroke);
@@ -397,12 +466,12 @@ function captionPanel(node) {
                 caption.textContent = "—";
                 return;
             }
-            let text = `${image.width} × ${image.height}`;
-            if (fb.crop.enabled && !isFullCrop(fb.crop)) {
-                const px = cropPixels(fb.crop, image.width, image.height);
-                text = `${px.width} × ${px.height}`;
+            let { width, height } = croppedSize(node);
+            if (fb.pad.enabled) {
+                width += fb.pad.left + fb.pad.right;
+                height += fb.pad.top + fb.pad.bottom;
             }
-            caption.textContent = text;
+            caption.textContent = `${width} × ${height}`;
         },
     };
 }
@@ -528,6 +597,71 @@ function cropResetControl(node) {
         element: reset,
         sync() {
             reset.disabled = isFullCrop(fb.crop);
+        },
+    };
+}
+
+// The Pad row: the canvas's aspect, the feather, and no padding.
+function padControl(node) {
+    const fb = node._fb;
+    const tools = el("div", "fbui-field");
+    const aspect = el("select", "fbui-select");
+    aspect.title = "The padded canvas's aspect: free, the picture's own, or a ratio that holds while you drag.";
+    for (const value of ASPECTS) {
+        const option = el("option", "", { free: "Free", source: "Source" }[value] ?? value);
+        option.value = value;
+        aspect.append(option);
+    }
+    aspect.addEventListener("change", () => {
+        fb.pad.aspect = aspect.value;
+        setPad(node, {}, "");
+        notifyChange();
+    });
+    const featherIcon = el("span");
+    featherIcon.innerHTML = ICONS.feather;
+    featherIcon.title = "Feather: how far the mask fades into the picture, so the seam is painted over too.";
+    featherIcon.style.cssText = `flex:none;display:flex;color:${T.label}`;
+    const feather = makeScrub({
+        value: fb.pad.feather, min: 0, max: 512, step: 4, fineStep: 1, decimals: 0, unit: "px",
+        title: featherIcon.title,
+        onChange: (value) => setPad(node, { feather: value }),
+        onSettle: notifyChange,
+    });
+    feather.root.style.cssText = "flex:none;width:76px";
+    const reset = button("", { icon: ICONS.reset, title: "Remove the padding", onClick: () => {
+        setPad(node, { left: 0, right: 0, top: 0, bottom: 0 }, "");
+        notifyChange();
+    } });
+    tools.append(aspect, featherIcon, feather.root, reset);
+    return {
+        element: tools,
+        sync() {
+            aspect.value = fb.pad.aspect;
+            feather.set(fb.pad.feather);
+            reset.disabled = !(fb.pad.left || fb.pad.right || fb.pad.top || fb.pad.bottom);
+        },
+    };
+}
+
+// Exact padding, in pixels added on each side.
+function padPairControl(node, first, second) {
+    const fb = node._fb;
+    const field = el("div", "fbui-field");
+    const scrubs = {};
+    for (const side of [first, second]) {
+        if (side === second) field.append(el("span", "fbui-sep", "·"));
+        scrubs[side] = makeScrub({
+            value: 0, min: 0, max: PAD_MAX, step: 8, fineStep: 1, decimals: 0, unit: "px",
+            title: `Pixels added on the ${side}.`,
+            onChange: (value) => setPad(node, { [side]: value }, { left: "w", right: "e", top: "n", bottom: "s" }[side]),
+            onSettle: notifyChange,
+        });
+        field.append(scrubs[side].root);
+    }
+    return {
+        element: field,
+        sync() {
+            for (const side of [first, second]) scrubs[side].set(fb.pad[side]);
         },
     };
 }
@@ -661,12 +795,13 @@ function setupNode(node) {
         request: 0, image: null, blank: false, sized: false, configured: false,
         mask: restoreMask(node),
         crop: parseCrop(node.properties._cropData || findWidget(node, "crop_data")?.value),
+        pad: parsePad(findWidget(node, "pad_data")?.value),
         tool: null,
         reload: (value) => showFile(node, value),
     };
     node._fb = fb;
-    fb.tool = fb.crop.enabled ? "crop" : fb.mask.enabled ? "mask" : null;
-    for (const name of ["source_folder", "frame_position", "mask_data", "crop_data", "flip_x", "flip_y"]) hideWidget(findWidget(node, name));
+    fb.tool = TOOLS.find((tool) => fb[tool].enabled) ?? null;
+    for (const name of ["source_folder", "frame_position", "mask_data", "crop_data", "flip_x", "flip_y", "pad_data"]) hideWidget(findWidget(node, name));
 
     const imageWidget = findWidget(node, "image");
     chainCallback(imageWidget, "callback", (value) => {
@@ -688,6 +823,7 @@ function setupNode(node) {
     chainCallback(findWidget(node, "frame_position"), "callback", fb.frameChanged);
 
     const cropTool = (_values, n) => n._fb.tool === "crop";
+    const padTool = (_values, n) => n._fb.tool === "pad";
     fb.card = mountCard(node, {
         minWidth: MIN_WIDTH,
         rows: [
@@ -697,12 +833,16 @@ function setupNode(node) {
             },
             { label: "Edit", control: editControl },
             { label: "Brush", control: brushControl, when: (_values, n) => n._fb.tool === "mask" },
+            { label: "Pad", control: padControl, when: padTool },
             { panel: stagePanel, grow: true, height: STAGE_MIN_HEIGHT },
             { panel: framePanel, height: FRAME_PANEL_HEIGHT, when: (values) => isVideoFile(values.image) },
             { group: "crop", label: "Exact crop", when: cropTool },
             { label: "Left · Right", control: (n) => cropPairControl(n, "left", "right"), group: "crop", when: cropTool },
             { label: "Top · Bottom", control: (n) => cropPairControl(n, "top", "bottom"), group: "crop", when: cropTool },
             { label: "", control: cropResetControl, group: "crop", when: cropTool },
+            { group: "pad", label: "Exact pad", when: padTool },
+            { label: "Left · Right", control: (n) => padPairControl(n, "left", "right"), group: "pad", when: padTool },
+            { label: "Top · Bottom", control: (n) => padPairControl(n, "top", "bottom"), group: "pad", when: padTool },
             { panel: captionPanel, height: CAPTION_HEIGHT },
         ],
     });
@@ -715,8 +855,9 @@ function setupNode(node) {
         const props = node.properties;
         if (!props._cropData && findWidget(node, "crop_data")?.value) props._cropData = findWidget(node, "crop_data").value;
         fb.crop = parseCrop(props._cropData);
+        fb.pad = parsePad(findWidget(node, "pad_data")?.value);
         for (const axis of ["flip_x", "flip_y"]) if (props[axis] !== undefined) setFlip(node, axis, Boolean(props[axis]));
-        fb.tool = fb.crop.enabled ? "crop" : fb.mask.enabled ? "mask" : null;
+        fb.tool = TOOLS.find((tool) => fb[tool].enabled) ?? null;
         syncCropData(node);
         files.refreshOptions(node, imageValue(node));
         showFile(node, imageValue(node)).then(() => { if (fb.mask.enabled) syncMaskData(node); });
@@ -754,7 +895,7 @@ app.registerExtension({
 
     beforeRegisterNodeDef(nodeType, nodeData) {
         if (nodeData.name !== NODE_NAME) return;
-        hideInputsInDef(nodeData, ["source_folder", "image", "frame_position", "mask_data", "crop_data", "flip_x", "flip_y"]);
+        hideInputsInDef(nodeData, ["source_folder", "image", "frame_position", "mask_data", "crop_data", "flip_x", "flip_y", "pad_data"]);
         chainCallback(nodeType.prototype, "onNodeCreated", function () {
             setupNode(this);
         });

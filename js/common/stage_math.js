@@ -90,3 +90,65 @@ export function cropPixels(crop, width, height) {
 export function isFullCrop(crop) {
   return crop.left_pct <= 0 && crop.top_pct <= 0 && crop.right_pct >= 100 && crop.bottom_pct >= 100;
 }
+
+// Padding is in pixels added beyond the output on each side:
+// { left, right, top, bottom }.
+
+// The pad after dragging `handle` by (dx, dy) picture pixels from `start`;
+// "move" slides the canvas around the picture without changing its size.
+export function dragPad(handle, start, dx, dy) {
+  const pad = { ...start };
+  if (handle === "move") {
+    const x = Math.max(-start.right, Math.min(start.left, Math.round(dx)));
+    const y = Math.max(-start.bottom, Math.min(start.top, Math.round(dy)));
+    return { ...pad, left: start.left - x, right: start.right + x, top: start.top - y, bottom: start.bottom + y };
+  }
+  const px = (value) => Math.max(0, Math.round(value));
+  if (handle.includes("w")) pad.left = px(start.left - dx);
+  if (handle.includes("e")) pad.right = px(start.right + dx);
+  if (handle.includes("n")) pad.top = px(start.top - dy);
+  if (handle.includes("s")) pad.bottom = px(start.bottom + dy);
+  return pad;
+}
+
+// The pad after an edit by `handle`, held to `ratio` (canvas width / height)
+// around a width x height output. An edge drives its own axis and the other
+// follows, evenly about its centre; a corner (or "", a new ratio) grows the
+// canvas to cover both. The canvas never gets smaller than the output.
+export function lockPad(pad, handle, width, height, ratio) {
+  if (handle === "move") return pad;
+  const horizontal = /[ew]/.test(handle);
+  const vertical = /[ns]/.test(handle);
+  let w = width + pad.left + pad.right;
+  const h = height + pad.top + pad.bottom;
+  if (vertical && !horizontal) w = h * ratio;
+  else if (vertical === horizontal) w = Math.max(w, h * ratio);
+  w = Math.round(Math.max(w, width, height * ratio));
+  const next = { ...pad };
+  // The dragged side takes the change; without one, both share it.
+  const share = (first, second, extra, letterFirst, letterSecond) => {
+    if (handle.includes(letterFirst)) next[first] += extra;
+    else if (handle.includes(letterSecond)) next[second] += extra;
+    else {
+      next[first] += Math.trunc(extra / 2);
+      next[second] += extra - Math.trunc(extra / 2);
+    }
+    if (next[first] < 0) [next[second], next[first]] = [next[second] + next[first], 0];
+    if (next[second] < 0) [next[first], next[second]] = [next[first] + next[second], 0];
+  };
+  share("left", "right", w - width - pad.left - pad.right, "w", "e");
+  share("top", "bottom", Math.round(w / ratio) - height - pad.top - pad.bottom, "n", "s");
+  return next;
+}
+
+// The picture's rect in the view when the padded canvas (and `slack` picture
+// pixels around it) must fit too. `base` is the output inside the picture, in
+// picture pixels { x, y, width, height }.
+export function padFitRect(imageW, imageH, base, pad, viewW, viewH, slack = 0) {
+  const x0 = Math.min(0, base.x - pad.left) - slack;
+  const y0 = Math.min(0, base.y - pad.top) - slack;
+  const x1 = Math.max(imageW, base.x + base.width + pad.right) + slack;
+  const y1 = Math.max(imageH, base.y + base.height + pad.bottom) + slack;
+  const world = fitRect(x1 - x0, y1 - y0, viewW, viewH);
+  return { x: world.x - x0 * world.scale, y: world.y - y0 * world.scale, width: imageW * world.scale, height: imageH * world.scale, scale: world.scale };
+}

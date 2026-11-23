@@ -9,6 +9,7 @@ import io
 
 import folder_paths
 import torch
+import torch.nn.functional as F
 import server
 
 try:
@@ -805,6 +806,58 @@ def _apply_crop_and_flip(image_tensor, mask_tensor, crop_data="", flip_x=False, 
     return image_tensor, mask_tensor
 
 
+def _parse_pad_data(pad_data):
+    """Pixels added on each side and the feather, or None when nothing is padded."""
+    try:
+        parsed = json.loads(pad_data) if pad_data else {}
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(parsed, dict) or not _coerce_bool(parsed.get("enabled")):
+        return None
+    pad = {key: max(0, int(parsed.get(key) or 0)) for key in ("left", "right", "top", "bottom", "feather")}
+    if not (pad["left"] or pad["right"] or pad["top"] or pad["bottom"]):
+        return None
+    return pad
+
+
+def _edge_ramp(size, feather, start, end, device):
+    """1 at a padded edge fading to 0 over `feather` pixels inward, along one axis."""
+    ramp = torch.zeros(size, device=device)
+    if feather <= 0:
+        return ramp
+    steps = 1.0 - (torch.arange(size, dtype=torch.float32, device=device) + 1.0) / (feather + 1.0)
+    steps = steps.clamp(min=0.0)
+    if start:
+        ramp = torch.maximum(ramp, steps)
+    if end:
+        ramp = torch.maximum(ramp, steps.flip(0))
+    return ramp
+
+
+def _apply_pad(image_tensor, mask_tensor, pad_data=""):
+    """Extend the canvas for outpainting: the new area repeats the edge pixels,
+    and the mask is 1 there, fading `feather` pixels into the picture, joined
+    with the painted (or alpha) mask."""
+    pad = _parse_pad_data(pad_data)
+    if pad is None:
+        return image_tensor, mask_tensor
+    batch, height, width, _ = image_tensor.shape
+    left, right, top, bottom = pad["left"], pad["right"], pad["top"], pad["bottom"]
+    padded = F.pad(image_tensor.movedim(-1, 1), (left, right, top, bottom), mode="replicate").movedim(1, -1)
+
+    device = image_tensor.device
+    inner = torch.maximum(
+        _edge_ramp(width, pad["feather"], left > 0, right > 0, device)[None, :],
+        _edge_ramp(height, pad["feather"], top > 0, bottom > 0, device)[:, None],
+    ).expand(batch, height, width)
+    # A file without alpha gives an all-ones mask, which marks nothing.
+    if mask_tensor is not None and mask_tensor.shape[-2:] == (height, width) and mask_tensor.min() < 1:
+        inner = torch.maximum(inner, mask_tensor.to(device))
+    mask = torch.ones((batch, height + top + bottom, width + left + right), dtype=torch.float32, device=device)
+    mask[:, top:top + height, left:left + width] = inner
+    return padded, mask
+
+
 def get_placeholder_image_tensor():
     """Return a small black square tensor for missing/failed image loads."""
     return torch.zeros((1, 64, 64, 3), dtype=torch.float32)
@@ -866,6 +919,7 @@ class LoadImagePlus:
                 "crop_data": ("STRING", {"default": "", "multiline": False}),
                 "flip_x": ("BOOLEAN", {"default": False}),
                 "flip_y": ("BOOLEAN", {"default": False}),
+                "pad_data": ("STRING", {"default": "", "multiline": False}),
             },
             "hidden": {
                 "unique_id": "UNIQUE_ID",
@@ -883,7 +937,7 @@ class LoadImagePlus:
     def VALIDATE_INPUTS(cls, **kwargs):
         return True
 
-    def load(self, image="", source_folder="input", frame_position=0.0, mask_data="", crop_data="", flip_x=False, flip_y=False, unique_id=None):
+    def load(self, image="", source_folder="input", frame_position=0.0, mask_data="", crop_data="", flip_x=False, flip_y=False, pad_data="", unique_id=None):
         if frame_position is None:
             frame_position = 0.0
 
@@ -961,6 +1015,7 @@ class LoadImagePlus:
             flip_x=flip_x,
             flip_y=flip_y,
         )
+        image_tensor, mask_tensor = _apply_pad(image_tensor, mask_tensor, pad_data)
 
         if is_blank and not preview_images:
             preview_images = self._save_preview_images(image_tensor, None)
@@ -1067,11 +1122,11 @@ class LoadImagePlus:
         return results
 
     @classmethod
-    def IS_CHANGED(cls, image, source_folder="input", frame_position=0.0, mask_data="", crop_data="", flip_x=False, flip_y=False, **kwargs):
+    def IS_CHANGED(cls, image, source_folder="input", frame_position=0.0, mask_data="", crop_data="", flip_x=False, flip_y=False, pad_data="", **kwargs):
         if image == "(none)":
-            return ("no_file", source_folder, frame_position, mask_data, crop_data, flip_x, flip_y)
+            return ("no_file", source_folder, frame_position, mask_data, crop_data, flip_x, flip_y, pad_data)
         if image == "(blank)":
-            return ("blank", source_folder, frame_position, mask_data, crop_data, flip_x, flip_y)
+            return ("blank", source_folder, frame_position, mask_data, crop_data, flip_x, flip_y, pad_data)
 
         mtime = "no_file"
         if image:
@@ -1087,4 +1142,4 @@ class LoadImagePlus:
             elif os.path.exists(file_path):
                 mtime = os.path.getmtime(file_path)
 
-        return (mtime, source_folder, frame_position, mask_data, crop_data, flip_x, flip_y)
+        return (mtime, source_folder, frame_position, mask_data, crop_data, flip_x, flip_y, pad_data)

@@ -1,8 +1,8 @@
-// The image stage: one canvas that shows a picture and edits a crop rect and
-// a painted mask on it. The picture, mask and crop shade are drawn into the
-// canvas, so hit-testing does not drift with zoom and works the same in both
-// renderers; numbers (size, crop) belong in the caption under it, never on
-// the picture. Interaction follows the AusBoss pad
+// The image stage: one canvas that shows a picture and edits a crop rect, the
+// padding around it and a painted mask. The picture, mask, crop shade and pad
+// hatch are drawn into the canvas, so hit-testing does not drift with zoom and
+// works the same in both renderers; numbers (size, crop) belong in the caption
+// under it, never on the picture. Interaction follows the AusBoss pad
 // stage: the whole crop edge is the handle, the geometry freezes while a drag
 // runs, and a press that grabs nothing falls through to the node.
 //
@@ -10,20 +10,25 @@
 //   image()  -> { bitmap, width, height } | null
 //   flips()  -> { x, y }
 //   crop()   -> { shown, editable, rect }      rect: display percent
+//   pad()    -> { shown, editable, sides }     sides: pixels beyond the output
 //   mask()   -> { shown, editable, strokes, brushSize, erasing }
 //   onCrop(rect), onCropEnd()
+//   onPad(sides, handle), onPadEnd()          handle: "n", "se", ... or "move"
 //   onStrokeStart(stroke), onStrokeEnd()       stroke points in source space
 //   onClick()          a plain click while no tool is active
 //   onContextMenu(event)
 //   emptyText()
 import { el } from "../fbui/dom.js";
 import { FONT, T } from "../fbui/theme.js";
-import { cropCursor, cropViewRect, dragCrop, fitRect, hitCrop } from "./stage_math.js";
+import { cropCursor, cropViewRect, dragCrop, dragPad, fitRect, hitCrop, padFitRect } from "./stage_math.js";
 
 // The picture fills the frame edge to edge, as the video players do; crop
 // edges stay grabbable there because their band reaches inside the picture.
 const MARGIN = 0;
 const CLICK_SLOP = 4;
+// Room around the padded canvas while it is edited, as a share of the
+// picture's long side, so its edges can be dragged further out.
+const PAD_SLACK = 0.15;
 
 const clamp01 = (value) => Math.max(0, Math.min(1, value));
 
@@ -59,13 +64,49 @@ export function drawStroke(ctx, stroke, rect) {
   ctx.restore();
 }
 
+// A crop or pad outline: dotted over a dark underlay while it is edited,
+// readable on any picture; otherwise a quiet dashed line.
+function outline(ctx, view, editable) {
+  ctx.save();
+  if (editable) {
+    ctx.strokeStyle = "rgba(0,0,0,.65)";
+    ctx.lineWidth = 3;
+    ctx.strokeRect(view.x, view.y, view.width, view.height);
+    ctx.strokeStyle = T.ink;
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([2, 4]);
+    ctx.lineCap = "round";
+  } else {
+    ctx.strokeStyle = T.label;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([5, 4]);
+  }
+  ctx.strokeRect(view.x, view.y, view.width, view.height);
+  ctx.restore();
+}
+
+// The added canvas: hatched, so it reads as "to be painted".
+function hatch(ctx) {
+  const tile = document.createElement("canvas");
+  tile.width = tile.height = 8;
+  const t = tile.getContext("2d");
+  t.fillStyle = T.shade;
+  t.fillRect(0, 0, 8, 8);
+  t.strokeStyle = "rgba(255,255,255,.16)";
+  t.beginPath();
+  t.moveTo(-1, 9);
+  t.lineTo(9, -1);
+  t.stroke();
+  return ctx.createPattern(tile, "repeat");
+}
+
 export function createImageStage(options) {
   const root = el("div", "fbui-stage");
   const canvas = el("canvas", "fbui-fit");
   canvas.style.touchAction = "none";
   root.append(canvas);
   const maskLayer = document.createElement("canvas");
-  const state = { raf: 0, drag: null, hover: null, imageRect: null, cropRect: null, disposed: false };
+  const state = { raf: 0, drag: null, hover: null, imageRect: null, cropRect: null, padRect: null, disposed: false };
 
   const localPoint = (event) => {
     const bounds = canvas.getBoundingClientRect();
@@ -101,6 +142,7 @@ export function createImageStage(options) {
     if (!image?.bitmap) {
       state.imageRect = null;
       state.cropRect = null;
+      state.padRect = null;
       ctx.font = `11px ${FONT}`;
       ctx.fillStyle = T.faint;
       ctx.textAlign = "center";
@@ -110,7 +152,13 @@ export function createImageStage(options) {
     }
 
     // The fit freezes while a drag runs, so an edge never slips from the pointer.
-    const rect = state.drag?.imageRect ?? fitRect(image.width, image.height, w, h, MARGIN);
+    const crop = options.crop();
+    const pad = options.pad();
+    const output = crop.shown ? cropViewRect(crop.rect, { x: 0, y: 0, width: image.width, height: image.height }) : { x: 0, y: 0, width: image.width, height: image.height };
+    const slack = pad.editable ? PAD_SLACK * Math.max(image.width, image.height) : 0;
+    const rect = state.drag?.imageRect ?? (pad.shown
+      ? padFitRect(image.width, image.height, output, pad.sides, w, h, slack)
+      : fitRect(image.width, image.height, w, h, MARGIN));
     state.imageRect = rect;
     const flips = options.flips();
     const mask = options.mask();
@@ -132,34 +180,30 @@ export function createImageStage(options) {
     }
     ctx.restore();
 
-    const crop = options.crop();
     state.cropRect = null;
     if (crop.shown) {
       const view = cropViewRect(crop.rect, rect);
       state.cropRect = view;
-      ctx.save();
       ctx.beginPath();
       ctx.rect(rect.x, rect.y, rect.width, rect.height);
       ctx.rect(view.x, view.y, view.width, view.height);
       ctx.fillStyle = T.shade;
       ctx.fill("evenodd");
-      // While the crop is edited its outline is dotted over a dark underlay,
-      // readable on any picture; otherwise a quiet dashed line.
-      if (crop.editable) {
-        ctx.strokeStyle = "rgba(0,0,0,.65)";
-        ctx.lineWidth = 3;
-        ctx.strokeRect(view.x, view.y, view.width, view.height);
-        ctx.strokeStyle = T.ink;
-        ctx.lineWidth = 1.5;
-        ctx.setLineDash([2, 4]);
-        ctx.lineCap = "round";
-      } else {
-        ctx.strokeStyle = T.label;
-        ctx.lineWidth = 1;
-        ctx.setLineDash([5, 4]);
-      }
-      ctx.strokeRect(view.x, view.y, view.width, view.height);
-      ctx.restore();
+      outline(ctx, view, crop.editable);
+    }
+    state.padRect = null;
+    if (pad.shown) {
+      const base = state.cropRect ?? rect;
+      const perPixel = rect.width / image.width;
+      const { left, right, top, bottom } = pad.sides;
+      const view = { x: base.x - left * perPixel, y: base.y - top * perPixel, width: base.width + (left + right) * perPixel, height: base.height + (top + bottom) * perPixel };
+      state.padRect = view;
+      ctx.beginPath();
+      ctx.rect(view.x, view.y, view.width, view.height);
+      ctx.rect(base.x, base.y, base.width, base.height);
+      ctx.fillStyle = hatch(ctx);
+      ctx.fill("evenodd");
+      outline(ctx, view, pad.editable);
     }
     if (mask.editable && state.hover && !state.drag?.handle) {
       const inside = state.hover.x >= rect.x && state.hover.x <= rect.x + rect.width && state.hover.y >= rect.y && state.hover.y <= rect.y + rect.height;
@@ -199,6 +243,16 @@ export function createImageStage(options) {
     const rect = state.imageRect;
     const crop = options.crop();
     const mask = options.mask();
+    const pad = options.pad();
+    if (rect && pad.editable) {
+      const handle = hitCrop(point, state.padRect);
+      if (handle) {
+        consume(event);
+        state.drag = { padHandle: handle, start: point, sides: { ...pad.sides }, imageRect: rect };
+        redraw();
+        return;
+      }
+    }
     if (rect && crop.editable) {
       const handle = hitCrop(point, state.cropRect);
       if (handle) {
@@ -235,13 +289,15 @@ export function createImageStage(options) {
       const dx = ((point.x - drag.start.x) / drag.imageRect.width) * 100;
       const dy = ((point.y - drag.start.y) / drag.imageRect.height) * 100;
       options.onCrop?.(dragCrop(drag.handle, drag.rect, dx, dy));
+    } else if (drag?.padHandle) {
+      const perPixel = drag.imageRect.width / options.image().width;
+      options.onPad?.(dragPad(drag.padHandle, drag.sides, (point.x - drag.start.x) / perPixel, (point.y - drag.start.y) / perPixel), drag.padHandle);
     } else if (drag?.stroke) {
       const next = toSource(point, drag.imageRect);
       const last = drag.stroke.points[drag.stroke.points.length - 1];
       if (Math.abs(last[0] - next[0]) > 0.0015 || Math.abs(last[1] - next[1]) > 0.0015) drag.stroke.points.push(next);
     } else {
-      const crop = options.crop();
-      const handle = crop.editable ? hitCrop(point, state.cropRect) : null;
+      const handle = options.crop().editable ? hitCrop(point, state.cropRect) : options.pad().editable ? hitCrop(point, state.padRect) : null;
       const rect = state.imageRect;
       const onPicture = rect && point.x >= rect.x && point.x <= rect.x + rect.width && point.y >= rect.y && point.y <= rect.y + rect.height;
       const painting = options.mask().editable && onPicture;
@@ -261,6 +317,7 @@ export function createImageStage(options) {
     state.press = null;
     try { canvas.releasePointerCapture(event.pointerId); } catch { /* not captured */ }
     if (drag?.handle) options.onCropEnd?.();
+    else if (drag?.padHandle) options.onPadEnd?.();
     else if (drag?.stroke) options.onStrokeEnd?.();
     else if (press && event.type === "pointerup") {
       const point = localPoint(event);

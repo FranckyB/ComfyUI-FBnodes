@@ -22,6 +22,7 @@ const CARDS = {
         { widget: "other_strength", label: "Other" },
     ],
     SwitchAnyBool: [{ widget: "condition", label: "Condition", offText: "false", onText: "true" }],
+    FBOutpaintBlend: [{ widget: "match_tone", label: "Tone match" }],
     LoadLatentFile: LATENT_FILE,
     LoadLTXLatentFile: LATENT_FILE,
     VACEStitcher_Options: [

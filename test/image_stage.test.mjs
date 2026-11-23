@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { cropPixels, cropViewRect, dragCrop, fitRect, hitCrop, isFullCrop } from "../js/common/stage_math.js";
+import { cropPixels, cropViewRect, dragCrop, dragPad, fitRect, hitCrop, isFullCrop, lockPad, padFitRect } from "../js/common/stage_math.js";
 
 const FULL = { left_pct: 0, right_pct: 100, top_pct: 0, bottom_pct: 100 };
 
@@ -54,4 +54,37 @@ test("a batch lays out at the largest size the box allows", () => {
     assert.deepEqual([one.columns, one.rows, one.width, one.height], [1, 1, 800, 400]);
     // Gaps are left between cells.
     assert.equal(bestGrid(2, 100, 100, 210, 100, 10).width, 100);
+});
+
+test("pad edges drag outward in whole pixels and never below zero", () => {
+    const start = { left: 10, right: 0, top: 0, bottom: 5 };
+    assert.deepEqual(dragPad("w", start, -20.4, 0), { left: 30, right: 0, top: 0, bottom: 5 });
+    assert.deepEqual(dragPad("se", start, 7.6, -9), { left: 10, right: 8, top: 0, bottom: 0 });
+});
+
+test("moving the pad slides the canvas, the picture kept inside", () => {
+    const start = { left: 10, right: 30, top: 0, bottom: 0 };
+    assert.deepEqual(dragPad("move", start, 4, 5), { left: 6, right: 34, top: 0, bottom: 0 });
+    assert.deepEqual(dragPad("move", start, 50, 0), { left: 0, right: 40, top: 0, bottom: 0 });
+});
+
+test("a locked ratio holds: edges drive their axis, corners and new ratios cover", () => {
+    const none = { left: 0, right: 0, top: 0, bottom: 0 };
+    assert.deepEqual(lockPad(none, "", 1000, 1000, 16 / 9), { left: 389, right: 389, top: 0, bottom: 0 });
+    assert.deepEqual(lockPad(none, "", 1600, 900, 1), { left: 0, right: 0, top: 350, bottom: 350 });
+    // Dragging the right edge of a 1:1 lock out by 200 grows the height evenly.
+    assert.deepEqual(lockPad({ ...none, right: 200 }, "e", 1000, 1000, 1), { left: 0, right: 200, top: 100, bottom: 100 });
+    // An edge pulled inside the minimum canvas stops there.
+    assert.deepEqual(lockPad({ ...none, top: 50 }, "n", 1000, 500, 1), { left: 0, right: 0, top: 500, bottom: 0 });
+    // Shrinking an edge shrinks the other axis too.
+    assert.deepEqual(lockPad({ left: 100, right: 0, top: 100, bottom: 100 }, "w", 1000, 900, 1), { left: 100, right: 0, top: 100, bottom: 100 });
+    assert.deepEqual(lockPad({ left: 0, right: 0, top: 50, bottom: 50 }, "w", 1000, 900, 1), { left: 0, right: 0, top: 50, bottom: 50 });
+    // A corner covers: the dragged sides take the change.
+    assert.deepEqual(lockPad({ ...none, right: 10, bottom: 300 }, "se", 1000, 1000, 1), { left: 0, right: 300, top: 0, bottom: 300 });
+});
+
+test("the padded canvas fits the view, the picture placed inside it", () => {
+    const base = { x: 0, y: 0, width: 100, height: 100 };
+    const rect = padFitRect(100, 100, base, { left: 100, right: 0, top: 0, bottom: 0 }, 200, 100);
+    assert.deepEqual(rect, { x: 100, y: 0, width: 100, height: 100, scale: 1 });
 });
