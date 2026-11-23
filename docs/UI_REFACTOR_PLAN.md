@@ -77,9 +77,13 @@ The three packs grew independently and each node builds its UI differently. Some
 ## Progress (2026-11-22)
 - **Done:**
   - Phase 0: kit, colours, rules and hygiene.
-  - Phase 1: the Load Image+ pilot, with frame-exact PyAV video frames and the browser-frame cache removed.
-  - The file browser, pulled forward from Phase 5: rebuilt on the kit, with Home/End/PgUp/PgDn, a Custom folder set in the browser, and mouse Back/Forward as up/down, Firefox included.
-- **Next:** Phase 2 (Load Video+, Load Audio+, Visual LoRA Picker+). While converting those callers, drop the browser options they still pass but which are no longer read: `enableNavigation` and `listKind`.
+  - Phase 1: the Load Image+ pilot, with frame-exact PyAV video frames.
+  - The file browser.
+  - Phase 2: Load Video+, Load Audio+ and Visual LoRA Picker+, with the Load+ source handling shared in `js/common/load_plus.mjs`.
+  - Save Image+ review: pick the images to keep before saving.
+- **Next:**
+  - Phase 3: convert the Save Image+ and Save Video+ faces, Crop Image+ and Crop Audio+.
+  - Still to drop: the ignored `enableNavigation` / `listKind` options that Clip Stitcher and VACE Stitcher pass to the browser.
 
 ## FBnodes phases
 **Phase 0: kit and hygiene**
