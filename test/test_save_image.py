@@ -75,7 +75,7 @@ class SaveImageTests(unittest.TestCase):
         self.answer = None
         tree = ast.parse(SOURCE.read_text())
         selected = [node for node in tree.body if
-                    isinstance(node, (ast.ClassDef, ast.FunctionDef)) and node.name in ("SaveImagePlus", "_expand_date_format", "_wait_for_review")
+                    isinstance(node, (ast.ClassDef, ast.FunctionDef)) and node.name in ("SaveImagePlus", "_expand_date_format", "_expand_time", "_wait_for_review")
                     or isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == "IMAGE_FORMAT_OPTIONS" for target in node.targets)]
         exec(compile(ast.Module(body=selected, type_ignores=[]), str(SOURCE), "exec"), self.env)
         self.node = self.env["SaveImagePlus"]()
@@ -108,6 +108,12 @@ class SaveImageTests(unittest.TestCase):
         self.assertEqual(len(list(self.output.iterdir())), 2)
         self.assertEqual([info["type"] for info in result["ui"]["saved_images"]], ["output"] * 2)
 
+    def test_time_token_counts_from_queue(self):
+        result = self.node.save_images(self.images[:1], "run_%time%s", exec_start=str(time.time() - 42))
+        self.assertEqual(result["result"], ("image_00001.png",))
+        self.assertEqual(self.env["_expand_time"]("run_%time%s", str(time.time() - 42)), "run_42s")
+        self.assertEqual(self.env["_expand_time"]("run_%time%s", ""), "run_0s")
+
     def test_review_is_skipped_when_not_saving(self):
         self.node.save_images(self.images, "prefix", save=False, review=True)
         self.assertEqual(self.events, [])
@@ -116,7 +122,7 @@ class SaveImageTests(unittest.TestCase):
         schema = self.node.INPUT_TYPES()
         self.assertEqual(list(schema["required"]), ["images", "filename_prefix", "save"])
         # New inputs are only ever appended, so saved widgets_values keep their places.
-        self.assertEqual(list(schema["optional"]), ["Compare", "format", "bit_depth", "input_color_space", "crf", "review", "review_timeout"])
+        self.assertEqual(list(schema["optional"]), ["Compare", "format", "bit_depth", "input_color_space", "crf", "review", "review_timeout", "exec_start"])
         self.assertEqual(list(inspect.signature(self.node.save_images).parameters)[:6],
                          ["images", "filename_prefix", "save", "Compare", "prompt", "extra_pnginfo"])
         result = self.node.save_images(self.images, "old", True, self.images, {"node": 1}, {"workflow": {"id": 2}})

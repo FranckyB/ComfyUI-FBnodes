@@ -103,6 +103,19 @@ def _wait_for_review(item) -> str:
     return "decided"
 
 
+def _expand_time(text: str, exec_start) -> str:
+    """%time%: whole seconds from queueing the run (exec_start, stamped by the
+    UI) until this save, as in Save Video+."""
+    if "%time%" not in text:
+        return text
+    try:
+        start = float(str(exec_start).strip())
+    except (TypeError, ValueError):
+        start = 0.0
+    elapsed = max(0.0, time.time() - start) if start > 0 else 0.0
+    return text.replace("%time%", str(int(round(elapsed))))
+
+
 def _tensor_to_pil(image_tensor):
     """Convert a Comfy IMAGE tensor in [0,1] to a PIL image."""
     array = image_tensor.cpu().numpy()
@@ -154,6 +167,10 @@ class SaveImagePlus:
                     "INT",
                     {"default": 120, "min": 0, "max": 3600, "tooltip": "Seconds to wait for your pick; when it runs out every image is saved. 0 waits until you decide."},
                 ),
+                "exec_start": (
+                    "STRING",
+                    {"default": "", "tooltip": "Unix time stamped by the UI when the run is queued; enables %time% in filename_prefix."},
+                ),
             },
             "hidden": {
                 "prompt": "PROMPT",
@@ -171,7 +188,7 @@ class SaveImagePlus:
 
     def save_images(self, images, filename_prefix, save=True, Compare=None, prompt=None, extra_pnginfo=None,
                     format="png", bit_depth="8-bit", input_color_space="sRGB", crf=18,
-                    review=False, review_timeout=120, unique_id=None):
+                    review=False, review_timeout=120, exec_start="", unique_id=None):
         if images is None or len(images) == 0:
             return ("",)
 
@@ -181,7 +198,7 @@ class SaveImagePlus:
         if (format != "png" or bit_depth != "8-bit") and _encode_image is None:
             raise RuntimeError("Advanced image saving requires a ComfyUI version with Save Image (Advanced).")
 
-        filename_prefix = _expand_date_format(filename_prefix)
+        filename_prefix = _expand_time(_expand_date_format(filename_prefix), exec_start)
         ext = format
 
         first = images[0]

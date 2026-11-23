@@ -16,10 +16,11 @@ import { toast } from "./fbui/comfy.js";
 import { button, ICONS, segmented } from "./fbui/controls.js";
 import { chainCallback, el } from "./fbui/dom.js";
 import { openMenu, openModal } from "./fbui/modal.js";
-import { findWidget, hideInputsInDef, suppressCorePreview } from "./fbui/widgets.js";
+import { findWidget, hideInputsInDef, hideWidget, suppressCorePreview } from "./fbui/widgets.js";
 import { CAPTION_HEIGHT, RADIUS, T } from "./fbui/theme.js";
 import { bestGrid } from "./common/grid_math.js";
 import { fitRect } from "./common/stage_math.js";
+import { installExecStart } from "./common/exec_start.js";
 
 const NODE_NAME = "SaveImagePlus";
 const MIN_WIDTH = 300;
@@ -30,13 +31,14 @@ const GRID_GAP = 6;
 
 // What the Filename field understands, shown from its (i).
 const FILENAME_HELP = [
-    "Saved as Filename_00001.png, _00002 … in the output folder.",
+    "The default %date:yy-MM-dd%/img_%date:HH_mm_ss% saves 26-11-22/img_14_05_09_00001.png, _00002 … in the output folder.",
     ["a/b/name", "a / makes subfolders"],
-    ["%date:yy-MM-dd%", "the date and time in any layout, using yyyy yy MM dd HH hh mm ss"],
-    ["%year% %month% %day%", "today's date"],
-    ["%hour% %minute% %second%", "the time now"],
+    ["%date:yy-MM-dd%", "date and time in any layout: yyyy yy MM dd HH hh mm ss"],
+    ["%time%", "the seconds the run took, from pressing Queue"],
     ["%width% %height%", "the image size"],
-    "With Save off, only the name after the last / is used, in the temp folder.",
+    ["%year% %month% %day%", "today's date (ComfyUI's own tokens)"],
+    ["%hour% %minute% %second%", "the time now (ComfyUI's own tokens)"],
+    "With Save off, the name after the last / is used in the temp folder, and the image-size and ComfyUI tokens stay as typed.",
 ];
 
 // What each format can store; the Depth and Color pills follow the format.
@@ -431,6 +433,7 @@ function setupNode(node) {
     suppressCorePreview(node);
     const fb = { saved: [], compare: [], paired: false, unpaired: false, grid: false, at: 0, atCompare: 0, shownSize: null };
     node._fb = fb;
+    hideWidget(findWidget(node, "exec_start"));
     restore(node);
     applyFormat(node);
     chainCallback(findWidget(node, "format"), "callback", () => {
@@ -443,7 +446,7 @@ function setupNode(node) {
         minWidth: MIN_WIDTH,
         rows: [
             { group: "options", label: "Options" },
-            { widget: "filename_prefix", label: "Filename", kind: "text", info: FILENAME_HELP, group: "options" },
+            { widget: "filename_prefix", label: "Name", kind: "text", info: FILENAME_HELP, group: "options" },
             { widget: "save", label: "Save", offText: "preview", onText: "save", group: "options" },
             { widget: "format", label: "Format", kind: "segment", labels: { png: "PNG", exr: "EXR", avif: "AVIF" }, group: "options", when: saving },
             { widget: "bit_depth", label: "Depth", kind: "segment", group: "options", when: saving },
@@ -477,6 +480,7 @@ app.registerExtension({
     name: "FBnodes.SaveImagePlus",
     setup() {
         installKeys();
+        installExecStart();
         api.addEventListener("executed", (event) => {
             const { node, output } = event.detail ?? {};
             if (node != null && (output?.saved_images?.length || output?.compare_images?.length)) lastResults.set(String(node), output);
@@ -485,7 +489,7 @@ app.registerExtension({
     beforeRegisterNodeDef(nodeType, nodeData) {
         if (nodeData.name !== NODE_NAME) return;
         hideInputsInDef(nodeData, [
-            "filename_prefix", "save", "format", "bit_depth", "input_color_space", "crf", "review", "review_timeout",
+            "filename_prefix", "save", "format", "bit_depth", "input_color_space", "crf", "review", "review_timeout", "exec_start",
         ]);
         chainCallback(nodeType.prototype, "onNodeCreated", function () {
             setupNode(this);
