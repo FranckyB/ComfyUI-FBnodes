@@ -199,6 +199,12 @@ class OutpaintStitch:
                 "tone_match": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.05,
                                          "tooltip": "Match the new area's tone to your picture when it comes back lighter, darker or warmer. 1 is the full match, 0 is off; it needs a feather, since it reads the strip of your picture the model repainted."}),
             },
+            "optional": {
+                "inset": ("INT", {"default": 0, "min": 0, "max": 1024, "step": 1,
+                                  "tooltip": "Keep this many pixels of the result over your picture's edge before it hands over to your picture: more of the outpaint, the seam further in."}),
+                "feather": ("INT", {"default": 0, "min": 0, "max": 1024, "step": 1,
+                                    "tooltip": "How wide the handover from the result to your picture is, in pixels. 0 reads it off the mask's feather."}),
+            },
         }
 
     RETURN_TYPES = ("IMAGE", "IMAGE")
@@ -208,7 +214,7 @@ class OutpaintStitch:
     CATEGORY = "FBnodes"
     DESCRIPTION = "Puts an outpainted result back on its canvas at the canvas's size with AusBoss's blend in seam: colour, tone and detail hand over from the result to your picture across its edge, and deeper in the picture is yours bit for bit."
 
-    def blend(self, image, mask, canvas, tone_match):
+    def blend(self, image, mask, canvas, tone_match, inset=0, feather=0):
         height, width = canvas.shape[1:3]
         result = _resize(image, width, height)
-        return (blend_in(canvas[..., :3].to(result), result, _mask_at(mask[:1], width, height)[0, 0], tone_match), canvas)
+        return (blend_in(canvas[..., :3].to(result), result, _mask_at(mask[:1], width, height)[0, 0], tone_match, inset, feather), canvas)

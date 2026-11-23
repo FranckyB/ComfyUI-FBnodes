@@ -22,7 +22,11 @@ const CARDS = {
         { widget: "other_strength", label: "Other" },
     ],
     SwitchAnyBool: [{ widget: "condition", label: "Condition", offText: "false", onText: "true" }],
-    OutpaintStitch: [{ widget: "tone_match", label: "Tone match" }],
+    OutpaintStitch: [
+        { widget: "tone_match", label: "Tone match" },
+        { widget: "inset", label: "Inset", suffix: "px" },
+        { widget: "feather", label: "Feather", suffix: "px" },
+    ],
     OutpaintPrepare: [{ widget: "megapixels", label: "Megapixels", suffix: "MP" }],
     LoadLatentFile: LATENT_FILE,
     LoadLTXLatentFile: LATENT_FILE,
