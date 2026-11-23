@@ -1,11 +1,22 @@
-import { app } from "../../scripts/app.js";
+/**
+ * Crop Image+ (FBnodes): crop the incoming image by dragging the box, its
+ * edges or corners, with an optional aspect-ratio lock. One fbui card: Aspect
+ * (and Portrait for a fixed ratio), the picture, the exact edges in percent
+ * under Exact crop, and the output size as the footnote. The stock widgets
+ * stay hidden and hold the values.
+ */
 
+import { app } from "../../scripts/app.js";
+import { mountCard } from "./fbui/card.js";
+import { button, ICONS } from "./fbui/controls.js";
+import { el } from "./fbui/dom.js";
+import { CAPTION_HEIGHT, T } from "./fbui/theme.js";
+import { hideInputsInDef } from "./fbui/widgets.js";
+
+// The stage's size before it is laid out.
 const PREVIEW_W = 420;
 const PREVIEW_H = 360;
-const NODE_MIN_W = 240;
-const NODE_MIN_H = 440;
-const NODE_MIN_SIZE_W = NODE_MIN_W + 22;
-const NODE_MIN_SIZE_H = NODE_MIN_H;
+const STAGE_MIN_HEIGHT = 200;
 const HANDLE_MIN_SIZE = 20;
 const HANDLE_MAX_SIZE = 24;
 const BRACKET_THICKNESS = 3;
@@ -13,8 +24,6 @@ const CORNER_HIT_SIZE = 24;
 const SIDE_HANDLE_HIT_THICKNESS = 14;
 const CANVAS_PAD = 4;
 const SIDE_HANDLE_LENGTH_MULT = 1.5;
-const RESET_WIDGET_ROW_H = 10;
-const INFO_ROW_WIDGET_H = 24;
 const PREVIEW_CACHE = new Map();
 
 function styleCornerHandle(el, key, size) {
@@ -28,8 +37,8 @@ function styleCornerHandle(el, key, size) {
 
     const h = document.createElement("div");
     const v = document.createElement("div");
-    h.style.cssText = `position:absolute; background:#fff; height:${t}px;`;
-    v.style.cssText = `position:absolute; background:#fff; width:${t}px;`;
+    h.style.cssText = `position:absolute; background:${T.ink}; height:${t}px;`;
+    v.style.cssText = `position:absolute; background:${T.ink}; width:${t}px;`;
 
     if (key === "nw") {
         h.style.left = "0"; h.style.top = "0"; h.style.width = `${size}px`; h.style.borderRadius = `${r}px ${r}px 0 0`;
@@ -56,7 +65,7 @@ function styleSideHandle(el, key, length) {
     el.style.background = "transparent";
 
     const line = document.createElement("div");
-    line.style.cssText = "position:absolute; background:#fff;";
+    line.style.cssText = `position:absolute; background:${T.ink};`;
 
     if (key === "n") {
         el.style.width = `${length}px`;
@@ -106,20 +115,10 @@ function getCropWidget(node, name) {
 function updateInfoWidget(node, state) {
     const w = node._dragCropInfoEl;
     if (!w) return;
-    if (!state.hasVisibleImage) {
-        w.textContent = "--";
-        return;
-    }
-
-    const rw = Math.max(1, state.rect.right - state.rect.left);
-    const rh = Math.max(1, state.rect.bottom - state.rect.top);
-    const pctW = Math.round((rw / Math.max(1, state.imageW)) * 100);
-    const pctH = Math.round((rh / Math.max(1, state.imageH)) * 100);
-    const pctWS = String(pctW).padStart(2, "0");
-    const pctHS = String(pctH).padStart(2, "0");
-    const rwS = String(rw).padStart(3, "0");
-    const rhS = String(rh).padStart(3, "0");
-    w.textContent = `${pctWS}% x ${pctHS}% | ${rwS}px x ${rhS}px`;
+    // The footnote: only the size the node outputs.
+    w.textContent = state.hasVisibleImage
+        ? `${Math.max(1, state.rect.right - state.rect.left)} × ${Math.max(1, state.rect.bottom - state.rect.top)}`
+        : "—";
 }
 
 function parseRatioLabel(label) {
@@ -395,12 +394,6 @@ function displayToRect(state, d) {
     clampRect(state.rect, state.imageW, state.imageH);
 }
 
-function clampNodeSize(node) {
-    node.size = node.size || [NODE_MIN_SIZE_W, NODE_MIN_SIZE_H];
-    node.size[0] = Math.max(node.size[0] || 0, NODE_MIN_SIZE_W);
-    node.size[1] = Math.max(node.size[1] || 0, NODE_MIN_SIZE_H);
-}
-
 function ensurePersistState(node) {
     node.properties = node.properties || {};
     node.properties.fb_dragcrop = node.properties.fb_dragcrop || {};
@@ -439,26 +432,14 @@ function hasLikelySavedCrop(node) {
 }
 
 function buildUI(node) {
-    const root = document.createElement("div");
-    root.style.cssText = `
-        width:${PREVIEW_W}px;
-        height:${PREVIEW_H}px;
-        position:relative;
-        border:1px solid rgba(255,255,255,0.12);
-        border-radius:6px;
-        overflow:hidden;
-        background:#1c1e22;
-        box-sizing:border-box;
-        user-select:none;
-    `;
+    const root = el("div", "fbui-stage");
+    root.style.userSelect = "none";
 
     const img = document.createElement("img");
     img.style.cssText = `position:absolute; inset:${CANVAS_PAD}px; width:calc(100% - ${CANVAS_PAD * 2}px); height:calc(100% - ${CANVAS_PAD * 2}px); object-fit:contain;`;
     img.draggable = false;
 
-    const emptyHint = document.createElement("div");
-    emptyHint.textContent = "Execute the node\nto display image";
-    emptyHint.style.cssText = "position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); color:rgba(220,230,240,0.62); font-size:13px; font-weight:500; line-height:1.2; white-space:pre-line; text-align:center; pointer-events:none; user-select:none;";
+    const emptyHint = el("div", "fbui-stage-empty", "Run the workflow to crop its image");
 
     const overlay = document.createElement("div");
     overlay.style.cssText = `position:absolute; inset:${CANVAS_PAD}px; pointer-events:none;`;
@@ -473,7 +454,7 @@ function buildUI(node) {
     }
 
     const box = document.createElement("div");
-    box.style.cssText = "position:absolute; border:1px solid rgba(255,255,255,0.52); box-sizing:border-box; pointer-events:auto; cursor:move; z-index:2;";
+    box.style.cssText = `position:absolute; border:1px dotted ${T.ink}; box-sizing:border-box; pointer-events:auto; cursor:move; z-index:2;`;
 
     const gridV1 = document.createElement("div");
     gridV1.style.cssText = "position:absolute; top:0; bottom:0; left:33.333%; width:1px; transform:translateX(-0.5px); background:rgba(255,255,255,0.38); pointer-events:none;";
@@ -488,8 +469,6 @@ function buildUI(node) {
     box.appendChild(gridH1);
     box.appendChild(gridH2);
 
-    const label = document.createElement("div");
-    label.style.cssText = "position:absolute; left:50%; top:8px; transform:translate(-50%,0); color:#ffffff; background:rgba(20,24,30,0.86); border:1px solid rgba(255,255,255,0.34); border-radius:6px; padding:3px 8px; font-size:12px; font-weight:600; white-space:pre; text-align:center; pointer-events:none;";
 
     const handles = {};
     for (const key of ["n","s","e","w","nw","ne","sw","se"]) {
@@ -501,7 +480,6 @@ function buildUI(node) {
     }
 
     overlay.appendChild(box);
-    overlay.appendChild(label);
     root.appendChild(img);
     root.appendChild(emptyHint);
     root.appendChild(overlay);
@@ -516,7 +494,6 @@ function buildUI(node) {
         shadeLeft,
         shadeRight,
         box,
-        label,
         handles,
         imageW: 640,
         imageH: 480,
@@ -645,7 +622,6 @@ function buildUI(node) {
 
         const overlayVisible = !!state.hasVisibleImage;
         state.box.style.display = overlayVisible ? "block" : "none";
-        state.label.style.display = "none";
         state.emptyHint.style.display = overlayVisible ? "none" : "block";
         state.shadeTop.style.display = overlayVisible ? "block" : "none";
         state.shadeBottom.style.display = overlayVisible ? "block" : "none";
@@ -882,6 +858,7 @@ app.registerExtension({
     name: "FBnodes.CropImagePlus",
     beforeRegisterNodeDef(nodeType, nodeData) {
         if (nodeData?.name !== "CropImagePlus") return;
+        hideInputsInDef(nodeData, ["left_pct", "right_pct", "top_pct", "bottom_pct", "aspect_ratio", "portrait"]);
 
         const onNodeCreated = nodeType.prototype.onNodeCreated;
         nodeType.prototype.onNodeCreated = function () {
@@ -890,16 +867,6 @@ app.registerExtension({
             const ui = buildUI(this);
             this._dragCropUI = ui;
 
-            const panelEl = document.createElement("div");
-            panelEl.style.cssText = "display:flex; flex-direction:column; width:100%; height:100%; box-sizing:border-box; margin-top:-10px;";
-
-            const infoEl = document.createElement("div");
-            infoEl.textContent = "--";
-            infoEl.style.cssText = "height:100%; display:flex; align-items:center; justify-content:center; color:rgba(220,230,240,0.8); font-size:12px; font-weight:600; font-family:'Cascadia Mono','Consolas','Courier New',monospace; user-select:none; pointer-events:none;";
-            this._dragCropInfoEl = infoEl;
-
-            panelEl.appendChild(ui.state.root);
-            panelEl.appendChild(infoEl);
             this._cropPctWidgets = {
                 left: getWidget(this, "left_pct"),
                 right: getWidget(this, "right_pct"),
@@ -907,17 +874,23 @@ app.registerExtension({
                 bottom: getWidget(this, "bottom_pct"),
             };
 
-            const resetWidget = this.addWidget("button", "Reset Crop", null, () => {
-                ui.state.rect.left = 0;
-                ui.state.rect.right = ui.state.imageW;
-                ui.state.rect.top = 0;
-                ui.state.rect.bottom = ui.state.imageH;
-                const aspectWidget = getWidget(this, "aspect_ratio");
-                if (aspectWidget) aspectWidget.value = "None";
-                updateWidgetValues(this, ui.state);
-                ui.redraw();
+            const reset = button("", {
+                icon: ICONS.reset, small: true, title: "Reset the crop",
+                onClick: () => {
+                    ui.state.rect.left = 0;
+                    ui.state.rect.right = ui.state.imageW;
+                    ui.state.rect.top = 0;
+                    ui.state.rect.bottom = ui.state.imageH;
+                    const aspectWidget = getWidget(this, "aspect_ratio");
+                    if (aspectWidget) aspectWidget.value = "None";
+                    updateWidgetValues(this, ui.state);
+                    ui.redraw();
+                    this._fb.card.refresh();
+                },
             });
-            resetWidget.serialize = false;
+            const tools = el("div", "fbui-stage-tools");
+            tools.append(reset);
+            ui.state.root.append(tools);
 
             const aspectWidget = getWidget(this, "aspect_ratio");
             if (aspectWidget?.options) {
@@ -935,47 +908,23 @@ app.registerExtension({
                 }
             }
 
-            const domWidget = this.addDOMWidget("drag_crop_preview", "customwidget", panelEl, {
-                serialize: false,
-                hideOnZoom: false,
+            const caption = el("div", "fbui-caption", "—");
+            this._dragCropInfoEl = caption;
+            const fixedRatio = (values) => values.aspect_ratio !== "None" && values.aspect_ratio !== "Source";
+            this._fb = {};
+            this._fb.card = mountCard(this, {
+                minWidth: 300,
+                rows: [
+                    { widget: "aspect_ratio", label: "Aspect", kind: "select" },
+                    { widget: "portrait", label: "Portrait", when: fixedRatio },
+                    { panel: () => ({ element: ui.state.root }), grow: true, height: STAGE_MIN_HEIGHT },
+                    { group: "crop", label: "Exact crop" },
+                    { pair: ["left_pct", "right_pct"], label: "Left · Right", suffix: "%", group: "crop" },
+                    { pair: ["top_pct", "bottom_pct"], label: "Top · Bottom", suffix: "%", group: "crop" },
+                    { panel: () => ({ element: caption }), height: CAPTION_HEIGHT },
+                ],
             });
-            // Keep a stable minimum; do not depend on current node height or it will ratchet upward.
-            domWidget.computeSize = (w) => [Math.max(120, w), 120 + INFO_ROW_WIDGET_H];
-
-            clampNodeSize(this);
-
-            const resizeRoot = () => {
-                const width = Math.max(120, (this.size?.[0] || NODE_MIN_W) - 22);
-                const reserved = (205 + RESET_WIDGET_ROW_H) + INFO_ROW_WIDGET_H;
-                const previewHeight = Math.max(120, (this.size?.[1] || NODE_MIN_H) - reserved);
-                const totalHeight = previewHeight + INFO_ROW_WIDGET_H;
-                panelEl.style.width = `${width}px`;
-                panelEl.style.height = `${totalHeight}px`;
-                ui.state.root.style.width = `${width}px`;
-                ui.state.root.style.height = `${previewHeight}px`;
-                infoEl.style.height = `${INFO_ROW_WIDGET_H}px`;
-                ui.redraw();
-            };
-
-            const scheduleStableRedraw = () => {
-                requestAnimationFrame(() => {
-                    resizeRoot();
-                    requestAnimationFrame(() => {
-                        resizeRoot();
-                    });
-                });
-            };
-            resizeRoot();
-            scheduleStableRedraw();
-
-            const oldOnResize = this.onResize;
-            this.onResize = function () {
-                const res = oldOnResize?.apply(this, arguments);
-                clampNodeSize(this);
-                resizeRoot();
-                this.setDirtyCanvas?.(true, true);
-                return res;
-            };
+            new ResizeObserver(() => ui.redraw()).observe(ui.state.root);
 
             const wireWidget = (name, cb) => {
                 const w = getWidget(this, name);
