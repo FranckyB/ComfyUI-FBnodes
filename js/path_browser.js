@@ -17,9 +17,47 @@ export function getCustomPresetPath() {
     return typeof pref === "string" ? pref.trim() : "";
 }
 
+/** Store the Custom preset folder (the same setting as in Preferences). */
+export function setCustomPresetPath(path) {
+    return app.ui.settings.setSettingValueAsync(SETTING_CUSTOM_PATH, String(path || "").trim());
+}
+
 /** URL that streams a media file from any path (for previews of out-of-tree files). */
 export function mediaFileUrl(absPath) {
     return api.apiURL(`/fbnodes/path-browser/file?path=${encodeURIComponent(absPath)}`);
+}
+
+/** "name.png [output]" (the MaskEditor's annotation) -> "name.png". */
+export function stripAnnotation(value) {
+    return typeof value === "string" ? value.replace(/\s+\[(input|output|temp)\]$/, "") : value;
+}
+
+export function isAbsolutePath(value) {
+    return /^([a-zA-Z]:[\\/]|\\\\|\/)/.test(stripAnnotation(String(value || "")));
+}
+
+export function basenameOf(value) {
+    return String(value || "").replace(/\\/g, "/").split("/").pop();
+}
+
+const VIDEO_EXTENSIONS = new Set(["mp4", "webm", "mov", "avi"]);
+const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "webp"]);
+const extensionOf = (value) => String(stripAnnotation(value) || "").split(".").pop().toLowerCase();
+export const isVideoFile = (value) => VIDEO_EXTENSIONS.has(extensionOf(value));
+export const isImageFile = (value) => IMAGE_EXTENSIONS.has(extensionOf(value));
+
+/**
+ * Preview URL for a loader value: absolute paths stream through the
+ * path-browser route, relative names go through ComfyUI's /view.
+ */
+export function previewUrl(value, type = "input") {
+    const clean = stripAnnotation(value);
+    if (isAbsolutePath(clean)) return mediaFileUrl(clean);
+    const normalized = String(clean).replace(/\\/g, "/");
+    const slash = normalized.lastIndexOf("/");
+    const params = new URLSearchParams({ filename: normalized.slice(slash + 1), type });
+    if (slash > 0) params.set("subfolder", normalized.slice(0, slash));
+    return api.apiURL(`/view?${params}`);
 }
 
 function normalizeSlashes(p) {
@@ -99,7 +137,7 @@ app.registerExtension({
             id: SETTING_CUSTOM_PATH,
             category: ["FBnodes", "1. Load+ Nodes", "1. Custom Browser Path"],
             name: "Load+ Custom Browser Path",
-            tooltip: "Optional folder shown as the 'Custom' preset in the Load+ file browsers.",
+            tooltip: "Folder the Custom button opens in the Load+ file browsers. Also set from the browser itself: click Custom while empty, or right-click it.",
             type: "text",
             defaultValue: "",
         },

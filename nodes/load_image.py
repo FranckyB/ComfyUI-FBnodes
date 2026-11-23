@@ -4,7 +4,6 @@ LoadImagePlus - A streamlined image/video loader with file browser and preview.
 import os
 import re
 import json
-import time
 import base64
 import io
 
@@ -19,9 +18,6 @@ try:
 except ImportError:
     IMAGE_SUPPORT = False
     print("[FBnodes] Warning: PIL/numpy not available, LoadImagePlus disabled")
-
-# Cache for video frames extracted by JavaScript
-_video_frames_cache = {}
 
 # Shared file-browser extension sets
 LIST_FILES_MEDIA_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp', '.mp4', '.webm', '.mov', '.avi']
@@ -126,91 +122,68 @@ def _probe_media_meta(file_path: str, ext: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# PyAV-based video frame extraction (for H265/yuv444 that browsers can't decode)
+# PyAV video frames. The preview and the node output both come from here, so
+# the frame shown is the frame loaded.
+#
+# frame_position (0..1) picks frame round(frame_position * frame_count); the
+# frontend stores frame n as n / frame_count. Frame i sits i / fps after the
+# stream's first frame (as in ComfyUI-AusBoss): a file's own timestamps can
+# start later (edit lists, transport streams), so decoded times are measured
+# from the stream's start_time.
 # ---------------------------------------------------------------------------
 
+def video_clock(container, stream):
+    """(fps, frame_count, origin seconds) of a video stream. webm/mkv streams
+    often carry no frame count; it is estimated from the duration."""
+    fps = float(stream.average_rate or stream.guessed_rate or 0)
+    if stream.duration is not None and stream.time_base is not None:
+        duration = float(stream.duration * stream.time_base)
+    else:
+        duration = float(container.duration or 0) / 1_000_000.0
+    count = int(stream.frames or 0) or (int(round(duration * fps)) if duration > 0 and fps > 0 else 0)
+    origin = float(stream.start_time * stream.time_base) if stream.start_time is not None and stream.time_base else 0.0
+    return fps, count, origin
+
+
+def frame_index_for(frame_position, frame_count):
+    if frame_count <= 0:
+        return 0
+    return max(0, min(frame_count - 1, int(round(float(frame_position) * frame_count))))
+
+
 def extract_video_frame_av(file_path, frame_position=0.0):
-    """
-    Extract a video frame using PyAV. Works with H265, yuv444, and other codecs
-    that browsers cannot decode.
-
-    Seeks to the nearest keyframe before the target position, then decodes forward
-    to the exact target frame for frame-accurate extraction.
-
-    Args:
-        file_path: Absolute path to the video file
-        frame_position: float from 0.0 to 1.0 representing position in video
-
-    Returns:
-        PIL Image or None on failure
-    """
-    try:
-        import av
-    except ImportError:
-        print("[FBnodes] PyAV not available, cannot extract frame server-side")
-        return None
+    """The frame frame_position picks, as a PIL image, or None on failure."""
+    import av
 
     try:
-        frame_position = max(0.0, min(1.0, float(frame_position)))
-        container = av.open(file_path)
-        try:
+        with av.open(file_path) as container:
             stream = container.streams.video[0]
-
-            # For position 0.0, return first decodable frame quickly.
-            if frame_position <= 0.0:
-                for frame in container.decode(video=0):
+            fps, count, origin = video_clock(container, stream)
+            index = frame_index_for(frame_position, count)
+            if fps <= 0 or index == 0:
+                for frame in container.decode(stream):
                     return frame.to_image()
                 return None
 
-            target_ts = None
-            target_frame_index = None
+            target = index / fps
+            # Seek to the keyframe before the target, then decode forward to
+            # the first frame whose time reaches it (half a frame of slack
+            # for rounded timestamps).
+            container.seek(int((origin + target) / stream.time_base), stream=stream, backward=True)
+            last = None
+            for frame in container.decode(stream):
+                last = frame
+                if frame.time is not None and frame.time - origin + 0.5 / fps >= target:
+                    return frame.to_image()
+            if last is not None:
+                return last.to_image()
 
-            duration_sec = None
-            if stream.duration is not None and stream.time_base is not None:
-                duration_sec = float(stream.duration * stream.time_base)
-            elif container.duration:
-                duration_sec = float(container.duration) / 1_000_000.0
-            elif stream.frames and stream.average_rate:
-                fps = float(stream.average_rate)
-                if fps > 0:
-                    duration_sec = float(stream.frames) / fps
-
-            if duration_sec and duration_sec > 0 and stream.time_base is not None:
-                target_sec = frame_position * duration_sec
-                target_ts = int(target_sec / float(stream.time_base))
-
-            if stream.frames and stream.frames > 0:
-                target_frame_index = int(round(frame_position * max(0, stream.frames - 1)))
-
-            if target_ts is not None:
-                # Seek to the nearest keyframe before target, then decode forward.
-                container.seek(target_ts, stream=stream, backward=True)
-
-                best_frame = None
-                for frame in container.decode(video=0):
-                    best_frame = frame
-                    pts = frame.pts
-                    if pts is not None and pts >= target_ts:
-                        break
-
-                if best_frame is not None:
-                    return best_frame.to_image()
-
-            # Timestamp seek can fail for some containers (notably some webm files).
-            # Fall back to frame-index stepping when frame count is available.
-            if target_frame_index is not None:
-                container.seek(0, stream=stream, backward=True)
-                for idx, frame in enumerate(container.decode(video=0)):
-                    if idx >= target_frame_index:
-                        return frame.to_image()
-
-            # Final fallback: first frame.
+            # No usable timestamps: count frames from the start.
             container.seek(0, stream=stream, backward=True)
-            for frame in container.decode(video=0):
-                return frame.to_image()
+            for i, frame in enumerate(container.decode(stream)):
+                if i >= index:
+                    return frame.to_image()
             return None
-        finally:
-            container.close()
     except Exception as e:
         print(f"[FBnodes] PyAV frame extraction error: {e}")
         return None
@@ -244,30 +217,6 @@ def extract_video_frame_av_to_tensor(file_path, frame_position=0.0):
 # ---------------------------------------------------------------------------
 # API routes (using /fbnodes/ prefix to avoid conflicts with Prompt Manager)
 # ---------------------------------------------------------------------------
-
-@server.PromptServer.instance.routes.post("/fbnodes/cache-video-frame")
-async def cache_video_frame(request):
-    """Cache a single video frame extracted by JavaScript."""
-    try:
-        data = await request.json()
-        filename = data.get('filename')
-        frame = data.get('frame')
-        frame_position = data.get('frame_position', 0.0)
-        if frame_position is None:
-            frame_position = 0.0
-
-        if not filename:
-            return server.web.json_response({"success": False, "error": "Missing filename"}, status=400)
-
-        if frame:
-            path_key = filename.replace('\\', '/').replace('/', '_')
-            _video_frames_cache[path_key] = frame
-
-        return server.web.json_response({"success": True})
-    except Exception as e:
-        print(f"[FBnodes] Error caching video frame: {e}")
-        return server.web.json_response({"success": False, "error": str(e)}, status=500)
-
 
 @server.PromptServer.instance.routes.get("/fbnodes/video-frame")
 async def extract_video_frame_api(request):
@@ -369,6 +318,9 @@ async def video_info_api(request):
         stream = container.streams.video[0]
         codec_name = stream.codec_context.name or ""
         pix_fmt = stream.codec_context.pix_fmt or ""
+        # The frame count the frontend stores frame n against (n / frames).
+        fps, frames, _origin = video_clock(container, stream)
+        duration = frames / fps if fps > 0 else 0.0
         container.close()
 
         needs_preview = codec_name in ("hevc", "h265") or "444" in pix_fmt
@@ -377,6 +329,9 @@ async def video_info_api(request):
             "codec": codec_name,
             "pix_fmt": pix_fmt,
             "needs_preview": needs_preview,
+            "frames": frames,
+            "fps": fps,
+            "duration": duration,
         })
     except Exception as e:
         return server.web.json_response({"error": str(e)}, status=500)
@@ -588,76 +543,6 @@ async def list_files(request):
 # ---------------------------------------------------------------------------
 # Helper functions
 # ---------------------------------------------------------------------------
-
-def base64_to_tensor(base64_data):
-    """Convert base64 data URL to ComfyUI tensor format."""
-    try:
-        if ',' in base64_data:
-            base64_data = base64_data.split(',', 1)[1]
-
-        img_bytes = base64.b64decode(base64_data)
-        img = Image.open(io.BytesIO(img_bytes))
-
-        if img.mode != 'RGB':
-            img = img.convert('RGB')
-
-        img_array = np.array(img).astype(np.float32) / 255.0
-        img_tensor = torch.from_numpy(img_array).unsqueeze(0)
-        return img_tensor
-    except Exception as e:
-        print(f"[FBnodes] Error converting base64 to tensor: {e}")
-        return None
-
-
-def get_cached_video_frame(relative_path, frame_position):
-    """
-    Retrieve cached video frame extracted by JavaScript at the specified position.
-    """
-    if frame_position is None:
-        frame_position = 0.01
-
-    path_key = relative_path.replace('\\', '/').replace('/', '_')
-
-    if path_key not in _video_frames_cache:
-        print(f"[FBnodes] Cache missing for: {relative_path} at position {frame_position}, requesting extraction...")
-
-        try:
-            server.PromptServer.instance.send_sync("better-image-loader-extract-frame", {
-                "filename": relative_path,
-                "frame_position": frame_position
-            })
-
-            max_wait = 5
-            start_time = time.time()
-            while path_key not in _video_frames_cache and (time.time() - start_time) < max_wait:
-                time.sleep(0.1)
-
-            if path_key in _video_frames_cache:
-                print(f"[FBnodes] Frame cached successfully for: {relative_path}")
-            else:
-                print(f"[FBnodes] Timeout waiting for frame extraction: {relative_path}")
-                return None
-        except Exception as e:
-            print(f"[FBnodes] Error requesting frame extraction: {e}")
-            return None
-
-    frame_data = _video_frames_cache[path_key]
-    return base64_to_tensor(frame_data)
-
-
-def get_cached_video_frame_if_present(*path_candidates):
-    """Best-effort, non-blocking lookup of already-cached video frames."""
-    for candidate in path_candidates:
-        if not candidate:
-            continue
-        key = str(candidate).replace('\\', '/').replace('/', '_')
-        frame_data = _video_frames_cache.get(key)
-        if frame_data:
-            tensor = base64_to_tensor(frame_data)
-            if tensor is not None:
-                return tensor
-    return None
-
 
 def load_image_as_tensor(file_path):
     """Load an image file and convert to ComfyUI tensor format (B, H, W, C).
@@ -1049,38 +934,13 @@ class LoadImagePlus:
                 preview_images = self._direct_preview_images(resolved_path, source_folder)
 
             elif ext in ['.mp4', '.webm', '.mov', '.avi']:
-                if source_folder == "output":
-                    base_dir = folder_paths.get_output_directory()
-                else:
-                    base_dir = folder_paths.get_input_directory()
-                if resolved_path.startswith(base_dir):
-                    relative_path = os.path.relpath(resolved_path, base_dir)
-                    relative_path = relative_path.replace('\\', '/')
-                else:
-                    relative_path = os.path.basename(resolved_path)
-
-                image_tensor = get_cached_video_frame_if_present(
-                    file_path,
-                    resolved_path,
-                    relative_path,
-                    os.path.basename(resolved_path),
-                )
-
-                # Prefer PyAV when cache is empty (headless execution or no preview yet).
-                if image_tensor is None:
-                    image_tensor = extract_video_frame_av_to_tensor(resolved_path, frame_position)
-
-                # Fall back to JS-cached frame if PyAV unavailable
-                if image_tensor is None:
-                    image_tensor = get_cached_video_frame(relative_path, frame_position)
-
-                # Last resort: placeholder
+                # The same PyAV decode the preview shows, so the frame picked is the frame loaded.
+                image_tensor = extract_video_frame_av_to_tensor(resolved_path, frame_position)
                 if image_tensor is None:
                     image_tensor = get_placeholder_image_tensor()
 
                 # Video preview is an extracted frame tensor, so this still needs a temp image.
-                if image_tensor is not None:
-                    preview_images = self._save_preview_images(image_tensor, mask_tensor)
+                preview_images = self._save_preview_images(image_tensor, mask_tensor)
 
         if image_tensor is None:
             image_tensor = get_placeholder_image_tensor()
