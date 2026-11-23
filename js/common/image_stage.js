@@ -12,7 +12,7 @@
 //   crop()   -> { shown, editable, rect }      rect: display percent
 //   pad()    -> { shown, editable, sides }     sides: pixels beyond the output, and feather
 //   mask()   -> { shown, editable, strokes, brushSize, erasing }
-//   onCrop(rect), onCropEnd()
+//   onCrop(rect, handle), onCropEnd()
 //   onPad(sides, handle), onPadEnd()          handle: "n", "se", ... or "move"
 //   onStrokeStart(stroke), onStrokeEnd()       stroke points in source space
 //   onClick()          a plain click while no tool is active
@@ -315,7 +315,7 @@ export function createImageStage(options) {
     if (drag?.handle) {
       const dx = ((point.x - drag.start.x) / drag.imageRect.width) * 100;
       const dy = ((point.y - drag.start.y) / drag.imageRect.height) * 100;
-      options.onCrop?.(dragCrop(drag.handle, drag.rect, dx, dy));
+      options.onCrop?.(dragCrop(drag.handle, drag.rect, dx, dy), drag.handle);
     } else if (drag?.padHandle) {
       const perPixel = drag.imageRect.width / options.image().width;
       options.onPad?.(dragPad(drag.padHandle, drag.sides, (point.x - drag.start.x) / perPixel, (point.y - drag.start.y) / perPixel), drag.padHandle);

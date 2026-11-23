@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { cropPixels, cropViewRect, dragCrop, dragPad, fitRect, hitCrop, isFullCrop, lockPad, padFitRect } from "../js/common/stage_math.js";
+import { cropPixels, cropViewRect, dragCrop, dragPad, fitRect, hitCrop, isFullCrop, lockCrop, lockPad, padFitRect } from "../js/common/stage_math.js";
 
 const FULL = { left_pct: 0, right_pct: 100, top_pct: 0, bottom_pct: 100 };
 
@@ -87,4 +87,16 @@ test("the padded canvas fits the view, the picture placed inside it", () => {
     const base = { x: 0, y: 0, width: 100, height: 100 };
     const rect = padFitRect(100, 100, base, { left: 100, right: 0, top: 0, bottom: 0 }, 200, 100);
     assert.deepEqual(rect, { x: 100, y: 0, width: 100, height: 100, scale: 1 });
+});
+
+test("a locked crop holds its ratio in picture pixels and stays on the picture", () => {
+    const px = (rect) => [rect.left_pct * 2, rect.right_pct * 2, rect.top_pct, rect.bottom_pct].map((v) => Math.round(v * 100) / 100);
+    // 200 x 100 picture; percent x2 / x1 gives pixels.
+    const full = { left_pct: 0, right_pct: 100, top_pct: 0, bottom_pct: 100 };
+    assert.deepEqual(px(lockCrop(full, "", 200, 100, 1)), [50, 150, 0, 100]);        // a new ratio fits inside, centred
+    const wide = { left_pct: 10, right_pct: 40, top_pct: 20, bottom_pct: 80 };      // 60 x 60 px at (20, 20)
+    assert.deepEqual(px(lockCrop(wide, "e", 200, 100, 2)), [20, 80, 35, 65]);       // right edge drives width; height follows about its centre
+    assert.deepEqual(px(lockCrop(wide, "n", 200, 100, 0.5)), [35, 65, 20, 80]);     // top edge drives height
+    assert.deepEqual(px(lockCrop(wide, "se", 200, 100, 1.5)), [20, 80, 20, 60]);    // a corner keeps the opposite corner
+    assert.deepEqual(px(lockCrop({ left_pct: 0, right_pct: 100, top_pct: 50, bottom_pct: 100 }, "e", 200, 100, 1)), [0, 100, 0, 100]); // clamped to the picture
 });

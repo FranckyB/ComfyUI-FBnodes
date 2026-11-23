@@ -13,14 +13,14 @@ import { api } from "../../scripts/api.js";
 import { basenameOf, isAbsolutePath, isImageFile, isVideoFile, previewUrl, stripAnnotation } from "./path_browser.js";
 import { mountCard } from "./fbui/card.js";
 import { notifyChange, toast } from "./fbui/comfy.js";
-import { button, ICONS, rail } from "./fbui/controls.js";
+import { button, ICONS, rail, slideLabel } from "./fbui/controls.js";
 import { chainCallback, el } from "./fbui/dom.js";
 import { modalOpen, openMenu } from "./fbui/modal.js";
 import { makeScrub } from "./fbui/scrub.js";
 import { findWidget, hideInputsInDef, hideWidget, suppressCorePreview } from "./fbui/widgets.js";
 import { createImageStage, drawStroke } from "./common/image_stage.js";
 import { BLANK, loadPlus, NONE, sourceLabel } from "./common/load_plus.js";
-import { cropPixels, isFullCrop, lockPad } from "./common/stage_math.js";
+import { cropPixels, dragCrop, dragPad, fitRect, isFullCrop, lockCrop, lockPad } from "./common/stage_math.js";
 import { CAPTION_HEIGHT, ROW_HEIGHT, T } from "./fbui/theme.js";
 
 const NODE_NAME = "LoadImagePlus";
@@ -33,7 +33,7 @@ const FRAME_PANEL_HEIGHT = 24 + 6 + ROW_HEIGHT;
 const BRUSH_MAX = 512;
 const PAD_FEATHER = 40;
 const PAD_MAX = 16384;
-// The padded canvas's aspect: free, the picture's own, or a fixed ratio.
+// A crop's or padded canvas's aspect: free, the picture's own, or a fixed ratio.
 const ASPECTS = ["free", "source", "1:1", "4:3", "3:4", "3:2", "2:3", "16:9", "9:16", "21:9"];
 // Below this the Edit row's tools show their icons only.
 const EDIT_LABELS_MIN = 290;
@@ -140,6 +140,7 @@ function normalizeCrop(state) {
         right_pct: pct(state?.right_pct, 100),
         top_pct: pct(state?.top_pct, 0),
         bottom_pct: pct(state?.bottom_pct, 100),
+        aspect: ASPECTS.includes(state?.aspect) ? state.aspect : "free",
     };
     if (crop.right_pct <= crop.left_pct) crop.right_pct = Math.min(100, crop.left_pct + 1);
     if (crop.bottom_pct <= crop.top_pct) crop.bottom_pct = Math.min(100, crop.top_pct + 1);
@@ -164,6 +165,7 @@ function syncCropData(node) {
         right_pct: round(crop.right_pct),
         top_pct: round(crop.top_pct),
         bottom_pct: round(crop.bottom_pct),
+        aspect: crop.aspect,
     });
     const widget = findWidget(node, "crop_data");
     if (widget) widget.value = value;
@@ -182,10 +184,16 @@ function displayCrop(node) {
     };
 }
 
-function setDisplayCrop(node, rect) {
+// The crop as displayed, after an edit by `handle` ("" for none; null keeps
+// it as given), held to the aspect.
+function setDisplayCrop(node, rect, handle = null) {
+    const { crop, image } = node._fb;
+    const ratio = handle !== null && image ? aspectRatio(crop.aspect, image.width, image.height) : null;
+    if (ratio) rect = lockCrop(rect, handle, image.width, image.height, ratio);
     const flips = getFlips(node);
-    Object.assign(node._fb.crop, normalizeCrop({
-        enabled: node._fb.crop.enabled,
+    Object.assign(crop, normalizeCrop({
+        enabled: crop.enabled,
+        aspect: crop.aspect,
         left_pct: flips.x ? 100 - rect.right_pct : rect.left_pct,
         right_pct: flips.x ? 100 - rect.left_pct : rect.right_pct,
         top_pct: flips.y ? 100 - rect.bottom_pct : rect.top_pct,
@@ -217,11 +225,10 @@ function syncPadData(node) {
     findWidget(node, "pad_data").value = JSON.stringify({ version: 1, enabled, left, right, top, bottom, feather, aspect });
 }
 
-// Width / height the canvas is held to, or null while the aspect is free.
-function padRatio(node) {
-    const aspect = node._fb.pad.aspect;
+// Width / height an aspect holds a width x height picture's crop or canvas
+// to, or null while it is free.
+function aspectRatio(aspect, width, height) {
     if (aspect === "free") return null;
-    const { width, height } = croppedSize(node);
     if (aspect === "source") return width / height;
     const [w, h] = aspect.split(":").map(Number);
     return w / h;
@@ -230,12 +237,10 @@ function padRatio(node) {
 // Sides edited by `handle` ("" for none), held to the aspect.
 function setPad(node, sides, handle = null) {
     const fb = node._fb;
-    const ratio = handle !== null && fb.image ? padRatio(node) : null;
+    const size = fb.image ? croppedSize(node) : null;
+    const ratio = handle !== null && size ? aspectRatio(fb.pad.aspect, size.width, size.height) : null;
     const next = { ...fb.pad, ...sides };
-    if (ratio) {
-        const { width, height } = croppedSize(node);
-        Object.assign(next, lockPad(next, handle, width, height, ratio));
-    }
+    if (ratio) Object.assign(next, lockPad(next, handle, size.width, size.height, ratio));
     Object.assign(fb.pad, next);
     syncPadData(node);
     fb.card.refresh();
@@ -419,8 +424,8 @@ function stagePanel(node) {
             brushSize: fb.mask.brushSize,
             erasing: fb.mask.erasing,
         }),
-        onCrop: (rect) => {
-            setDisplayCrop(node, rect);
+        onCrop: (rect, handle) => {
+            setDisplayCrop(node, rect, handle);
             fb.card.refresh();
         },
         onCropEnd: notifyChange,
@@ -549,9 +554,36 @@ function framePanel(node) {
     };
 }
 
+// Picture pixels per CSS pixel on the stage, so a slide moves a region about
+// as far on the picture as the pointer moves.
+function picturePerCss(node) {
+    const { image, stage } = node._fb;
+    return image.width / Math.max(1, fitRect(image.width, image.height, stage.canvas.clientWidth || 1, stage.canvas.clientHeight || 1).width);
+}
+
+const SIDE_HANDLE = { left: "w", right: "e", top: "n", bottom: "s" };
+
+// An Exact row's label slides its region along the row's axis; a button
+// at the end centres it.
+function slideAndCenter(axis, what, { start, slide, center, end }) {
+    const label = slideLabel(axis === "x" ? "Left · Right" : "Top · Bottom", {
+        axis,
+        title: `Drag to slide ${what} ${axis === "x" ? "left and right" : "up and down"}.`,
+        onStart: start,
+        onSlide: slide,
+        onEnd: end,
+    });
+    const centre = button("", { icon: axis === "x" ? ICONS.centerX : ICONS.centerY, title: `Centre ${what} ${axis === "x" ? "horizontally" : "vertically"}`, onClick: () => {
+        center();
+        end();
+    } });
+    return { label, centre };
+}
+
 // Exact crop, in pixels of the picture as shown (flips included).
 function cropPairControl(node, first, second) {
     const fb = node._fb;
+    const axis = first === "left" ? "x" : "y";
     const field = el("div", "fbui-field");
     const scrubs = {};
     const commit = (side, value) => {
@@ -564,7 +596,7 @@ function cropPairControl(node, first, second) {
         else if (side === "right") rect.right_pct = Math.max(100 - pct, rect.left_pct + 100 / across);
         else if (side === "top") rect.top_pct = Math.min(pct, rect.bottom_pct - 100 / across);
         else rect.bottom_pct = Math.max(100 - pct, rect.top_pct + 100 / across);
-        setDisplayCrop(node, rect);
+        setDisplayCrop(node, rect, SIDE_HANDLE[side]);
         fb.card.refresh();
     };
     for (const side of [first, second]) {
@@ -577,8 +609,28 @@ function cropPairControl(node, first, second) {
         });
         field.append(scrubs[side].root);
     }
+    let from = null;
+    const { label, centre } = slideAndCenter(axis, "the crop", {
+        start: () => { from = displayCrop(node); },
+        slide: (delta) => {
+            if (!fb.image || !from) return;
+            const shift = (delta * picturePerCss(node) / (axis === "x" ? fb.image.width : fb.image.height)) * 100;
+            setDisplayCrop(node, dragCrop("move", from, axis === "x" ? shift : 0, axis === "y" ? shift : 0));
+            fb.card.refresh();
+        },
+        center: () => {
+            const rect = displayCrop(node);
+            const [lo, hi] = axis === "x" ? ["left_pct", "right_pct"] : ["top_pct", "bottom_pct"];
+            const size = rect[hi] - rect[lo];
+            setDisplayCrop(node, { ...rect, [lo]: (100 - size) / 2, [hi]: (100 + size) / 2 });
+            fb.card.refresh();
+        },
+        end: notifyChange,
+    });
+    field.append(centre);
     return {
         element: field,
+        label,
         sync() {
             const image = fb.image;
             if (!image) return;
@@ -618,21 +670,44 @@ function padResetControl(node) {
     };
 }
 
+function aspectSelect(title, onPick) {
+    const select = el("select", "fbui-select");
+    select.title = title;
+    for (const value of ASPECTS) {
+        const option = el("option", "", { free: "Free", source: "Source" }[value] ?? value);
+        option.value = value;
+        select.append(option);
+    }
+    select.addEventListener("change", () => {
+        onPick(select.value);
+        notifyChange();
+    });
+    return select;
+}
+
+// The Crop row: the crop's aspect.
+function cropControl(node) {
+    const fb = node._fb;
+    const aspect = aspectSelect("The crop's aspect: free, the picture's own, or a ratio that holds while you drag.", (value) => {
+        fb.crop.aspect = value;
+        setDisplayCrop(node, displayCrop(node), "");
+        fb.card.refresh();
+    });
+    return {
+        element: aspect,
+        sync() {
+            aspect.value = fb.crop.aspect;
+        },
+    };
+}
+
 // The Pad row: the canvas's aspect and the feather.
 function padControl(node) {
     const fb = node._fb;
     const tools = el("div", "fbui-field");
-    const aspect = el("select", "fbui-select");
-    aspect.title = "The padded canvas's aspect: free, the picture's own, or a ratio that holds while you drag.";
-    for (const value of ASPECTS) {
-        const option = el("option", "", { free: "Free", source: "Source" }[value] ?? value);
-        option.value = value;
-        aspect.append(option);
-    }
-    aspect.addEventListener("change", () => {
-        fb.pad.aspect = aspect.value;
+    const aspect = aspectSelect("The padded canvas's aspect: free, the picture's own, or a ratio that holds while you drag.", (value) => {
+        fb.pad.aspect = value;
         setPad(node, {}, "");
-        notifyChange();
     });
     const featherIcon = el("span");
     featherIcon.innerHTML = ICONS.feather;
@@ -665,13 +740,30 @@ function padPairControl(node, first, second) {
         scrubs[side] = makeScrub({
             value: 0, min: 0, max: PAD_MAX, step: 8, fineStep: 1, decimals: 0, unit: "px",
             title: `Pixels added on the ${side}.`,
-            onChange: (value) => setPad(node, { [side]: value }, { left: "w", right: "e", top: "n", bottom: "s" }[side]),
+            onChange: (value) => setPad(node, { [side]: value }, SIDE_HANDLE[side]),
             onSettle: notifyChange,
         });
         field.append(scrubs[side].root);
     }
+    const axis = first === "left" ? "x" : "y";
+    let from = null;
+    const { label, centre } = slideAndCenter(axis, "the canvas", {
+        start: () => { from = { ...fb.pad }; },
+        slide: (delta) => {
+            if (!fb.image || !from) return;
+            const shift = delta * picturePerCss(node);
+            setPad(node, dragPad("move", from, axis === "x" ? shift : 0, axis === "y" ? shift : 0));
+        },
+        center: () => {
+            const total = fb.pad[first] + fb.pad[second];
+            setPad(node, { [first]: Math.floor(total / 2), [second]: total - Math.floor(total / 2) });
+        },
+        end: notifyChange,
+    });
+    field.append(centre);
     return {
         element: field,
+        label,
         sync() {
             for (const side of [first, second]) scrubs[side].set(fb.pad[side]);
         },
@@ -845,6 +937,7 @@ function setupNode(node) {
             },
             { label: "Edit", control: editControl },
             { label: "Brush", control: brushControl, when: (_values, n) => n._fb.tool === "mask" },
+            { label: "Crop", control: cropControl, when: cropTool },
             { label: "Pad", control: padControl, when: padTool },
             { panel: stagePanel, grow: true, height: STAGE_MIN_HEIGHT },
             { panel: framePanel, height: FRAME_PANEL_HEIGHT, when: (values) => isVideoFile(values.image) },

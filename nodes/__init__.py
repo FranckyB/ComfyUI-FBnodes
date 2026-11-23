@@ -18,5 +18,5 @@ from .crop_image import CropImagePlus
 from .lora_list import LoraListPlus
 from .prompt_batcher import PromptBatcher
 from .ltx_review import LTXReview, LTXReviewPreview
-from .outpaint import OutpaintAnchorLatent, OutpaintPrepare, OutpaintStitch
+from .outpaint import OutpaintH3AnchorLatent, OutpaintH3Prepare, OutpaintStitch
 from . import path_browser

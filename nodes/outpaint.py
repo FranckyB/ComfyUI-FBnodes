@@ -2,16 +2,16 @@
 Outpainting beside MiniMax H3 Image Conditioning. Load Image+'s Pad (or core
 Pad Image for Outpainting) makes the canvas and its mask:
 
-  Outpaint Prepare  the picture cut from the canvas for the conditioning's
+  Outpaint H3 Prepare  the picture cut from the canvas for the conditioning's
                    image_1, so the text encoder never sees the pad, and the
                    canvas's size at a pixel count for its width and height.
 
-  Outpaint Anchor Latent  the canvas, VAE-encoded at the conditioning's resolution,
+  Outpaint H3 Anchor Latent  the canvas, VAE-encoded at the conditioning's resolution,
                    with a noise mask that frees the new area for KSampler.
                    Picture 1's reference becomes the cells of the picture the
                    mask keeps whole, placed on the canvas where they sit, so
                    the model continues the picture instead of copying the pad.
-  Outpaint Stitch  the decoded result back on the canvas with AusBoss's
+  Outpaint Stitch  (any model) the decoded result back on the canvas with AusBoss's
                    "blend in" seam and its Tone match (py/blend_in).
 
 Inspired by TwoAbove's ComfyUI-H3VideoOutpaint and the Outpaint Anchor / Prepare of
@@ -119,7 +119,7 @@ def _place_references(executor, *args, **kwargs):
     return executor(*args, **kwargs)
 
 
-class OutpaintPrepare:
+class OutpaintH3Prepare:
     @classmethod
     def INPUT_TYPES(cls):
         return {
@@ -148,7 +148,7 @@ class OutpaintPrepare:
         return (canvas[:, top:bottom, left:right, :3].clone(), size_w, size_h, mask, canvas)
 
 
-class OutpaintAnchorLatent:
+class OutpaintH3AnchorLatent:
     @classmethod
     def INPUT_TYPES(cls):
         return {
@@ -167,7 +167,7 @@ class OutpaintAnchorLatent:
     OUTPUT_TOOLTIPS = ("The model, placing the reference (MiniMax H3), to KSampler.", "The conditioning with the placed reference, to KSampler.", "The masked canvas latent, to KSampler (denoise 1.0).", "The mask, on to Outpaint Stitch.", "The canvas, on to Outpaint Stitch.")
     FUNCTION = "encode"
     CATEGORY = "FBnodes"
-    DESCRIPTION = "VAE-encodes a padded canvas at the latent's resolution (keeping the canvas's aspect) with a noise mask, so KSampler paints only the new area; any model. With MiniMax H3 Image, Picture 1's reference also becomes the picture alone, placed where it sits on the canvas, so the model continues it instead of copying the pad. Give the conditioning the unpadded picture (Load Image+'s image) as image_1."
+    DESCRIPTION = "For MiniMax H3 Image: VAE-encodes a padded canvas at the conditioning latent's resolution (keeping the canvas's aspect) with a noise mask, so KSampler paints only the new area, and makes Picture 1's reference the picture alone, placed where it sits on the canvas, so the model continues it instead of copying the pad. Give the conditioning the unpadded picture (Outpaint H3 Prepare's image) as image_1."
 
     def encode(self, model, positive, vae, latent, mask, canvas):
         cell = vae.spacial_compression_encode()

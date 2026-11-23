@@ -152,3 +152,35 @@ export function padFitRect(imageW, imageH, base, pad, viewW, viewH, slack = 0) {
   const world = fitRect(x1 - x0, y1 - y0, viewW, viewH);
   return { x: world.x - x0 * world.scale, y: world.y - y0 * world.scale, width: imageW * world.scale, height: imageH * world.scale, scale: world.scale };
 }
+
+// A crop held to `ratio` (width / height in picture pixels) on a width x
+// height picture, after an edit by `handle`: an edge drives its own axis and
+// the other follows evenly about its centre, a corner keeps the opposite
+// corner, and "" (a new ratio) fits inside the crop about its centre. The
+// crop stays inside the picture.
+export function lockCrop(rect, handle, width, height, ratio) {
+  if (handle === "move") return rect;
+  const horizontal = /[ew]/.test(handle);
+  const vertical = /[ns]/.test(handle);
+  const x0 = (rect.left_pct / 100) * width;
+  const x1 = (rect.right_pct / 100) * width;
+  const y0 = (rect.top_pct / 100) * height;
+  const y1 = (rect.bottom_pct / 100) * height;
+  let w = x1 - x0;
+  let h = y1 - y0;
+  if (vertical && !horizontal) w = h * ratio;
+  else if (horizontal) h = w / ratio;
+  else if (w / h > ratio) w = h * ratio;
+  else h = w / ratio;
+  if (w > width) [w, h] = [width, width / ratio];
+  if (h > height) [w, h] = [height * ratio, height];
+  // The dragged side moves; an axis with none dragged keeps its centre.
+  const place = (lo, hi, size, total, fromLo, fromHi) => {
+    const start = fromHi ? lo : fromLo ? hi - size : (lo + hi - size) / 2;
+    const at = Math.max(0, Math.min(total - size, start));
+    return [(at / total) * 100, ((at + size) / total) * 100];
+  };
+  const [left_pct, right_pct] = place(x0, x1, w, width, handle.includes("w"), handle.includes("e"));
+  const [top_pct, bottom_pct] = place(y0, y1, h, height, handle.includes("n"), handle.includes("s"));
+  return { ...rect, left_pct, right_pct, top_pct, bottom_pct };
+}

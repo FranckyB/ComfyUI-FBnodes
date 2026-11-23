@@ -23,7 +23,7 @@ const CARDS = {
     ],
     SwitchAnyBool: [{ widget: "condition", label: "Condition", offText: "false", onText: "true" }],
     OutpaintStitch: [{ widget: "tone_match", label: "Tone match" }],
-    OutpaintPrepare: [{ widget: "megapixels", label: "Megapixels", suffix: "MP" }],
+    OutpaintH3Prepare: [{ widget: "megapixels", label: "Megapixels", suffix: "MP" }],
     LoadLatentFile: LATENT_FILE,
     LoadLTXLatentFile: LATENT_FILE,
     VACEStitcher_Options: [
