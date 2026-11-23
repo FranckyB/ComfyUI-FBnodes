@@ -6,7 +6,7 @@
  * Based on VideoHelperSuite's videoinfo.js implementation.
  */
 
-import { app } from '../../../scripts/app.js'
+import { app } from "../../scripts/app.js";
 
 /**
  * Walk MP4 atoms and extract mdta-style metadata keys ('workflow', 'prompt')

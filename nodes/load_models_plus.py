@@ -261,16 +261,3 @@ class LoadLoraPlus:
         lora = comfy.utils.load_torch_file(lora_path, safe_load=True)
         model_out, _ = comfy.sd.load_lora_for_models(model, None, lora, strength_model, 0)
         return (model_out, lora_list_value)
-
-
-NODE_CLASS_MAPPINGS = {
-    "LoadCheckpointPlus": LoadCheckpointPlus,
-    "LoadDiffusionModelPlus": LoadDiffusionModelPlus,
-    "LoadLoraPlus": LoadLoraPlus,
-}
-
-NODE_DISPLAY_NAME_MAPPINGS = {
-    "LoadCheckpointPlus": "Load Checkpoint+",
-    "LoadDiffusionModelPlus": "Load Diffusion Model+",
-    "LoadLoraPlus": "Load LoRA+",
-}

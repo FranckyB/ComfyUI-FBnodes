@@ -505,7 +505,7 @@ function openClipBrowserModal(sourceFolder, existingClips, onDone) {
         grid.innerHTML = '<div style="text-align:center;padding:40px;color:#aaa;">Loading...</div>';
 
         try {
-            const resp = await fetch(
+            const resp = await api.fetchApi(
                 `/fbnodes/list-files?source=${encodeURIComponent(_currentSourceFolder)}`
             );
             const data = await resp.json();
@@ -961,7 +961,7 @@ app.registerExtension({
                 rebuildClipListDisplay();
                 // Delete transitions
                 try {
-                    await fetch("/fbnodes/vace-delete-transitions", { method: "POST" });
+                    await api.fetchApi("/fbnodes/vace-delete-transitions", { method: "POST" });
                 } catch (_) {}
                 updateDeleteBtnState();
             };
@@ -1006,7 +1006,7 @@ app.registerExtension({
             // ── Delete button state management ──
             async function updateDeleteBtnState() {
                 try {
-                    const info = await (await fetch("/fbnodes/vace-transitions-info")).json();
+                    const info = await (await api.fetchApi("/fbnodes/vace-transitions-info")).json();
                     if (info.exists && info.total_files > 0) {
                         deleteBtn.disabled = false;
                         deleteBtn.style.background = "rgba(255,255,255,0.06)";
@@ -1028,7 +1028,7 @@ app.registerExtension({
             deleteBtn.onclick = async () => {
                 if (deleteBtn.disabled) return;
                 try {
-                    const info = await (await fetch("/fbnodes/vace-transitions-info")).json();
+                    const info = await (await api.fetchApi("/fbnodes/vace-transitions-info")).json();
                     if (!info.exists || info.total_files === 0) {
                         updateDeleteBtnState();
                         return;
@@ -1039,7 +1039,7 @@ app.registerExtension({
                         "Delete", "#c00"
                     );
                     if (!confirmed) return;
-                    const resp = await (await fetch("/fbnodes/vace-delete-transitions", { method: "POST" })).json();
+                    const resp = await (await api.fetchApi("/fbnodes/vace-delete-transitions", { method: "POST" })).json();
                     if (resp.success) {
                         console.log(`[VACEClipJoiner] Deleted ${resp.deleted} intermediate set(s).`);
                     }
@@ -1146,7 +1146,7 @@ app.registerExtension({
                 const token = ++_statusUpdateToken;
                 const source = sourceFolderWidget?.value || "input";
                 try {
-                    const resp = await fetch("/fbnodes/vace-clip-status", {
+                    const resp = await api.fetchApi("/fbnodes/vace-clip-status", {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({ entries: clipEntries, source }),
@@ -1427,7 +1427,7 @@ app.registerExtension({
                 // Async: check which clips have .latent files and show dots
                 const source = sourceFolderWidget?.value || "input";
                 const filesToCheck = clipEntries.map((e) => e.file);
-                fetch("/fbnodes/vace-check-latents", {
+                api.fetchApi("/fbnodes/vace-check-latents", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ source, files: filesToCheck }),
@@ -1496,10 +1496,10 @@ app.registerExtension({
 
                 addMenuItem("\u267B\uFE0F Regenerate Transitions", async () => {
                     try {
-                        const info = await (await fetch("/fbnodes/vace-transitions-info")).json();
+                        const info = await (await api.fetchApi("/fbnodes/vace-transitions-info")).json();
                         if (!info.exists || info.total_files === 0) return;
                         if (!confirm(`Delete all cached transitions so they regenerate on next run?`)) return;
-                        await fetch("/fbnodes/vace-delete-transitions", { method: "POST" });
+                        await api.fetchApi("/fbnodes/vace-delete-transitions", { method: "POST" });
                         console.log("[VACEClipJoiner] Cache cleared for regeneration");
                     } catch (err) {
                         console.error("[VACEClipJoiner] Error:", err);

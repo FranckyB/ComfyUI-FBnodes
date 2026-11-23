@@ -179,10 +179,6 @@ class VisualLoraPicker:
         return (stack, image_tensor)
 
 
-NODE_CLASS_MAPPINGS = {"VisualLoraPicker": VisualLoraPicker}
-NODE_DISPLAY_NAME_MAPPINGS = {"VisualLoraPicker": "Visual LoRA Picker+"}
-
-
 @server.PromptServer.instance.routes.get("/fbnodes/lora-browser/root")
 async def lora_browser_root(request):
     """Expose the first configured LoRA folder for the frontend browser."""

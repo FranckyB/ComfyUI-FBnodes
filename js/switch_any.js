@@ -22,7 +22,7 @@ function parseNames(namesStr, count) {
 }
 
 app.registerExtension({
-    name: "SwitchAny",
+    name: "FBnodes.SwitchAny",
 
     setup() {
         // Strip non-selected inputs from execution payload so ComfyUI never
