@@ -19,40 +19,64 @@ export function button(label, { icon = "", title = "", primary = false, danger =
   return node;
 }
 
-// A small (i) that shows help in a popover while hovered (or after a
-// click, until the pointer leaves). `lines` are strings, or [code, text]
-// pairs shown as a two-column list (tokens and what they become).
+// A small (i) beside a label. A click opens its help in a popover that
+// stays until a click outside it (or Esc), so the text can be selected and
+// copied; a click on a token copies that token. `lines` are strings, or
+// [code, text] pairs shown as a two-column list (tokens and what they do).
 export function info(lines) {
   const icon = el("span", "fbui-info");
   icon.innerHTML = ICONS.info;
+  icon.title = "Help";
   let pop = null;
-  const show = () => {
-    if (pop) return;
+  const close = () => {
+    pop?.remove();
+    pop = null;
+    icon.classList.remove("on");
+    document.removeEventListener("pointerdown", outside, true);
+    document.removeEventListener("keydown", onEscape, true);
+  };
+  const outside = (event) => {
+    if (!pop?.contains(event.target) && !icon.contains(event.target)) close();
+  };
+  const onEscape = (event) => {
+    if (event.key === "Escape") close();
+  };
+  const open = () => {
     pop = el("div", "fbui-pop");
+    pop.tabIndex = -1;
     for (const line of lines) {
       if (Array.isArray(line)) {
         const row = el("div", "pair");
-        row.append(el("code", "", line[0]), el("span", "", line[1]));
+        const code = el("code", "", line[0]);
+        code.title = "Click to copy";
+        code.addEventListener("click", () => {
+          navigator.clipboard?.writeText(line[0]).then(() => {
+            code.classList.add("copied");
+            setTimeout(() => code.classList.remove("copied"), 900);
+          });
+        });
+        row.append(code, el("span", "", line[1]));
         pop.append(row);
       } else {
         pop.append(el("div", "", line));
       }
     }
+    // Keys typed here (Ctrl+C on a selection) are the popover's, not the canvas's.
+    pop.addEventListener("keydown", (event) => event.stopPropagation());
     document.body.append(pop);
     const box = icon.getBoundingClientRect();
-    const width = pop.offsetWidth;
-    pop.style.left = `${Math.max(8, Math.min(window.innerWidth - width - 8, box.left))}px`;
-    pop.style.top = `${box.bottom + 6}px`;
+    pop.style.left = `${Math.max(8, Math.min(window.innerWidth - pop.offsetWidth - 8, box.left))}px`;
+    const below = box.bottom + 6;
+    pop.style.top = `${below + pop.offsetHeight > window.innerHeight - 8 ? Math.max(8, box.top - pop.offsetHeight - 6) : below}px`;
+    icon.classList.add("on");
+    pop.focus({ preventScroll: true });
+    document.addEventListener("pointerdown", outside, true);
+    document.addEventListener("keydown", onEscape, true);
   };
-  const hide = () => {
-    pop?.remove();
-    pop = null;
-  };
-  icon.addEventListener("pointerenter", show);
-  icon.addEventListener("pointerleave", hide);
   icon.addEventListener("click", (event) => {
     event.stopPropagation();
-    show();
+    if (pop) close();
+    else open();
   });
   return icon;
 }
