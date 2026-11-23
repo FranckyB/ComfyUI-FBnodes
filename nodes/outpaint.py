@@ -121,8 +121,8 @@ class OutpaintLatent:
                 "model": ("MODEL", {"tooltip": "The MiniMax H3 Image model, after any LoRAs."}),
                 "positive": ("CONDITIONING", {"tooltip": "From MiniMax H3 Image Conditioning."}),
                 "vae": ("VAE",),
-                "canvas": ("IMAGE", {"tooltip": "The padded canvas (Load Image+'s canvas with Pad on). Its image output goes to the conditioning's image_1."}),
                 "mask": ("MASK", {"tooltip": "1 where to paint: the new area, and anything painted."}),
+                "canvas": ("IMAGE", {"tooltip": "The padded canvas (Load Image+'s canvas with Pad on). Its image output goes to the conditioning's image_1."}),
                 "latent": ("LATENT", {"tooltip": "The latent of MiniMax H3 Image Conditioning: its size sets the resolution."}),
             },
         }
@@ -133,7 +133,7 @@ class OutpaintLatent:
     CATEGORY = "FBnodes"
     DESCRIPTION = "VAE-encodes a padded canvas at the conditioning latent's resolution (keeping the canvas's aspect) with a noise mask, so KSampler paints only the new area. Picture 1's reference becomes the picture alone, placed where it sits on the canvas, so the model continues it instead of copying the pad. Give the conditioning the unpadded picture (Load Image+'s image) as image_1."
 
-    def encode(self, model, positive, vae, canvas, mask, latent):
+    def encode(self, model, positive, vae, mask, canvas, latent):
         cell = vae.spacial_compression_encode()
         latent_h, latent_w = latent["samples"].shape[-2:]
         width, height = _canvas_size(canvas.shape[2], canvas.shape[1], latent_w, latent_h, cell)
@@ -158,8 +158,8 @@ class OutpaintBlend:
         return {
             "required": {
                 "image": ("IMAGE", {"tooltip": "The decoded result."}),
-                "canvas": ("IMAGE", {"tooltip": "The padded canvas the result was painted on."}),
                 "mask": ("MASK", {"tooltip": "The canvas's mask, as the sampler had it."}),
+                "canvas": ("IMAGE", {"tooltip": "The padded canvas the result was painted on."}),
                 "tone_match": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 1.0, "step": 0.05,
                                          "tooltip": "Match the new area's tone to your picture when it comes back lighter, darker or warmer. 1 is the full match, 0 is off; it needs a feather, since it reads the strip of your picture the model repainted."}),
             },
@@ -170,7 +170,7 @@ class OutpaintBlend:
     CATEGORY = "FBnodes"
     DESCRIPTION = "Puts an outpainted result back on its canvas at the canvas's size with AusBoss's blend in seam: colour, tone and detail hand over from the result to your picture across its edge, and deeper in the picture is yours bit for bit."
 
-    def blend(self, image, canvas, mask, tone_match):
+    def blend(self, image, mask, canvas, tone_match):
         height, width = canvas.shape[1:3]
         result = _resize(image, width, height)
         canvas = canvas[..., :3].to(result)

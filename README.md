@@ -238,7 +238,7 @@ Display any input as text in-node, with values persisted in the workflow.
 ### Outpaint Latent / Outpaint Blend
 Outpaint with MiniMax H3 Image next to the core **MiniMax H3 Image Conditioning**, which stays as it is:
 
-1. **Load Image+** with **Pad**: its `image` (the picture, unpadded) goes to the conditioning's `image_1`, so the model never sees the gray. Its `canvas` (shown while Pad is on) goes to Outpaint Latent and Outpaint Blend, its `mask` (now the canvas's mask) to both. Leave width / height at 0, or set a resolution.
+1. **Load Image+** with **Pad**: its `image` (the picture, unpadded) goes to the conditioning's `image_1`, so the model never sees the gray. Its `mask` (now the canvas's mask) and `canvas` (shown while Pad is on) go to the same-named inputs of Outpaint Latent and Outpaint Blend. Leave width / height at 0, or set a resolution.
 2. **Outpaint Latent** sits between the conditioning and KSampler, on the model path after any LoRAs (`model`, `positive` and the conditioning's latent in; `model`, `positive`, `latent` out to KSampler, denoise 1.0). The canvas is VAE-encoded at the latent's resolution (keeping the canvas's aspect) with the pad mask as noise mask. Picture 1's reference becomes the picture alone, placed where it sits on the canvas, so the model continues it instead of zooming or copying it.
 3. **Outpaint Blend** takes the decoded image and puts it back on the canvas at full size with AusBoss's **blend in** seam: colour, tone and detail hand over from the result to your picture across its edge, and deeper in, the picture is yours bit for bit. **Tone match** (0 to 1) takes the result's tone drift off first, read from the strip of your picture the model repainted (it needs a feather).
 
