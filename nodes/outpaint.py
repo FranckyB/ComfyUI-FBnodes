@@ -201,7 +201,9 @@ class OutpaintStitch:
             },
         }
 
-    RETURN_TYPES = ("IMAGE",)
+    RETURN_TYPES = ("IMAGE", "IMAGE")
+    RETURN_NAMES = ("image", "canvas")
+    OUTPUT_TOOLTIPS = ("The outpainted picture.", "The canvas, for Save Image+'s Compare.")
     FUNCTION = "blend"
     CATEGORY = "FBnodes"
     DESCRIPTION = "Puts an outpainted result back on its canvas at the canvas's size with AusBoss's blend in seam: colour, tone and detail hand over from the result to your picture across its edge, and deeper in the picture is yours bit for bit."
@@ -209,5 +211,4 @@ class OutpaintStitch:
     def blend(self, image, mask, canvas, tone_match):
         height, width = canvas.shape[1:3]
         result = _resize(image, width, height)
-        canvas = canvas[..., :3].to(result)
-        return (blend_in(canvas, result, _mask_at(mask[:1], width, height)[0, 0], tone_match),)
+        return (blend_in(canvas[..., :3].to(result), result, _mask_at(mask[:1], width, height)[0, 0], tone_match), canvas)
