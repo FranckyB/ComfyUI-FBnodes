@@ -1,15 +1,18 @@
 '''
 Outpainting beside MiniMax H3 Image Conditioning. Load Image+'s Pad makes the
-canvas and its mask:
+canvas and its mask, and its source (the picture before padding) is the
+conditioning's image_1, so the text encoder never sees the pad:
 
   Outpaint Latent  the canvas, VAE-encoded at the conditioning's resolution,
                    with a noise mask that frees the new area for KSampler.
-                   Picture 1's reference becomes the picture alone, placed on
-                   the canvas where it sits, so the model never sees the pad.
+                   Picture 1's reference becomes the cells of the picture the
+                   mask keeps whole, placed on the canvas where they sit, so
+                   the model continues the picture instead of copying the pad.
   Outpaint Blend   the decoded result back on the canvas: tone matched across
                    the seam, the original pixels kept where the mask is 0.
 
-Inspired by TwoAbove's ComfyUI-H3VideoOutpaint.
+Inspired by TwoAbove's ComfyUI-H3VideoOutpaint and the Outpaint Anchor / Prepare of
+aitrepreneur's ComfyUI-Aitrepreneur-Image-Tools (MIT).
 '''
 
 import math
@@ -46,23 +49,32 @@ def _canvas_size(width, height, latent_w, latent_h, cell):
     return size_w, size_h
 
 
-def _picture_cells(mask, width, height, cell):
-    """The canvas's picture (where the mask is below 1) as whole 2x2-cell DiT patches inside it, in latent
-    cells (top, left, bottom, right) on a width x height canvas, or None when no patch fits."""
-    inside = mask.reshape(-1, mask.shape[-2], mask.shape[-1])[0] < 1
+def _box(inside):
+    """(top, left, bottom, right) around the True cells of a [H, W] grid, or None."""
     rows = inside.any(dim=1).nonzero()
     cols = inside.any(dim=0).nonzero()
     if not len(rows):
         return None
-    patch = cell * 2
-    scale_y, scale_x = height / mask.shape[-2], width / mask.shape[-1]
-    top = math.ceil(int(rows[0]) * scale_y / patch) * 2
-    bottom = math.floor((int(rows[-1]) + 1) * scale_y / patch) * 2
-    left = math.ceil(int(cols[0]) * scale_x / patch) * 2
-    right = math.floor((int(cols[-1]) + 1) * scale_x / patch) * 2
-    if bottom <= top or right <= left:
-        return None
-    return top, left, bottom, right
+    return int(rows[0]), int(cols[0]), int(rows[-1]) + 1, int(cols[-1]) + 1
+
+
+def _edge_context(canvas, mask):
+    """The canvas with the picture's edges stretched over the new area, so no fill colour leaks into the
+    picture's latent cells along the seam."""
+    height, width = canvas.shape[1:3]
+    box = _box(_mask_at(mask[:1], width, height)[0, 0] < 1)
+    if box is None:
+        return canvas
+    top, left, bottom, right = box
+    picture = canvas[:, top:bottom, left:right, :3].movedim(-1, 1)
+    return F.pad(picture, (left, width - right, top, height - bottom), mode="replicate").movedim(1, -1)
+
+
+def _kept_cells(mask, cell):
+    """The DiT patches (2x2 latent cells) the mask keeps whole, as latent cells (top, left, bottom, right), or
+    None. `mask` is [1, 1, H, W] at the sampling size."""
+    box = _box(F.max_pool2d(mask, cell * 2)[0, 0] <= 1e-3)
+    return None if box is None else tuple(side * 2 for side in box)
 
 
 def _placed_refs(refs, samples, cells):
@@ -110,7 +122,7 @@ class OutpaintLatent:
                 "model": ("MODEL", {"tooltip": "The MiniMax H3 Image model, after any LoRAs."}),
                 "positive": ("CONDITIONING", {"tooltip": "From MiniMax H3 Image Conditioning."}),
                 "vae": ("VAE",),
-                "image": ("IMAGE", {"tooltip": "The padded canvas (Load Image+ with Pad)."}),
+                "image": ("IMAGE", {"tooltip": "The padded canvas (Load Image+ with Pad). Its source output goes to the conditioning's image_1."}),
                 "mask": ("MASK", {"tooltip": "1 where to paint: the new area, and anything painted."}),
                 "latent": ("LATENT", {"tooltip": "The latent of MiniMax H3 Image Conditioning: its size sets the resolution."}),
             },
@@ -120,22 +132,19 @@ class OutpaintLatent:
     RETURN_NAMES = ("model", "positive", "latent")
     FUNCTION = "encode"
     CATEGORY = "FBnodes"
-    DESCRIPTION = "VAE-encodes a padded canvas at the conditioning latent's resolution (keeping the canvas's aspect) with a noise mask, so KSampler paints only the new area. Picture 1's reference becomes the picture alone, placed where it sits on the canvas, so the model continues it instead of copying the pad."
+    DESCRIPTION = "VAE-encodes a padded canvas at the conditioning latent's resolution (keeping the canvas's aspect) with a noise mask, so KSampler paints only the new area. Picture 1's reference becomes the picture alone, placed where it sits on the canvas, so the model continues it instead of copying the pad. Give the conditioning the unpadded picture (Load Image+'s source) as image_1."
 
     def encode(self, model, positive, vae, image, mask, latent):
         cell = vae.spacial_compression_encode()
         latent_h, latent_w = latent["samples"].shape[-2:]
         width, height = _canvas_size(image.shape[2], image.shape[1], latent_w, latent_h, cell)
-        samples = vae.encode(_resize(image[:1], width, height))
-        # A latent cell is as free as the most-masked pixel in it, and one cell more around the masked area
-        # lets the sampler repaint the seam itself.
-        noise_mask = F.max_pool2d(_mask_at(mask[:1], width, height), cell)
-        noise_mask = F.max_pool2d(noise_mask, 3, stride=1, padding=1)
+        samples = vae.encode(_resize(_edge_context(image[:1], mask), width, height))
+        noise_mask = _mask_at(mask[:1], width, height)
         out = latent.copy()
         out["samples"] = samples
         out["noise_mask"] = noise_mask
 
-        cells = _picture_cells(mask, width, height, cell)
+        cells = _kept_cells(noise_mask, cell)
         if cells is None:
             return (model, positive, out)
         positive = [[text, {**values, "minimax_refs": _placed_refs(values.get("minimax_refs"), samples, cells)}] for text, values in positive]
