@@ -8,9 +8,11 @@ import { ensureKitCss, T, Z_MODAL } from "./theme.mjs";
 // Open modals, newest last: Escape closes only the top one.
 const stack = [];
 
-// openModal({ title, body, footer, width, height, onClose }) -> { overlay, modal, body, close, isTop }.
-// `body` and `footer` are elements (or arrays of elements).
-export function openModal({ title = "", body = null, footer = null, width = null, height = null, onClose = null } = {}) {
+// openModal({ title, body, footer, width, height, closable, onClose }) -> { overlay, modal, body, close, isTop }.
+// `body` and `footer` are elements (or arrays of elements). closable: false
+// takes away the close button, Escape and the backdrop click, for a dialog
+// that must end with one of its own buttons.
+export function openModal({ title = "", body = null, footer = null, width = null, height = null, closable = true, onClose = null } = {}) {
   ensureKitCss();
   const overlay = el("div", "fbui-overlay");
   const modal = el("div", "fbui-modal");
@@ -26,7 +28,7 @@ export function openModal({ title = "", body = null, footer = null, width = null
     document.removeEventListener("keydown", onKey, true);
     onClose?.();
   };
-  head.append(button("", { icon: ICONS.close, small: true, title: "Close (Esc)", onClick: close }));
+  if (closable) head.append(button("", { icon: ICONS.close, small: true, title: "Close (Esc)", onClick: close }));
   modal.append(head);
   const content = el("div", "fbui-modal-body");
   for (const item of [body].flat()) if (item) content.append(item);
@@ -38,12 +40,12 @@ export function openModal({ title = "", body = null, footer = null, width = null
   }
   overlay.append(modal);
   const onKey = (event) => {
-    if (event.key !== "Escape" || stack[stack.length - 1] !== close) return;
+    if (!closable || event.key !== "Escape" || stack[stack.length - 1] !== close) return;
     event.stopPropagation();
     close();
   };
   overlay.addEventListener("pointerdown", (event) => {
-    if (event.target === overlay) close();
+    if (closable && event.target === overlay) close();
   });
   overlay.addEventListener("keydown", (event) => event.stopPropagation());
   document.addEventListener("keydown", onKey, true);

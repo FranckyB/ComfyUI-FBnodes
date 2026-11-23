@@ -6,7 +6,11 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import tempfile
+import threading
+import time
+import uuid
 from datetime import datetime
 from types import SimpleNamespace
 import unittest
@@ -61,19 +65,63 @@ class SaveImageTests(unittest.TestCase):
                 get_temp_directory=lambda: str(self.preview),
                 get_save_image_path=lambda *args: (str(self.output), "image", 1, "", "image"),
             ),
+            "uuid": uuid, "threading": threading, "time": time, "shutil": shutil,
+            "_REVIEW_LOCK": threading.Lock(), "_PENDING_REVIEWS": {},
+            "comfy": SimpleNamespace(model_management=SimpleNamespace(throw_exception_if_processing_interrupted=lambda: None)),
+            "server": SimpleNamespace(PromptServer=SimpleNamespace(instance=SimpleNamespace(send_sync=self.send_sync))),
         }
+        # The review dialog's answer, given as soon as the review is announced.
+        self.events = []
+        self.answer = None
         tree = ast.parse(SOURCE.read_text())
         selected = [node for node in tree.body if
-                    isinstance(node, (ast.ClassDef, ast.FunctionDef)) and node.name in ("SaveImagePlus", "_expand_date_format")
+                    isinstance(node, (ast.ClassDef, ast.FunctionDef)) and node.name in ("SaveImagePlus", "_expand_date_format", "_wait_for_review")
                     or isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == "IMAGE_FORMAT_OPTIONS" for target in node.targets)]
         exec(compile(ast.Module(body=selected, type_ignores=[]), str(SOURCE), "exec"), self.env)
         self.node = self.env["SaveImagePlus"]()
         self.images = [FakeImage(), FakeImage()]
 
+    def send_sync(self, event, data):
+        self.events.append((event, data))
+        if event == "fbnodes.save_image.review" and self.answer is not None:
+            item = self.env["_PENDING_REVIEWS"][data["request_id"]]
+            item["selected"] = self.answer
+            item["event"].set()
+
+    def test_review_moves_only_picked_images_to_output(self):
+        self.answer = [0, 2]
+        result = self.node.save_images([FakeImage(), FakeImage(), FakeImage()], "prefix", review=True, review_timeout=0)
+        announced = self.events[0][1]
+        self.assertEqual([info["type"] for info in announced["images"]], ["temp"] * 3)
+        self.assertEqual([info["filename"] for info in result["ui"]["saved_images"]], ["image_00001.png", "image_00002.png"])
+        self.assertTrue(all(info["type"] == "output" for info in result["ui"]["saved_images"]))
+        self.assertEqual(result["result"], ("image_00002.png",))
+        self.assertEqual(sorted(path.name for path in self.output.iterdir()), ["image_00001.png", "image_00002.png"])
+        # The image left out stays in temp; nothing waits in the registry.
+        self.assertTrue((self.preview / announced["images"][1]["filename"]).exists())
+        self.assertEqual(self.events[-1], ("fbnodes.save_image.review_done", {"request_id": announced["request_id"], "outcome": "decided"}))
+        self.assertEqual(self.env["_PENDING_REVIEWS"], {})
+
+    def test_review_timeout_applies_on_timeout(self):
+        for on_timeout, saved in (("skip all", 0), ("save all", 2)):
+            with self.subTest(on_timeout=on_timeout):
+                for path in self.output.iterdir():
+                    path.unlink()
+                result = self.node.save_images(self.images, "prefix", review=True, review_timeout=1, on_timeout=on_timeout)
+                self.assertEqual(self.events[-1][1]["outcome"], "timeout")
+                self.assertEqual(len(list(self.output.iterdir())), saved)
+                kept = [info["type"] for info in result["ui"]["saved_images"]]
+                self.assertEqual(kept, ["output"] * 2 if saved else ["temp"] * 2)
+
+    def test_review_is_skipped_when_not_saving(self):
+        self.node.save_images(self.images, "prefix", save=False, review=True)
+        self.assertEqual(self.events, [])
+
     def test_legacy_schema_signature_defaults_and_metadata(self):
         schema = self.node.INPUT_TYPES()
         self.assertEqual(list(schema["required"]), ["images", "filename_prefix", "save"])
-        self.assertEqual(list(schema["optional"]), ["Compare", "format", "bit_depth", "input_color_space", "crf"])
+        # New inputs are only ever appended, so saved widgets_values keep their places.
+        self.assertEqual(list(schema["optional"]), ["Compare", "format", "bit_depth", "input_color_space", "crf", "review", "review_timeout", "on_timeout"])
         self.assertEqual(list(inspect.signature(self.node.save_images).parameters)[:6],
                          ["images", "filename_prefix", "save", "Compare", "prompt", "extra_pnginfo"])
         result = self.node.save_images(self.images, "old", True, self.images, {"node": 1}, {"workflow": {"id": 2}})

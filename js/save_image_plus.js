@@ -33,12 +33,15 @@ function applySaveImageControls(node, { skipSize = false } = {}) {
         }
     }
     const expanded = !!node.properties?.[CONTROLS_EXPANDED_PROP];
+    const review = !!node.widgets?.find(widget => widget.name === "review")?.value;
     for (const widget of getSettingsWidgets(node)) {
         if (!widget._fbSaveImageSizeSaved) {
             widget._fbSaveImageComputeSize = widget.computeSize;
             widget._fbSaveImageSizeSaved = true;
         }
-        const hidden = !expanded || (widget.name === "crf" && format !== "avif");
+        const hidden = !expanded
+            || (widget.name === "crf" && format !== "avif")
+            || ((widget.name === "review_timeout" || widget.name === "on_timeout") && !review);
         widget.hidden = hidden;
         if (hidden) widget.computeSize = () => [0, -4];
         else if (widget._fbSaveImageComputeSize) widget.computeSize = widget._fbSaveImageComputeSize;
@@ -1328,6 +1331,17 @@ app.registerExtension({
         nodeType.prototype.onNodeCreated = function () {
             const result = onNodeCreated?.apply(this, arguments);
             const node = this;
+
+            // Review's timer settings only show while review is on.
+            const reviewWidget = this.widgets?.find((w) => w?.name === "review");
+            if (reviewWidget) {
+                const reviewCallback = reviewWidget.callback;
+                reviewWidget.callback = function () {
+                    reviewCallback?.apply(this, arguments);
+                    applySaveImageControls(node);
+                    ensureMinDisplaySize(node);
+                };
+            }
 
             const formatWidget = this.widgets?.find((w) => w?.name === "format");
             if (formatWidget && !formatWidget._fbnodesSaveImagePlusWrapped) {
