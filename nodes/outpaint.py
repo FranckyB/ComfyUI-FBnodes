@@ -96,11 +96,14 @@ def _placed_refs(refs, samples, cells):
     return refs
 
 
-def _place_references(executor, x, timestep, context, transformer_options={}, minimax_payload=None, **kwargs):
+def _place_references(executor, *args, **kwargs):
     """Model wrapper: a placed reference takes the canvas positions of the cells it was cut from, instead of a
-    grid of its own, so the model reads it as that part of the picture it paints."""
-    refs = (minimax_payload or {}).get("refs") or []
+    grid of its own, so the model reads it as that part of the picture it paints. Only MiniMax H3 Image carries
+    references this way; any other model passes straight through."""
+    payload = kwargs.get("minimax_payload") or {}
+    refs = payload.get("refs") or []
     if any("outpaint_place" in ref for ref in refs):
+        x, context = args[0], args[2]
         lat_h, lat_w = (x.shape[3] + 1) // 2 * 2, (x.shape[4] + 1) // 2 * 2
         layout = comfy.ldm.minimax.model.PackedLayout(context.shape[1], x.shape[2], lat_h, lat_w, 0, refs=refs)
         va, vb, _ = layout.segments[-1]  # the target picture
@@ -112,8 +115,8 @@ def _place_references(executor, x, timestep, context, transformer_options={}, mi
                 continue
             top, left = place[2] // 2, place[3] // 2
             layout.position_ids[a:b, 1:] = canvas[top:top + ref["latent_h"] // 2, left:left + ref["latent_w"] // 2].reshape(-1, 2)
-        minimax_payload = {**minimax_payload, "layout": layout}
-    return executor(x, timestep, context, transformer_options, minimax_payload=minimax_payload, **kwargs)
+        kwargs["minimax_payload"] = {**payload, "layout": layout}
+    return executor(*args, **kwargs)
 
 
 class OutpaintSource:
@@ -163,7 +166,7 @@ class OutpaintLatent:
     RETURN_NAMES = ("model", "positive", "latent")
     FUNCTION = "encode"
     CATEGORY = "FBnodes"
-    DESCRIPTION = "VAE-encodes a padded canvas at the conditioning latent's resolution (keeping the canvas's aspect) with a noise mask, so KSampler paints only the new area. Picture 1's reference becomes the picture alone, placed where it sits on the canvas, so the model continues it instead of copying the pad. Give the conditioning the unpadded picture (Load Image+'s image) as image_1."
+    DESCRIPTION = "VAE-encodes a padded canvas at the latent's resolution (keeping the canvas's aspect) with a noise mask, so KSampler paints only the new area; any model. With MiniMax H3 Image, Picture 1's reference also becomes the picture alone, placed where it sits on the canvas, so the model continues it instead of copying the pad. Give the conditioning the unpadded picture (Load Image+'s image) as image_1."
 
     def encode(self, model, positive, vae, mask, canvas, latent):
         cell = vae.spacial_compression_encode()
