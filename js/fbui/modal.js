@@ -142,3 +142,70 @@ export function openMenu(x, y, items) {
   setTimeout(() => document.addEventListener("pointerdown", outside, true), 0);
   return { menu, close };
 }
+
+// openViewer([{ url, title, video?, fallback? }], index): the picture (or
+// video) as large as the screen allows over a darkened ComfyUI. ←/→ step
+// through several, Esc or a click on the dark closes. `fallback` is an image
+// URL shown when the browser cannot play a video.
+export function openViewer(items, index = 0) {
+  ensureKitCss();
+  if (!items.length) return;
+  const root = el("div", "fbui-viewer");
+  const stage = el("div", "stage");
+  const name = el("div", "name");
+  const where = el("div", "where");
+  const close = () => {
+    root.remove();
+    stack.splice(stack.indexOf(close), 1);
+    document.removeEventListener("keydown", onKey, true);
+  };
+  const prev = button("", { icon: ICONS.chevronLeft, title: "Previous (←)", onClick: () => show(at - 1) });
+  const next = button("", { icon: ICONS.chevronRight, title: "Next (→)", onClick: () => show(at + 1) });
+  prev.classList.add("nav", "prev");
+  next.classList.add("nav", "next");
+  const shut = button("", { icon: ICONS.close, title: "Close (Esc)", onClick: close });
+  shut.classList.add("shut");
+  let at = 0;
+  function show(next) {
+    at = (next + items.length) % items.length;
+    const item = items[at];
+    let media;
+    if (item.video) {
+      media = el("video");
+      Object.assign(media, { controls: true, autoplay: true, loop: true, playsInline: true, src: item.url });
+      if (item.fallback) {
+        media.addEventListener("error", () => {
+          const still = el("img");
+          still.src = item.fallback;
+          media.replaceWith(still);
+        });
+      }
+    } else {
+      media = el("img");
+      media.src = item.url;
+      media.draggable = false;
+    }
+    stage.replaceChildren(media);
+    name.textContent = item.title ?? "";
+    name.title = item.title ?? "";
+    where.textContent = `${at + 1} / ${items.length}`;
+  }
+  const onKey = (event) => {
+    if (stack[stack.length - 1] !== close) return;
+    if (event.key === "Escape") close();
+    else if (items.length > 1 && (event.key === "ArrowLeft" || event.key === "ArrowRight")) show(at + (event.key === "ArrowRight" ? 1 : -1));
+    else return;
+    event.preventDefault();
+    event.stopPropagation();
+  };
+  root.addEventListener("pointerdown", (event) => {
+    if (event.target === root || event.target === stage) close();
+  });
+  prev.hidden = next.hidden = where.hidden = items.length < 2;
+  root.append(stage, name, where, shut, prev, next);
+  document.body.append(root);
+  document.addEventListener("keydown", onKey, true);
+  stack.push(close);
+  show(index);
+  return { close };
+}

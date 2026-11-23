@@ -14,7 +14,7 @@ import { mountCard } from "./fbui/card.js";
 import { notifyChange, toast } from "./fbui/comfy.js";
 import { button, ICONS, rail } from "./fbui/controls.js";
 import { chainCallback, el } from "./fbui/dom.js";
-import { openMenu, openModal } from "./fbui/modal.js";
+import { openMenu, openViewer } from "./fbui/modal.js";
 import { makeScrub } from "./fbui/scrub.js";
 import { findWidget, hideInputsInDef, hideWidget, suppressCorePreview } from "./fbui/widgets.js";
 import { createImageStage, drawStroke } from "./common/image_stage.js";
@@ -111,22 +111,15 @@ function fitNodeToImage(node) {
 function showPreviewModal(node) {
     const filename = imageValue(node);
     if (!filename || filename === NONE || filename === BLANK) return;
-    const url = previewUrl(filename, sourceFolder(node));
-    const media = isVideoFile(filename) ? el("video") : el("img");
-    media.src = url;
-    media.style.cssText = "display:block;max-width:86vw;max-height:76vh;margin:auto;border-radius:6px";
-    if (media.tagName === "VIDEO") {
-        Object.assign(media, { controls: true, autoplay: true, loop: true });
-        // H265 / yuv444: the browser cannot play it; show the server's frame instead.
-        media.onerror = () => {
-            const frame = el("img");
-            frame.style.cssText = media.style.cssText;
-            frame.src = api.apiURL(`/fbnodes/video-frame?${new URLSearchParams({ filename, source: sourceFolder(node), position: "0" })}`);
-            media.replaceWith(frame);
-            toast("This video cannot play in the browser (H265 or yuv444); showing its first frame.", { severity: "warn" });
-        };
-    }
-    openModal({ title: basenameOf(filename), body: media });
+    const source = sourceFolder(node);
+    const video = isVideoFile(filename);
+    openViewer([{
+        url: previewUrl(filename, source),
+        title: basenameOf(filename),
+        video,
+        // H265 / yuv444 cannot play in the browser: show the backend's first frame.
+        fallback: video ? api.apiURL(`/fbnodes/video-frame?${new URLSearchParams({ filename, source, position: "0" })}`) : null,
+    }]);
 }
 
 // ---------------------------------------------------------------- crop / flip state

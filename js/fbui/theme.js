@@ -7,7 +7,7 @@
 
 // Bump on any change to the CSS below. Two packs shipping the same version
 // inject one stylesheet; different versions both inject and the later wins.
-export const KIT_VERSION = 6;
+export const KIT_VERSION = 7;
 
 export const T = Object.freeze({
   brand: "#4299e1",          // the one accent: picked segment, switch on, focus ring
@@ -156,6 +156,16 @@ export function kitCss() {
 .fbui-modal-head .title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .fbui-modal-body{flex:1 1 auto;min-height:0;overflow:auto;padding:0 12px 12px}
 .fbui-modal-foot{flex:none;display:flex;justify-content:flex-end;gap:6px;padding:10px 12px;background:${T.card}}
+.fbui-viewer{position:fixed;inset:0;z-index:${Z_MODAL};background:rgba(5,6,8,.94);font:12px ${FONT};color:${T.inkSoft}}
+.fbui-viewer .stage{position:absolute;inset:48px 64px 24px;display:flex;align-items:center;justify-content:center}
+.fbui-viewer .stage img,.fbui-viewer .stage video{max-width:100%;max-height:100%;object-fit:contain;border-radius:${RADIUS}px;box-shadow:0 12px 48px rgba(0,0,0,.6);display:block}
+.fbui-viewer .name{position:absolute;left:20px;top:14px;max-width:60vw;padding:4px 10px;border-radius:999px;background:${T.panel};color:${T.ink};font:600 12px ${FONT};white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fbui-viewer .where{position:absolute;left:50%;top:14px;transform:translateX(-50%);padding:4px 10px;border-radius:999px;background:${T.panel};color:${T.label};font:600 12px ${FONT};font-variant-numeric:tabular-nums}
+.fbui-viewer .shut{position:absolute;right:16px;top:10px}
+.fbui-viewer .nav{position:absolute;top:50%;transform:translateY(-50%);width:44px;height:44px;border-radius:50%;background:rgba(16,19,23,.8)}
+.fbui-viewer .nav svg{width:20px;height:20px}
+.fbui-viewer .nav.prev{left:12px}
+.fbui-viewer .nav.next{right:12px}
 .fbui-menu{position:fixed;z-index:${Z_MENU};min-width:160px;padding:4px;border-radius:${RADIUS}px;background:${T.panel};box-shadow:0 8px 28px rgba(0,0,0,.55);font:12px ${FONT};color:${T.inkSoft}}
 .fbui-menu button{display:block;width:100%;padding:6px 10px;border:none;border-radius:${RADIUS_XS}px;background:transparent;color:inherit;font:inherit;text-align:left;cursor:pointer}
 .fbui-menu button:hover{background:${T.fillHover};color:${T.inkHover}}

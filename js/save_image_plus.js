@@ -15,7 +15,7 @@ import { mountCard } from "./fbui/card.js";
 import { toast } from "./fbui/comfy.js";
 import { button, ICONS, segmented } from "./fbui/controls.js";
 import { chainCallback, el } from "./fbui/dom.js";
-import { openMenu, openModal } from "./fbui/modal.js";
+import { openMenu, openViewer } from "./fbui/modal.js";
 import { findWidget, hideInputsInDef, hideWidget, suppressCorePreview } from "./fbui/widgets.js";
 import { CAPTION_HEIGHT, RADIUS, T } from "./fbui/theme.js";
 import { bestGrid } from "./common/grid_math.js";
@@ -239,11 +239,12 @@ function pickerControl(which) {
     };
 }
 
-function showLarge(info) {
-    const img = el("img");
-    img.src = imageUrl(info);
-    img.style.cssText = "display:block;max-width:86vw;max-height:78vh;margin:auto;border-radius:6px";
-    openModal({ title: info.filename, body: img });
+// The full-screen viewer, opened on `info`: a saved image steps through the
+// batch, a compare image is shown on its own.
+function showLarge(node, info) {
+    const fb = node._fb;
+    const items = fb.saved.includes(info) ? fb.saved : [info];
+    openViewer(items.map((item) => ({ url: imageUrl(item), title: item.filename })), Math.max(0, items.indexOf(info)));
 }
 
 async function copyImage(info) {
@@ -271,7 +272,7 @@ function stagePanel(node) {
     const grid = el("div", "grid");
     const empty = el("div", "fbui-stage-empty", "Run the workflow to see the saved images");
     const tools = el("div", "fbui-stage-tools");
-    const large = button("", { icon: ICONS.open, small: true, title: "Open a large preview", onClick: () => fb.saved[fb.at] && showLarge(fb.saved[fb.at]) });
+    const large = button("", { icon: ICONS.open, small: true, title: "Open a large preview", onClick: () => fb.saved[fb.at] && showLarge(node, fb.saved[fb.at]) });
     tools.append(large);
     stage.append(single, grid, empty, tools);
 
@@ -416,7 +417,7 @@ function stagePanel(node) {
         openMenu(event.clientX, event.clientY, [
             { label: "Open image", action: () => window.open(imageUrl(info), "_blank") },
             { label: "Copy image", action: () => copyImage(info) },
-            { label: "Open large preview", action: () => showLarge(info) },
+            { label: "Open large preview", action: () => showLarge(node, info) },
             ...(against ? [{ label: "Open compare image", action: () => window.open(imageUrl(against), "_blank") }] : []),
         ]);
     });
