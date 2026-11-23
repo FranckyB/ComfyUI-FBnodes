@@ -18,15 +18,16 @@ import { findWidget, hideWidget } from "./fbui/widgets.js";
 
 const NODE_NAME = "ShowTextPlus";
 const TEXT_WIDGET = "preview_text";
-const CSS_ID = "fbnodes-show-text-css-v1";
+const CSS_ID = "fbnodes-show-text-css-v2";
 
 function ensureCss() {
     if (document.getElementById(CSS_ID)) return;
     const style = document.createElement("style");
     style.id = CSS_ID;
     style.textContent = `
-.fbnodes-text{position:relative;height:100%;box-sizing:border-box;display:flex;flex-direction:column;gap:6px;padding:8px;overflow-y:auto;border:1px solid ${T.plateEdge};border-radius:${RADIUS}px;background:${T.plate};pointer-events:auto}
-.fbnodes-text pre{margin:0;padding:6px 8px;border-radius:${RADIUS}px;background:${T.card};color:${T.ink};font:12px/1.45 ${MONO};white-space:pre-wrap;word-break:break-word;user-select:text;cursor:text}
+.fbnodes-text{position:relative;height:100%;box-sizing:border-box;display:flex;flex-direction:column;padding:4px 10px;overflow-y:auto;border:1px solid ${T.plateEdge};border-radius:${RADIUS}px;background:${T.card};pointer-events:auto}
+.fbnodes-text pre{margin:0;padding:6px 0;color:${T.ink};font:12px/1.45 ${MONO};white-space:pre-wrap;word-break:break-word;user-select:text;cursor:text}
+.fbnodes-text pre+pre{border-top:1px solid ${T.rule}}
 .fbnodes-text .empty{margin:auto;color:${T.faint};font:11px ${FONT}}
 .fbnodes-text .fbui-stage-tools{position:sticky;top:0;align-self:flex-end;margin-bottom:-28px}
 `;
