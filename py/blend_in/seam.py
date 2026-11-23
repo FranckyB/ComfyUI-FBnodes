@@ -137,24 +137,24 @@ def _torch_distance(inside: torch.Tensor, reach: float = SEAM_DEPTH_CAP) -> torc
     return best.sqrt()
 
 
-def _distance(inside: torch.Tensor, reach: float = SEAM_DEPTH_CAP) -> torch.Tensor:
+def _distance(inside: torch.Tensor) -> torch.Tensor:
     if _scipy_distance is not None:
         return torch.from_numpy(_scipy_distance(inside.cpu().numpy()).astype("float32"))
-    return _torch_distance(inside.cpu(), reach)
+    return _torch_distance(inside.cpu())
 
 
-def _signed_depth(picture: torch.Tensor, cap: float = SEAM_DEPTH_CAP) -> torch.Tensor:
+def _signed_depth(picture: torch.Tensor) -> torch.Tensor:
     """[H, W] signed distance, in pixels, from each pixel's centre to the
     picture's edge: positive inside ``picture`` (a bool map), negative
-    outside, clamped to ``cap`` either way. A side of the picture
+    outside, clamped to SEAM_DEPTH_CAP either way. A side of the picture
     that meets the frame is no edge, so the picture stays deep up to it."""
     if bool(picture.all()):
-        return torch.full(tuple(picture.shape), cap)
+        return torch.full(tuple(picture.shape), SEAM_DEPTH_CAP)
     if not bool(picture.any()):
-        return torch.full(tuple(picture.shape), -cap)
-    inward = _distance(picture, cap) - 0.5
-    outward = 0.5 - _distance(~picture, cap)
-    return torch.where(picture.cpu(), inward, outward).clamp(-cap, cap)
+        return torch.full(tuple(picture.shape), -SEAM_DEPTH_CAP)
+    inward = _distance(picture) - 0.5
+    outward = 0.5 - _distance(~picture)
+    return torch.where(picture.cpu(), inward, outward).clamp(-SEAM_DEPTH_CAP, SEAM_DEPTH_CAP)
 
 
 def seam_ramps(
@@ -656,28 +656,16 @@ def blend_in_seam(
     return out
 
 
-def blend(canvas: torch.Tensor, patch: torch.Tensor, mask: torch.Tensor, tone_match: float, inset: float = 0.0, feather: float = 0.0) -> torch.Tensor:
+def blend(canvas: torch.Tensor, patch: torch.Tensor, mask: torch.Tensor, tone_match: float) -> torch.Tensor:
     """The model's picture ``patch`` [B, H, W, C] blended into ``canvas``
     [1 or B, H, W, C] across the picture's edge. ``mask`` [H, W] is the mask
     the model was handed: 1 over the new area, feathering into the picture.
-    ``tone_match`` 0..1 is Tone match's strength, 0 off. ``inset`` pixels
-    of the picture's edge keep the model's picture before the handover starts;
-    ``feather`` is the detail handover's width in pixels, 0 reading it off
-    the mask as Stitch Inpaint does."""
+    ``tone_match`` 0..1 is Tone match's strength, 0 off."""
     mask = mask.float().cpu()
-    picture = mask < SEAM_NEW_AREA
-    depth = _signed_depth(picture)
+    depth = _signed_depth(mask < SEAM_NEW_AREA)
     tone, detail = seam_ramps(mask, depth)
-    if feather > 0:
-        detail = (detail[0], detail[0] + feather)
-        tone = (tone[0], detail[1] + SEAM_TONE_EXTRA)
-    tone = (tone[0] + inset, tone[1] + inset)
-    detail = (detail[0] + inset, detail[1] + inset)
-    # Tone match reads the band the model redrew, wherever the seam goes.
-    plan = {"depth": depth.unsqueeze(0).to(patch.device), "sampler": mask.unsqueeze(0).to(patch.device)}
-    # Past the depth cap the picture would never come back whole: measure deeper.
-    reach = max(tone[1], detail[1]) + 2.0
-    if reach > SEAM_DEPTH_CAP:
-        depth = _signed_depth(picture, reach)
-    match = blend_in_tone_match(canvas, patch, plan) if tone_match > 0 else None
-    return blend_in_seam(canvas, patch, depth.unsqueeze(0).to(patch.device), tone, detail, match=match, strength=tone_match)
+    depth = depth.unsqueeze(0).to(patch.device)
+    match = None
+    if tone_match > 0:
+        match = blend_in_tone_match(canvas, patch, {"depth": depth, "sampler": mask.unsqueeze(0).to(patch.device)})
+    return blend_in_seam(canvas, patch, depth, tone, detail, match=match, strength=tone_match)
