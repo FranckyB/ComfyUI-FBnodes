@@ -1153,7 +1153,7 @@ function padPairControl(node, first, second) {
 
 // ---------------------------------------------------------------- files
 
-const files = loadPlus({ widget: "image", listKind: "media", navKind: "media", allowedTypes: ["image", "video"] });
+const files = loadPlus({ widget: "image", navKind: "media", allowedTypes: ["image", "video"] });
 
 const isImagePath = (text) => isAbsolutePath(text) && /\.(png|jpe?g|webp|gif|bmp)$/i.test(text);
 

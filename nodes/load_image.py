@@ -23,39 +23,7 @@ except ImportError:
 
 # Shared file-browser extension sets
 LIST_FILES_MEDIA_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.webp', '.mp4', '.webm', '.mov', '.avi']
-LIST_FILES_AUDIO_EXTENSIONS = ['.wav', '.flac', '.mp3', '.m4a']
-LIST_FILES_VIDEO_EXTENSIONS = ['.mp4', '.webm', '.mov', '.avi']
-
-# Cache of probed media metadata keyed by (path, mtime, size)
-_media_meta_cache = {}
 _SOURCE_ANNOTATION_RE = re.compile(r"^(.*)\s+\[(input|output|temp)\]$")
-
-
-def _load_hidden_names(directory: str) -> set[str]:
-    hidden_names: set[str] = set()
-    hidden_file = os.path.join(directory, '.hidden')
-
-    try:
-        with open(hidden_file, 'r', encoding='utf-8') as handle:
-            for raw_line in handle:
-                line = raw_line.strip()
-                if not line or line.startswith('#'):
-                    continue
-
-                normalized = line.replace('\\', '/')
-                while normalized.startswith('./'):
-                    normalized = normalized[2:]
-                normalized = normalized.strip('/')
-                if not normalized:
-                    continue
-
-                direct_child = normalized.split('/', 1)[0]
-                if direct_child and direct_child not in {'.', '..'}:
-                    hidden_names.add(direct_child)
-    except OSError:
-        pass
-
-    return hidden_names
 
 
 def _strip_source_annotation(path: str) -> str:
@@ -64,63 +32,6 @@ def _strip_source_annotation(path: str) -> str:
         return path
     match = _SOURCE_ANNOTATION_RE.match(path)
     return match.group(1) if match else path
-
-
-def _probe_media_meta(file_path: str, ext: str) -> dict:
-    """Probe media metadata (duration, width, height) for audio/video files."""
-    if ext not in LIST_FILES_VIDEO_EXTENSIONS and ext not in LIST_FILES_AUDIO_EXTENSIONS:
-        return {"duration": None, "width": None, "height": None}
-
-    try:
-        st = os.stat(file_path)
-        cache_key = (file_path, int(st.st_mtime), int(st.st_size))
-    except OSError:
-        return {"duration": None, "width": None, "height": None}
-
-    cached = _media_meta_cache.get(cache_key)
-    if cached is not None:
-        return cached
-
-    meta = {"duration": None, "width": None, "height": None}
-
-    try:
-        import av
-
-        container = av.open(file_path)
-        try:
-            # Container duration is often the fastest available value.
-            if container.duration:
-                meta["duration"] = float(container.duration) / 1_000_000.0
-
-            if ext in LIST_FILES_VIDEO_EXTENSIONS:
-                stream = next((s for s in container.streams if s.type == "video"), None)
-                if stream is not None:
-                    if stream.width:
-                        meta["width"] = int(stream.width)
-                    if stream.height:
-                        meta["height"] = int(stream.height)
-
-                    if stream.duration is not None and stream.time_base is not None:
-                        meta["duration"] = float(stream.duration * stream.time_base)
-                    elif stream.frames and stream.average_rate:
-                        fps = float(stream.average_rate)
-                        if fps > 0:
-                            meta["duration"] = float(stream.frames) / fps
-            else:
-                stream = next((s for s in container.streams if s.type == "audio"), None)
-                if stream is not None and stream.duration is not None and stream.time_base is not None:
-                    meta["duration"] = float(stream.duration * stream.time_base)
-        finally:
-            container.close()
-    except Exception:
-        # Best-effort metadata probing; silently fall back when unavailable.
-        pass
-
-    if meta["duration"] is not None and meta["duration"] < 0:
-        meta["duration"] = None
-
-    _media_meta_cache[cache_key] = meta
-    return meta
 
 
 # ---------------------------------------------------------------------------
@@ -469,81 +380,6 @@ async def extract_video_frame_clip_api(request):
     except Exception as e:
         print(f"[FBnodes] Error generating preview clip: {e}")
         return server.web.json_response({"error": str(e)}, status=500)
-
-
-@server.PromptServer.instance.routes.get("/fbnodes/list-files")
-async def list_files(request):
-    """List supported files in input or output directory, including subfolders."""
-    try:
-        source = request.rel_url.query.get('source', 'input')
-        kind = request.rel_url.query.get('kind', 'media')
-        include_meta = request.rel_url.query.get('include_meta', '0').lower() in ('1', 'true', 'yes')
-        if source == 'output':
-            base_dir = folder_paths.get_output_directory()
-        else:
-            base_dir = folder_paths.get_input_directory()
-
-        files = []
-        if kind == 'audio':
-            supported_extensions = LIST_FILES_AUDIO_EXTENSIONS
-        elif kind == 'all':
-            supported_extensions = list(set(LIST_FILES_MEDIA_EXTENSIONS + LIST_FILES_AUDIO_EXTENSIONS))
-        else:
-            # Keep current default behavior for existing nodes.
-            supported_extensions = LIST_FILES_MEDIA_EXTENSIONS
-
-        if os.path.exists(base_dir):
-            for root, dirs, filenames in os.walk(base_dir):
-                hidden_names = _load_hidden_names(root)
-                dirs[:] = [d for d in dirs if not d.startswith('.') and d not in hidden_names]
-                for filename in filenames:
-                    if filename.startswith('.') or filename in hidden_names:
-                        continue
-                    ext = os.path.splitext(filename)[1].lower()
-                    if ext in supported_extensions:
-                        full_path = os.path.join(root, filename)
-                        rel_path = os.path.relpath(full_path, base_dir)
-                        rel_path = rel_path.replace('\\', '/')
-                        if include_meta:
-                            size = None
-                            modified = None
-                            duration = None
-                            width = None
-                            height = None
-                            try:
-                                st = os.stat(full_path)
-                                size = int(st.st_size)
-                                modified = float(st.st_mtime)
-                            except OSError:
-                                pass
-
-                            media_meta = _probe_media_meta(full_path, ext)
-                            duration = media_meta.get("duration")
-                            width = media_meta.get("width")
-                            height = media_meta.get("height")
-
-                            files.append(
-                                {
-                                    "path": rel_path,
-                                    "name": filename,
-                                    "size": size,
-                                    "modified": modified,
-                                    "duration": duration,
-                                    "width": width,
-                                    "height": height,
-                                }
-                            )
-                        else:
-                            files.append(rel_path)
-
-        if include_meta:
-            files.sort(key=lambda x: str(x.get('path', '')).lower())
-        else:
-            files.sort()
-        return server.web.json_response({"files": files})
-    except Exception as e:
-        print(f"[FBnodes] Error listing files: {e}")
-        return server.web.json_response({"files": [], "error": str(e)}, status=500)
 
 
 # ---------------------------------------------------------------------------

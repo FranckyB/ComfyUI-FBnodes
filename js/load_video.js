@@ -29,7 +29,7 @@ const MIN_WIDTH = 300;
 const STAGE_MIN_HEIGHT = 200;
 const RAIL_HEIGHT = 28;
 
-const files = loadPlus({ widget: "video", listKind: "media", navKind: "video", allowedTypes: ["video"], accepts: isVideoFile });
+const files = loadPlus({ widget: "video", navKind: "video", allowedTypes: ["video"], accepts: isVideoFile });
 
 // Videos the browser cannot decode: later loads go straight to the still frame.
 const unplayable = new Set();

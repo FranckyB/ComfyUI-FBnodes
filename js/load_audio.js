@@ -30,7 +30,7 @@ const WAVEFORM_BUCKETS = 800;
 const HANDLE_GRAB = 8;
 
 const files = loadPlus({
-    widget: "audio", listKind: "audio", navKind: "audiovideo", allowedTypes: ["audio", "video"],
+    widget: "audio", navKind: "audiovideo", allowedTypes: ["audio", "video"],
     accepts: (value) => AUDIO_FILE.test(stripAnnotation(value)), sentinels: [NONE],
 });
 

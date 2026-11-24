@@ -1,8 +1,9 @@
 // The source plumbing shared by the Load+ nodes (Load Image+, Load Video+,
 // Load Audio+). The node's file widget holds the picked file: relative to
 // the input or output folder (source_folder says which), or an absolute path
-// picked anywhere on disk. Its option list is the folder last browsed, or the
-// source folder. Each node keeps node._fb = { card, reload(value) }.
+// picked anywhere on disk. Its option list is one folder, never its
+// subfolders: the one last browsed, else the current file's. Each node keeps
+// node._fb = { card, reload(value) }.
 import { api } from "../../../scripts/api.js";
 import { createFileBrowserModal } from "../file_browser.js";
 import { basenameOf, classifySelection, getMediaRoots, isAbsolutePath, isVideoFile, previewUrl, stripAnnotation } from "../path_browser.js";
@@ -32,13 +33,12 @@ export function sourceLabel(value, values) {
     return labels.get(value) ?? basenameOf(value);
 }
 
-// loadPlus({ widget, listKind, navKind, allowedTypes, accepts, sentinels, uploadType })
+// loadPlus({ widget, navKind, allowedTypes, accepts, sentinels, uploadType })
 //   widget       the file widget's name ("image", "video", "audio")
-//   listKind     what /fbnodes/list-files lists for a source folder
-//   navKind      what the file browser and a browsed folder list
+//   navKind      what the file browser and the file list show
 //   accepts      (value) => bool, keeps only the node's own files from a listing
 //   sentinels    the values that are not files, first in the list
-export function loadPlus({ widget, listKind = "media", navKind = "media", allowedTypes, accepts = () => true, sentinels = [NONE, BLANK] }) {
+export function loadPlus({ widget, navKind = "media", allowedTypes, accepts = () => true, sentinels = [NONE, BLANK] }) {
     const isFile = (value) => Boolean(value) && !sentinels.includes(value);
     const sourceFolder = (node) => findWidget(node, "source_folder")?.value || "input";
     const current = (node) => stripAnnotation(findWidget(node, widget)?.value);
@@ -50,18 +50,6 @@ export function loadPlus({ widget, listKind = "media", navKind = "media", allowe
         if (keep && !values.includes(keep)) values.push(keep);
         target.options.values = values;
         node._fb.card?.refresh();
-    }
-
-    async function refreshForSource(node, source, preferred = null) {
-        try {
-            const params = new URLSearchParams({ source: source || "input", kind: listKind });
-            const response = await api.fetchApi(`/fbnodes/list-files?${params}`);
-            if (!response.ok) return;
-            const result = await response.json();
-            setOptions(node, Array.isArray(result?.files) ? result.files : [], preferred);
-        } catch (error) {
-            console.warn(`[FBnodes] Could not list the ${source} folder:`, error);
-        }
     }
 
     async function refreshForBrowsePath(node, path, preferred = null) {
@@ -83,9 +71,19 @@ export function loadPlus({ widget, listKind = "media", navKind = "media", allowe
         }
     }
 
-    function refreshOptions(node, preferred = null) {
-        const path = node.properties._browsePath;
-        return path ? refreshForBrowsePath(node, path, preferred) : refreshForSource(node, sourceFolder(node), preferred);
+    // The folder the list shows: the one last browsed, else the current file's
+    // (the top of the source folder when none is picked).
+    async function listFolder(node, preferred) {
+        if (node.properties._browsePath) return node.properties._browsePath;
+        const roots = await getMediaRoots();
+        const root = String((sourceFolder(node) === "output" ? roots.output : roots.input) || "").replace(/[\\/]+$/, "");
+        const value = stripAnnotation(preferred ?? current(node));
+        if (!isFile(value)) return root;
+        return (isAbsolutePath(value) ? value : `${root}/${value}`).replace(/[\\/][^\\/]*$/, "");
+    }
+
+    async function refreshOptions(node, preferred = null) {
+        return refreshForBrowsePath(node, await listFolder(node, preferred), preferred);
     }
 
     function setSourceFolder(node, folder) {
@@ -146,7 +144,7 @@ export function loadPlus({ widget, listKind = "media", navKind = "media", allowe
         const data = await response.json();
         setSourceFolder(node, "input");
         node.properties._browsePath = "";
-        await refreshForSource(node, "input", data.name);
+        await refreshOptions(node, data.name);
         setFile(node, data.name);
     }
 
@@ -218,5 +216,5 @@ export function loadPlus({ widget, listKind = "media", navKind = "media", allowe
         { text: "Browse", icon: ICONS.folder, soft: true, title: "Browse files anywhere on disk", onClick: (node) => openBrowser(node) },
     ];
 
-    return { isFile, sourceFolder, current, refreshForSource, refreshOptions, setFile, openBrowser, step, upload, absolutePath, track, hoveredNode, sourceButtons, openPreview };
+    return { isFile, sourceFolder, current, refreshOptions, setFile, openBrowser, step, upload, absolutePath, track, hoveredNode, sourceButtons, openPreview };
 }
