@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { cropPixels, cropViewRect, dragCrop, dragPad, fitRect, hitCrop, isFullCrop, lockCrop, lockPad, padFitRect } from "../js/common/stage_math.js";
+import { axisLayout, cropPixels, cropViewRect, dragCrop, dragPad, fitRect, hitCrop, isFullCrop, lockCrop, lockPad, outputLayout, padFitRect, rotatedSize, roundHalfEven, unturnPoint } from "../js/common/stage_math.js";
 
 const FULL = { left_pct: 0, right_pct: 100, top_pct: 0, bottom_pct: 100 };
 
@@ -99,4 +99,38 @@ test("a locked crop holds its ratio in picture pixels and stays on the picture",
     assert.deepEqual(px(lockCrop(wide, "n", 200, 100, 0.5)), [35, 65, 20, 80]);     // top edge drives height
     assert.deepEqual(px(lockCrop(wide, "se", 200, 100, 1.5)), [20, 80, 20, 60]);    // a corner keeps the opposite corner
     assert.deepEqual(px(lockCrop({ left_pct: 0, right_pct: 100, top_pct: 50, bottom_pct: 100 }, "e", 200, 100, 1)), [0, 100, 0, 100]); // clamped to the picture
+});
+
+// Load Image+'s turn, scale and step mirror py/image_transform.py (test/test_image_transform.py).
+test("rotatedSize: quarter turns swap, any angle grows like Pillow's expand", () => {
+  assert.deepEqual(rotatedSize(100, 60, 0), { width: 100, height: 60 });
+  assert.deepEqual(rotatedSize(100, 60, 90), { width: 60, height: 100 });
+  assert.deepEqual(rotatedSize(100, 60, -90), { width: 60, height: 100 });
+  assert.deepEqual(rotatedSize(100, 60, 30), { width: 118, height: 102 });
+});
+
+test("unturnPoint: a quarter turn's top right corner is the picture's top left", () => {
+  const [x, y] = unturnPoint(60, 0, { width: 100, height: 60 }, { width: 60, height: 100 }, 90);
+  assert.ok(Math.abs(x) < 1e-9 && Math.abs(y) < 1e-9);
+});
+
+test("axisLayout: leftover to a padded side, else an even trim", () => {
+  assert.deepEqual(axisLayout(100, 0, 0, 1), [0, 0, 0, 0, 100]);
+  assert.deepEqual(axisLayout(100, 0, 10, 32), [0, 28, 0, 0, 128]);
+  assert.deepEqual(axisLayout(100, 10, 10, 32), [10, 18, 0, 0, 128]);
+  assert.deepEqual(axisLayout(100, 0, 0, 32), [0, 0, 2, 2, 96]);
+  assert.deepEqual(axisLayout(20, 0, 0, 32), [0, 12, 0, 0, 32]);
+});
+
+test("roundHalfEven rounds like Python", () => {
+  assert.deepEqual([0.5, 1.5, 2.5, 48.5, 2.4, 2.6].map(roundHalfEven), [0, 2, 2, 48, 2, 3]);
+});
+
+test("outputLayout: scale takes the padding along, the step snaps the canvas", () => {
+  const pad = { enabled: true, left: 10, right: 0, top: 0, bottom: 0 };
+  const half = { enabled: true, mode: "factor", factor: 0.5 };
+  assert.deepEqual(outputLayout({ width: 60, height: 40 }, pad, half, 1), { picture: { width: 30, height: 20 }, canvas: { width: 35, height: 20 }, pad: { left: 5, right: 0, top: 0, bottom: 0 } });
+  const mp = { enabled: true, mode: "megapixels", megapixels: 16384 / 1024 / 1024 };
+  assert.deepEqual(outputLayout({ width: 64, height: 64 }, null, mp, 1).canvas, { width: 128, height: 128 });
+  assert.deepEqual(outputLayout({ width: 100, height: 70 }, null, null, 32).canvas, { width: 96, height: 64 });
 });

@@ -214,7 +214,8 @@ export function loadPlus({ widget, listKind = "media", navKind = "media", allowe
     const sourceButtons = [
         { text: "", icon: ICONS.chevronLeft, title: "Previous file (or press ← with the pointer over the node)", onClick: (node) => step(node, -1) },
         { text: "", icon: ICONS.chevronRight, title: "Next file (or press → with the pointer over the node)", onClick: (node) => step(node, 1) },
-        { text: "", icon: ICONS.folder, title: "Browse files anywhere on disk", onClick: (node) => openBrowser(node) },
+        // The way in for most files: the suite's blue action button, named.
+        { text: "Browse", icon: ICONS.folder, soft: true, title: "Browse files anywhere on disk", onClick: (node) => openBrowser(node) },
     ];
 
     return { isFile, sourceFolder, current, refreshForSource, refreshOptions, setFile, openBrowser, step, upload, absolutePath, track, hoveredNode, sourceButtons, openPreview };

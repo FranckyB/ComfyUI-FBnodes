@@ -8,6 +8,15 @@
 export const EDGE_BAND = 12;
 const MIN_PCT = 1;
 
+// Python's round(): a half goes to the even neighbour, so sizes here match
+// the backend's to the pixel.
+export function roundHalfEven(value) {
+  const floor = Math.floor(value);
+  const rest = value - floor;
+  if (rest !== 0.5) return Math.round(value);
+  return floor % 2 === 0 ? floor : floor + 1;
+}
+
 // Aspect-fit a world size into a view with a uniform margin.
 export function fitRect(worldW, worldH, viewW, viewH, margin = 0) {
   const availW = Math.max(1, viewW - margin * 2);
@@ -78,12 +87,12 @@ export function dragCrop(handle, start, dxPct, dyPct) {
 }
 
 // Pixels a crop trims from each side of a width x height picture, and the
-// size that is left. Mirror of _apply_crop_and_flip in nodes/load_image.py.
+// size that is left. Mirror of crop in py/image_transform.py.
 export function cropPixels(crop, width, height) {
-  const left = Math.max(0, Math.min(Math.round((crop.left_pct / 100) * width), width - 1));
-  const right = Math.max(left + 1, Math.min(Math.round((crop.right_pct / 100) * width), width));
-  const top = Math.max(0, Math.min(Math.round((crop.top_pct / 100) * height), height - 1));
-  const bottom = Math.max(top + 1, Math.min(Math.round((crop.bottom_pct / 100) * height), height));
+  const left = Math.max(0, Math.min(roundHalfEven((crop.left_pct / 100) * width), width - 1));
+  const right = Math.max(left + 1, Math.min(roundHalfEven((crop.right_pct / 100) * width), width));
+  const top = Math.max(0, Math.min(roundHalfEven((crop.top_pct / 100) * height), height - 1));
+  const bottom = Math.max(top + 1, Math.min(roundHalfEven((crop.bottom_pct / 100) * height), height));
   return { left, right: width - right, top, bottom: height - bottom, width: right - left, height: bottom - top };
 }
 
@@ -183,4 +192,85 @@ export function lockCrop(rect, handle, width, height, ratio) {
   const [left_pct, right_pct] = place(x0, x1, w, width, handle.includes("w"), handle.includes("e"));
   const [top_pct, bottom_pct] = place(y0, y1, h, height, handle.includes("n"), handle.includes("s"));
   return { ...rect, left_pct, right_pct, top_pct, bottom_pct };
+}
+
+// The turned picture's size: Pillow's rotate(expand=True), so the stage and
+// the caption match the run. AusBoss's transform_geometry.mjs rotatedSize
+// (MIT, (c) 2026 ausboss); py/image_transform.py rotate.
+export function rotatedSize(width, height, degrees) {
+  const normalized = ((Number(degrees) || 0) % 360 + 360) % 360;
+  if (normalized === 0 || normalized === 180) return { width: Math.max(1, width), height: Math.max(1, height) };
+  if (normalized === 90 || normalized === 270) return { width: Math.max(1, height), height: Math.max(1, width) };
+  const radians = normalized * Math.PI / 180;
+  const round15 = (value) => Math.round(value * 1e15) / 1e15;
+  const cosine = round15(Math.cos(radians));
+  const sine = round15(Math.sin(radians));
+  const xs = [];
+  const ys = [];
+  for (const [x, y] of [[0, 0], [width, 0], [width, height], [0, height]]) {
+    xs.push(width / 2 + (x - width / 2) * cosine - (y - height / 2) * sine);
+    ys.push(height / 2 + (x - width / 2) * sine + (y - height / 2) * cosine);
+  }
+  return {
+    width: Math.max(1, Math.ceil(Math.max(...xs)) - Math.floor(Math.min(...xs))),
+    height: Math.max(1, Math.ceil(Math.max(...ys)) - Math.floor(Math.min(...ys))),
+  };
+}
+
+// A point on the turned picture (pixels, origin top left) as a point on the
+// picture itself, for a clockwise turn by `degrees` about the centre.
+export function unturnPoint(x, y, picture, turned, degrees) {
+  const radians = (Number(degrees) || 0) * Math.PI / 180;
+  const dx = x - turned.width / 2;
+  const dy = y - turned.height / 2;
+  return [picture.width / 2 + dx * Math.cos(radians) + dy * Math.sin(radians), picture.height / 2 - dx * Math.sin(radians) + dy * Math.cos(radians)];
+}
+
+// One axis snapped to the step: [before, after, trimBefore, trimAfter, length].
+// The length rounds up and the leftover joins a padded side (the far one when
+// both are); an axis nobody padded is trimmed evenly to the multiple below.
+// AusBoss's _axis_layout; py/image_transform.py axis_layout.
+export function axisLayout(size, before, after, multiple) {
+  const step = Math.max(1, Math.trunc(multiple) || 1);
+  const requested = size + before + after;
+  const length = Math.ceil(requested / step) * step;
+  const leftover = length - requested;
+  if (leftover === 0 || after > 0) return [before, after + leftover, 0, 0, length];
+  if (before > 0) return [before + leftover, after, 0, 0, length];
+  const kept = Math.floor(size / step) * step;
+  if (kept <= 0) return [before, after + leftover, 0, 0, length];
+  const trim = size - kept;
+  return [0, 0, Math.floor(trim / 2), trim - Math.floor(trim / 2), kept];
+}
+
+// The scale factor for { mode, factor, megapixels }, the megapixel budget
+// counted on the whole canvas (core Scale Image To Total Pixels).
+export function scaleFactor(scale, width, height) {
+  if (!scale?.enabled) return 1;
+  if (scale.mode === "megapixels") return Math.sqrt((Number(scale.megapixels) * 1024 * 1024) / Math.max(1, width * height));
+  return Number(scale.factor) || 1;
+}
+
+// What the node outputs for a `cropped` picture (after the turn and crop),
+// mirroring py/image_transform.py transform: the picture scaled, its padding
+// scaled with it, both snapped to the step. Returns the picture's size, the
+// canvas's and the padding on each side.
+export function outputLayout(cropped, pad, scale, step) {
+  const sides = pad?.enabled ? pad : { left: 0, right: 0, top: 0, bottom: 0 };
+  const factor = scaleFactor(scale, cropped.width + sides.left + sides.right, cropped.height + sides.top + sides.bottom);
+  let width = cropped.width;
+  let height = cropped.height;
+  let { left, right, top, bottom } = sides;
+  if (factor !== 1) {
+    width = Math.max(1, roundHalfEven(width * factor));
+    height = Math.max(1, roundHalfEven(height * factor));
+    [left, right, top, bottom] = [left, right, top, bottom].map((value) => roundHalfEven(value * factor));
+  }
+  const [padLeft, padRight, trimLeft, trimRight, canvasWidth] = axisLayout(width, left, right, step);
+  const [padTop, padBottom, trimTop, trimBottom, canvasHeight] = axisLayout(height, top, bottom, step);
+  return {
+    picture: { width: width - trimLeft - trimRight, height: height - trimTop - trimBottom },
+    canvas: { width: canvasWidth, height: canvasHeight },
+    pad: { left: padLeft, right: padRight, top: padTop, bottom: padBottom },
+  };
 }

@@ -1,11 +1,16 @@
 /**
  * Load Image+ (FBnodes): image / video-frame loader with a file browser, an
- * on-node preview, a painted mask, a crop, flips and padding for outpainting.
+ * on-node preview, a painted mask, a turn, a crop, flips, padding for
+ * outpainting, a scale and a size step; py/image_transform.py applies them.
  *
  * The face is one fbui card. The stock widgets stay (hidden) and hold every
  * saved value: source_folder, image, frame_position, mask_data, crop_data,
- * flip_x, flip_y, pad_data. The stage draws the picture, mask, crop and
- * padding on one canvas.
+ * flip_x, flip_y, pad_data, rotate_data, scale_data, step. The stage draws
+ * the turned picture, mask, crop and padding on one canvas; crop and pad are
+ * measured on the turned picture, as the backend applies them.
+ *
+ * It outputs the result as image, its mask, and the file as loaded as
+ * original, shown while an edit is on.
  */
 
 import { app } from "../../scripts/app.js";
@@ -13,32 +18,36 @@ import { api } from "../../scripts/api.js";
 import { basenameOf, isAbsolutePath, isImageFile, isVideoFile, previewUrl, stripAnnotation } from "./path_browser.js";
 import { mountCard } from "./fbui/card.js";
 import { notifyChange, toast } from "./fbui/comfy.js";
-import { button, ICONS, rail, slideLabel } from "./fbui/controls.js";
+import { button, ICONS, rail, segmented, slideLabel } from "./fbui/controls.js";
 import { chainCallback, el } from "./fbui/dom.js";
-import { modalOpen, openMenu } from "./fbui/modal.js";
+import { confirm, modalOpen, openMenu } from "./fbui/modal.js";
 import { makeScrub } from "./fbui/scrub.js";
 import { findWidget, hideInputsInDef, hideWidget, suppressCorePreview } from "./fbui/widgets.js";
 import { createImageStage, drawStroke } from "./common/image_stage.js";
 import { BLANK, loadPlus, NONE, sourceLabel } from "./common/load_plus.js";
-import { cropPixels, dragCrop, dragPad, fitRect, isFullCrop, lockCrop, lockPad } from "./common/stage_math.js";
+import { cropPixels, dragCrop, dragPad, fitRect, isFullCrop, lockCrop, lockPad, outputLayout, rotatedSize } from "./common/stage_math.js";
 import { CAPTION_HEIGHT, ROW_HEIGHT, T } from "./fbui/theme.js";
 
 const NODE_NAME = "LoadImagePlus";
 const PLACEHOLDER_IMAGE_PATH = new URL("./placeholder.png", import.meta.url).href;
 // Wide enough for the Brush row: a box that still shows "512" plus five tools.
-const MIN_WIDTH = 330;
+const MIN_WIDTH = 380;
 const STAGE_MIN_HEIGHT = 200;
 // The frame picker: its rail (24) over the FRAME line, 6 apart.
-const FRAME_PANEL_HEIGHT = 24 + 6 + ROW_HEIGHT;
+// Play and the rail, then the FRAME line.
+const FRAME_PANEL_HEIGHT = ROW_HEIGHT + 6 + ROW_HEIGHT;
 const BRUSH_MAX = 512;
 const PAD_FEATHER = 40;
 const PAD_MAX = 16384;
 // A crop's or padded canvas's aspect: free, the picture's own, or a fixed ratio.
 const ASPECTS = ["free", "source", "1:1", "4:3", "3:4", "3:2", "2:3", "16:9", "9:16", "21:9"];
 // Below this the Edit row's tools show their icons only.
-const EDIT_LABELS_MIN = 290;
+const EDIT_LABELS_MIN = 470;
 // Which tool the stage edits when the node loads, or when the active one turns off.
-const TOOLS = ["crop", "mask", "pad"];
+const TOOLS = ["crop", "mask", "pad", "rotate", "scale"];
+const SCALE_METHODS = ["lanczos", "area", "bicubic", "bilinear", "nearest-exact"];
+// The step's choices; 1 is off. Another value (set in the API) shows none picked.
+const STEPS = [1, 8, 16, 32, 64];
 
 const sourceFolder = (node) => findWidget(node, "source_folder")?.value || "input";
 const imageValue = (node) => stripAnnotation(findWidget(node, "image")?.value);
@@ -71,9 +80,32 @@ function videoInfo(filename, source) {
 
 // The frame `position` picks, decoded by the backend with the same PyAV code
 // the node runs, so the preview is exactly the frame the node loads.
-function videoFrame(filename, position, source) {
+function videoFrame(filename, position, source, size = 0) {
     const params = new URLSearchParams({ filename, source, position: String(position) });
+    if (size) params.set("size", String(size));
     return loadBitmap(api.apiURL(`/fbnodes/video-frame?${params}`));
+}
+
+// Reduced frames while playing or scrubbing (AusBoss's frame picker): one
+// fetch in flight, the latest position wins; the full frame follows when the
+// playhead settles. The picture keeps its full size, so crop and pad hold.
+const PREVIEW_FRAME_SIZE = 512;
+function pumpFrame(node, position) {
+    const fb = node._fb;
+    fb.wantedFrame = position;
+    fb.pumping ??= (async () => {
+        while (fb.wantedFrame !== null) {
+            const at = fb.wantedFrame;
+            fb.wantedFrame = null;
+            const bitmap = await videoFrame(imageValue(node), at, sourceFolder(node), PREVIEW_FRAME_SIZE).catch(() => null);
+            if (bitmap && fb.image) {
+                fb.image = { ...fb.image, bitmap };
+                fb.stage.redraw();
+            }
+        }
+        fb.pumping = null;
+    })();
+    return fb.pumping;
 }
 
 // Show `filename` on the stage. A newer request wins over a slower older one.
@@ -188,8 +220,9 @@ function displayCrop(node) {
 // it as given), held to the aspect.
 function setDisplayCrop(node, rect, handle = null) {
     const { crop, image } = node._fb;
-    const ratio = handle !== null && image ? aspectRatio(crop.aspect, image.width, image.height) : null;
-    if (ratio) rect = lockCrop(rect, handle, image.width, image.height, ratio);
+    const world = image ? turned(node) : null;
+    const ratio = handle !== null && world ? aspectRatio(crop.aspect, world.width, world.height) : null;
+    if (ratio) rect = lockCrop(rect, handle, world.width, world.height, ratio);
     const flips = getFlips(node);
     Object.assign(crop, normalizeCrop({
         enabled: crop.enabled,
@@ -246,27 +279,123 @@ function setPad(node, sides, handle = null) {
     fb.card.refresh();
 }
 
-// The output size before padding.
-function croppedSize(node) {
-    const { crop, image } = node._fb;
-    return crop.enabled && !isFullCrop(crop) ? cropPixels(crop, image.width, image.height) : { width: image.width, height: image.height };
+// The picture as crop and pad see it: turned, at Pillow's expanded size.
+// (Crop before the turn measures it on the picture itself.)
+function turned(node) {
+    const { image } = node._fb;
+    return cropFirst(node) ? { width: image.width, height: image.height } : rotatedSize(image.width, image.height, turn(node));
 }
+
+const cropped = (node) => node._fb.crop.enabled && !isFullCrop(node._fb.crop);
+
+// The output size before padding: cropped and turned, in the Order set.
+function croppedSize(node) {
+    const { crop } = node._fb;
+    const world = turned(node);
+    const size = cropped(node) ? cropPixels(crop, world.width, world.height) : world;
+    return cropFirst(node) ? rotatedSize(size.width, size.height, turn(node)) : size;
+}
+
+// The part of the picture the stage shows: a crop made before the turn, once
+// the Crop tool is put down; the whole picture otherwise.
+function stageRegion(node) {
+    const { crop, image } = node._fb;
+    if (!cropFirst(node) || node._fb.tool === "crop" || !cropped(node)) return null;
+    const px = cropPixels(crop, image.width, image.height);
+    return { x: px.left, y: px.top, width: px.width, height: px.height };
+}
+
+// ---------------------------------------------------------------- turn / scale state
+
+function parseRotate(value) {
+    let data = null;
+    try {
+        data = typeof value === "string" && value ? JSON.parse(value) : null;
+    } catch { /* upright */ }
+    return {
+        enabled: Boolean(data?.enabled),
+        degrees: wrapDegrees(Number(data?.degrees) || 0),
+        order: data?.order === "crop_first" ? "crop_first" : "turn_first",
+    };
+}
+
+function syncRotateData(node) {
+    const { enabled, degrees, order } = node._fb.rotate;
+    findWidget(node, "rotate_data").value = JSON.stringify({ version: 1, enabled, degrees, order });
+}
+
+// Rotate's Order: turn then crop (the crop measured on the turned picture,
+// the default), or crop then turn (the cropped part is turned). py/image_transform.py crop_first.
+const cropFirst = (node) => node._fb.rotate.order === "crop_first";
+
+const wrapDegrees = (degrees) => Math.round(((((degrees + 180) % 360) + 360) % 360 - 180) * 10) / 10;
+const turn = (node) => (node._fb.rotate.enabled ? node._fb.rotate.degrees : 0);
+
+function setRotate(node, degrees) {
+    const fb = node._fb;
+    fb.rotate.degrees = wrapDegrees(degrees);
+    syncRotateData(node);
+    fb.card.refresh();
+    fb.stage.redraw();
+}
+
+function parseScale(value) {
+    let data = null;
+    try {
+        data = typeof value === "string" && value ? JSON.parse(value) : null;
+    } catch { /* unscaled */ }
+    const positive = (entry) => (Number(entry) > 0 ? Number(entry) : 1);
+    return {
+        enabled: Boolean(data?.enabled),
+        mode: data?.mode === "factor" ? "factor" : "megapixels",
+        factor: positive(data?.factor),
+        megapixels: positive(data?.megapixels),
+        method: SCALE_METHODS.includes(data?.method) ? data.method : SCALE_METHODS[0],
+    };
+}
+
+function syncScaleData(node) {
+    const { enabled, mode, factor, megapixels, method } = node._fb.scale;
+    findWidget(node, "scale_data").value = JSON.stringify({ version: 1, enabled, mode, factor, megapixels, method });
+}
+
+function editScale(node, change) {
+    change(node._fb.scale);
+    syncScaleData(node);
+    node._fb.card.refresh();
+}
+
+// Load Image+'s original output shows while an edit other than the mask is
+// on; one with a link stays, so a workflow never loses it.
+function syncOriginalOutput(node) {
+    const flips = getFlips(node);
+    const edited = sizeEdited(node) || flips.x || flips.y;
+    const slot = node.findOutputSlot("original");
+    if (edited && slot < 0) node.addOutput("original", "IMAGE", { tooltip: node.constructor.nodeData?.output_tooltips?.[2] });
+    else if (!edited && slot >= 0 && !node.outputs[slot].links?.length) node.removeOutput(slot);
+}
+
+// The step snaps the size only while an edit that changes it is on (py/image_transform.py transform).
+const sizeEdited = (node) => ["crop", "pad", "rotate", "scale"].some((name) => node._fb[name].enabled);
+const stepOf = (node) => (sizeEdited(node) ? Math.max(1, Math.trunc(Number(findWidget(node, "step")?.value) || 1)) : 1);
 
 // ---------------------------------------------------------------- mask state
 
-// Vector strokes (for editing and undo) live in properties._maskStrokes; the
-// mask_data widget holds the rasterized PNG data URL the backend reads, or a
-// JSON stroke payload while there is no picture to rasterize against.
+// The mask_data widget holds the vector strokes as JSON, which is what a
+// workflow saves; a queued prompt gets the strokes rasterized at the
+// picture's size instead (maskRaster), exactly as drawn, soft edges and all.
+// A full-size PNG in the workflow made every autosaved draft megabytes large.
 function parseStrokes(value) {
     try {
         const data = typeof value === "string" && value.startsWith("{") ? JSON.parse(value) : null;
         return {
             brushSize: Math.max(1, Number(data?.brushSize) || 64),
             erasing: Boolean(data?.erasing),
+            soft: Boolean(data?.soft),
             strokes: Array.isArray(data?.strokes) ? data.strokes : [],
         };
     } catch {
-        return { brushSize: 64, erasing: false, strokes: [] };
+        return { brushSize: 64, erasing: false, soft: false, strokes: [] };
     }
 }
 
@@ -274,42 +403,33 @@ function restoreMask(node) {
     const props = node.properties;
     const widget = findWidget(node, "mask_data");
     const widgetValue = typeof widget?.value === "string" ? widget.value.trim() : "";
-    const stored = typeof props._maskData === "string" ? props._maskData.trim() : "";
-    const persisted = widgetValue || stored || (typeof props._maskStrokes === "string" ? props._maskStrokes.trim() : "");
-    if (widget && !widgetValue && persisted) widget.value = persisted;
-    if (!stored && persisted) props._maskData = persisted;
-    if (props._maskEnabled === undefined && persisted) props._maskEnabled = true;
+    // Workflows saved before held the strokes in properties._maskStrokes and a PNG in the widget.
+    const strokes = widgetValue.startsWith("{") ? widgetValue : props._maskStrokes;
     const enabled = props._maskEnabled !== undefined
         ? ["1", "true", "yes", "on"].includes(String(props._maskEnabled).toLowerCase())
-        : Boolean(persisted);
-    const parsed = parseStrokes(props._maskStrokes || widgetValue);
-    return { enabled, ...parsed, redo: [], hidden: false };
+        : Boolean(widgetValue || strokes);
+    return { enabled, ...parseStrokes(strokes), redo: [], hidden: false };
 }
 
-function maskValue(node) {
+// The strokes at the picture's size, as the PNG data URL the backend reads.
+function maskRaster(node) {
     const { mask, image } = node._fb;
-    if (!mask.enabled) return "";
-    if (image && mask.strokes.length) {
-        const canvas = document.createElement("canvas");
-        canvas.width = image.width;
-        canvas.height = image.height;
-        const ctx = canvas.getContext("2d");
-        for (const stroke of mask.strokes) drawStroke(ctx, stroke, { x: 0, y: 0, w: image.width, h: image.height });
-        return canvas.toDataURL("image/png");
-    }
-    return JSON.stringify({ version: 1, enabled: true, brushSize: mask.brushSize, erasing: mask.erasing, strokes: mask.strokes });
+    const canvas = document.createElement("canvas");
+    canvas.width = image.width;
+    canvas.height = image.height;
+    const ctx = canvas.getContext("2d");
+    for (const stroke of mask.strokes) drawStroke(ctx, stroke, { x: 0, y: 0, w: image.width, h: image.height });
+    return canvas.toDataURL("image/png");
 }
 
 function syncMaskData(node) {
     const mask = node._fb.mask;
-    const value = maskValue(node);
-    const widget = findWidget(node, "mask_data");
-    if (widget) widget.value = value;
-    node.properties._maskEnabled = mask.enabled;
-    node.properties._maskData = value;
-    node.properties._maskStrokes = mask.strokes.length
-        ? JSON.stringify({ version: 1, brushSize: mask.brushSize, erasing: mask.erasing, strokes: mask.strokes })
+    findWidget(node, "mask_data").value = mask.enabled
+        ? JSON.stringify({ version: 1, enabled: true, brushSize: mask.brushSize, erasing: mask.erasing, soft: mask.soft, strokes: mask.strokes })
         : "";
+    node.properties._maskEnabled = mask.enabled;
+    delete node.properties._maskData;
+    delete node.properties._maskStrokes;
 }
 
 // ---------------------------------------------------------------- tools
@@ -329,7 +449,8 @@ function pressTool(node, name) {
         state.enabled = false;
         fb.tool = TOOLS.find((tool) => fb[tool].enabled) ?? null;
     }
-    ({ mask: syncMaskData, crop: syncCropData, pad: syncPadData })[name](node);
+    ({ mask: syncMaskData, crop: syncCropData, pad: syncPadData, rotate: syncRotateData, scale: syncScaleData })[name](node);
+    syncOriginalOutput(node);
     fb.card.refreshByHand();
     fb.stage.redraw();
     notifyChange();
@@ -350,26 +471,36 @@ function editControl(node) {
     const mask = button("Mask", { icon: ICONS.brush, grow: true, title: "Paint a mask. Press again to stop painting, once more to turn it off.", onClick: () => pressTool(node, "mask") });
     const crop = button("Crop", { icon: ICONS.crop, grow: true, title: "Crop by dragging any edge or corner. Press again to turn it off.", onClick: () => pressTool(node, "crop") });
     const pad = button("Pad", { icon: ICONS.pad, grow: true, title: "Extend the canvas to outpaint: drag any edge outward. The mask output marks the new area. Press again to turn it off.", onClick: () => pressTool(node, "pad") });
+    const rotate = button("Rotate", { icon: ICONS.rotate, grow: true, title: "Turn the picture: drag on it, Shift snaps to 15°. The corners it opens are filled and masked like padding. Press again to turn it off.", onClick: () => pressTool(node, "rotate") });
+    const scale = button("Scale", { icon: ICONS.scale, grow: true, title: "Scale the output by a factor or to a megapixel budget. Press again to turn it off.", onClick: () => pressTool(node, "scale") });
     const flip = (axis) => () => {
         setFlip(node, axis, !getFlips(node)[axis === "flip_x" ? "x" : "y"]);
         syncCropData(node);
+        syncOriginalOutput(node);
         fb.card.refresh();
         fb.stage.redraw();
         notifyChange();
     };
     const flipX = button("", { icon: ICONS.flipX, title: "Flip horizontally", onClick: flip("flip_x") });
     const flipY = button("", { icon: ICONS.flipY, title: "Flip vertically", onClick: flip("flip_y") });
-    tools.append(mask, crop, pad, flipX, flipY);
+    tools.append(mask, crop, pad, rotate, scale, flipX, flipY);
+    // "Edit" with a reset for everything beside it, while anything is edited.
+    const label = el("span", "fbui-label");
+    label.style.cssText = "display:flex;align-items:center;gap:6px";
+    const resetEverything = button("", { icon: ICONS.reset, small: true, danger: true, title: "Reset all edits (asks first)", onClick: () => resetAll(node) });
+    label.append("Edit", resetEverything);
     // A narrow node keeps the icons; the words come back when it widens.
     new ResizeObserver(() => {
         const compact = tools.clientWidth < EDIT_LABELS_MIN;
-        for (const control of [mask, crop, pad]) control.querySelector("span").hidden = compact;
+        for (const control of [mask, crop, pad, rotate, scale]) control.querySelector("span").hidden = compact;
     }).observe(tools);
     return {
         element: tools,
+        label,
         sync() {
+            resetEverything.hidden = !anyEdit(node);
             const flips = getFlips(node);
-            for (const [control, name] of [[mask, "mask"], [crop, "crop"], [pad, "pad"]]) {
+            for (const [control, name] of [[mask, "mask"], [crop, "crop"], [pad, "pad"], [rotate, "rotate"], [scale, "scale"]]) {
                 control.classList.toggle("primary", fb.tool === name);
                 control.classList.toggle("on", fb[name].enabled && fb.tool !== name);
             }
@@ -398,13 +529,14 @@ function brushControl(node) {
     hide.addEventListener("pointerleave", showAgain);
     const undo = button("", { icon: ICONS.undo, title: "Undo stroke", onClick: () => editMask(node, (m) => { const s = m.strokes.pop(); if (s) m.redo.push(s); }) });
     const redo = button("", { icon: ICONS.redo, title: "Redo stroke", onClick: () => editMask(node, (m) => { const s = m.redo.pop(); if (s) m.strokes.push(s); }) });
-    const erase = button("", { icon: ICONS.eraser, title: "Eraser (Space while hovering the node)", onClick: () => editMask(node, (m) => { m.erasing = !m.erasing; }) });
-    const clear = button("", { icon: ICONS.trash, danger: true, title: "Clear the mask", onClick: () => editMask(node, (m) => { m.strokes = []; m.redo = []; }) });
-    tools.append(size.root, hide, undo, redo, erase, clear);
+    const soft = button("", { icon: ICONS.feather, title: "Soft brush: strokes with a soft edge (or hold Shift for one)", onClick: () => editMask(node, (m) => { m.soft = !m.soft; }) });
+    const erase = button("", { icon: ICONS.eraser, title: "Eraser (or hold Ctrl while painting)", onClick: () => editMask(node, (m) => { m.erasing = !m.erasing; }) });
+    tools.append(size.root, soft, hide, undo, redo, erase);
     return {
         element: tools,
         sync() {
             size.set(fb.mask.brushSize);
+            soft.classList.toggle("on", fb.mask.soft);
             erase.classList.toggle("on", fb.mask.erasing);
         },
     };
@@ -414,8 +546,12 @@ function stagePanel(node) {
     const fb = node._fb;
     const stage = createImageStage({
         image: () => fb.image,
+        // While the crop is edited before the turn, the picture shows upright.
+        turn: () => (cropFirst(node) && fb.tool === "crop" ? 0 : turn(node)),
+        region: () => stageRegion(node),
         flips: () => getFlips(node),
-        crop: () => ({ shown: fb.crop.enabled && Boolean(fb.image), editable: fb.tool === "crop", rect: displayCrop(node) }),
+        // A crop before the turn is already the region shown, once put down.
+        crop: () => ({ shown: fb.crop.enabled && Boolean(fb.image) && !stageRegion(node), editable: fb.tool === "crop", rect: displayCrop(node) }),
         pad: () => ({ shown: fb.pad.enabled && Boolean(fb.image), editable: fb.tool === "pad", sides: fb.pad }),
         mask: () => ({
             shown: fb.mask.enabled && !fb.mask.hidden,
@@ -423,6 +559,7 @@ function stagePanel(node) {
             strokes: fb.mask.strokes,
             brushSize: fb.mask.brushSize,
             erasing: fb.mask.erasing,
+            soft: fb.mask.soft,
         }),
         onCrop: (rect, handle) => {
             setDisplayCrop(node, rect, handle);
@@ -431,12 +568,17 @@ function stagePanel(node) {
         onCropEnd: notifyChange,
         onPad: (sides, handle) => setPad(node, sides, handle),
         onPadEnd: notifyChange,
+        rotate: () => ({ editable: fb.tool === "rotate" }),
+        onRotate: (degrees) => setRotate(node, degrees),
+        onRotateEnd: notifyChange,
         onStrokeStart: (stroke) => {
             fb.mask.redo = [];
             fb.mask.strokes.push(stroke);
         },
         onStrokeEnd: () => {
             syncMaskData(node);
+            // The resets follow what is painted.
+            fb.card.refresh();
             notifyChange();
         },
         onClick: () => {
@@ -448,12 +590,20 @@ function stagePanel(node) {
     fb.stage = stage;
     const tools = el("div", "fbui-stage-tools");
     const open = button("", { icon: ICONS.open, small: true, title: "Open a large preview", onClick: () => files.openPreview(node) });
-    tools.append(open);
+    // Rotate's quarter turns on the picture itself; dragging turns it freely.
+    const quarter = (delta) => () => {
+        setRotate(node, fb.rotate.degrees + delta);
+        notifyChange();
+    };
+    const turnLeft = button("", { icon: ICONS.rotateLeft, small: true, title: "Turn 90° counter-clockwise (drag the picture to turn freely, Shift snaps to 15°)", onClick: quarter(-90) });
+    const turnRight = button("", { icon: ICONS.rotateRight, small: true, title: "Turn 90° clockwise (drag the picture to turn freely, Shift snaps to 15°)", onClick: quarter(90) });
+    tools.append(turnLeft, turnRight, open);
     stage.element.append(tools);
     return {
         element: stage.element,
         sync() {
             open.hidden = !fb.image || fb.blank;
+            turnLeft.hidden = turnRight.hidden = fb.tool !== "rotate" || !fb.image;
             stage.redraw();
         },
     };
@@ -472,20 +622,16 @@ function captionPanel(node) {
                 caption.textContent = "—";
                 return;
             }
-            let { width, height } = croppedSize(node);
-            if (fb.pad.enabled) {
-                width += fb.pad.left + fb.pad.right;
-                height += fb.pad.top + fb.pad.bottom;
-            }
+            const { width, height } = outputLayout(croppedSize(node), fb.pad, fb.scale, stepOf(node)).canvas;
             const source = `${image.width} × ${image.height}`;
             caption.textContent = width === image.width && height === image.height ? source : `${source} → ${width} × ${height}`;
         },
     };
 }
 
-// Frame picker for videos: a rail with a playhead (press or drag it) and a
-// FRAME number box with the time. With the frame count known, frame n is
-// stored as n / frames; otherwise the rail sets the 0..1 position itself.
+// Frame picker for videos: play, a rail with a playhead (press or drag it)
+// and a FRAME number box with the time. With the frame count known, frame n
+// is stored as n / frames; otherwise the rail sets the 0..1 position itself.
 // The value is written straight to the widget: the stock float widget's
 // callback rounds to its 0.01 step, which would land long videos on the
 // wrong frame.
@@ -494,13 +640,53 @@ function framePanel(node) {
     const frames = () => (fb.video?.frames > 1 ? fb.video.frames : 0);
     const position = () => Number(findWidget(node, "frame_position")?.value) || 0;
     const setPosition = (value, settled) => {
+        stop();
         findWidget(node, "frame_position").value = Math.max(0, Math.min(1, value));
+        if (!settled) pumpFrame(node, position());
         fb.frameChanged();
         fb.card.refresh();
         node.setDirtyCanvas(true, true);
         if (settled) notifyChange();
     };
     const toFrame = (count, fraction) => Math.min(count - 1, Math.max(0, Math.round(fraction * (count - 1))));
+
+    // Playback, as AusBoss's: each tick awaits a frame, so a pause usually lands
+    // mid-fetch; the session counter lets that tick die instead of rescheduling.
+    const playback = { session: 0, playing: false, timer: 0 };
+    const stop = () => {
+        if (!playback.playing) return;
+        playback.playing = false;
+        playback.session++;
+        clearTimeout(playback.timer);
+        fb.frameChanged();
+        notifyChange();
+        play.innerHTML = ICONS.play;
+    };
+    const start = () => {
+        const count = frames();
+        if (!count || playback.playing) return;
+        let next = Math.min(count - 1, Math.round(position() * count));
+        // From the start when parked on the last frame.
+        if (next >= count - 1) next = 0;
+        playback.playing = true;
+        play.innerHTML = ICONS.pause;
+        const session = ++playback.session;
+        const interval = 1000 / (Number(fb.video.fps) || 30);
+        const tick = async () => {
+            if (playback.session !== session) return;
+            const started = performance.now();
+            findWidget(node, "frame_position").value = next / count;
+            fb.card.refresh();
+            await pumpFrame(node, next / count);
+            if (playback.session !== session) return;
+            if (next >= count - 1) return stop();
+            next++;
+            playback.timer = setTimeout(tick, Math.max(0, interval - (performance.now() - started)));
+        };
+        tick();
+    };
+    const play = button("", { icon: ICONS.play, title: "Play the video on the node; pause keeps the frame shown", onClick: () => (playback.playing ? stop() : start()) });
+    fb.stopPlayback = stop;
 
     const panel = el("div");
     panel.style.cssText = "display:flex;flex-direction:column;gap:6px;height:100%;justify-content:center";
@@ -511,6 +697,11 @@ function framePanel(node) {
             setPosition(count ? toFrame(count, fraction) / count : fraction, settled);
         },
     });
+    const transport = el("div", "fbui-field");
+    transport.style.flex = "none";
+    transport.style.height = `${ROW_HEIGHT}px`;
+    transport.append(play, track.root);
+    track.root.style.flex = "1";
     const line = el("div", "fbui-field");
     line.style.flex = "none";
     line.style.height = `${ROW_HEIGHT}px`;
@@ -526,13 +717,14 @@ function framePanel(node) {
     scrub.root.style.cssText = "flex:none;width:84px";
     const readout = el("span", "fbui-readout");
     line.append(el("span", "fbui-tag", "Frame"), scrub.root, readout);
-    panel.append(track.root, line);
+    panel.append(transport, line);
 
     let mode = null;
     return {
         element: panel,
         sync() {
             const count = frames();
+            play.disabled = !count;
             if (mode !== count) {
                 mode = count;
                 scrub.setRange(count ? { min: 0, max: count - 1, step: 1, fineStep: 1, decimals: 0 } : { min: 0, max: 1, step: 0.01, fineStep: 0.001, decimals: 2 });
@@ -557,8 +749,9 @@ function framePanel(node) {
 // Picture pixels per CSS pixel on the stage, so a slide moves a region about
 // as far on the picture as the pointer moves.
 function picturePerCss(node) {
-    const { image, stage } = node._fb;
-    return image.width / Math.max(1, fitRect(image.width, image.height, stage.canvas.clientWidth || 1, stage.canvas.clientHeight || 1).width);
+    const { stage } = node._fb;
+    const world = turned(node);
+    return world.width / Math.max(1, fitRect(world.width, world.height, stage.canvas.clientWidth || 1, stage.canvas.clientHeight || 1).width);
 }
 
 const SIDE_HANDLE = { left: "w", right: "e", top: "n", bottom: "s" };
@@ -587,10 +780,10 @@ function cropPairControl(node, first, second) {
     const field = el("div", "fbui-field");
     const scrubs = {};
     const commit = (side, value) => {
-        const image = fb.image;
-        if (!image) return;
+        if (!fb.image) return;
+        const world = turned(node);
         const rect = displayCrop(node);
-        const across = side === "left" || side === "right" ? image.width : image.height;
+        const across = side === "left" || side === "right" ? world.width : world.height;
         const pct = (Math.max(0, value) / across) * 100;
         if (side === "left") rect.left_pct = Math.min(pct, rect.right_pct - 100 / across);
         else if (side === "right") rect.right_pct = Math.max(100 - pct, rect.left_pct + 100 / across);
@@ -614,7 +807,8 @@ function cropPairControl(node, first, second) {
         start: () => { from = displayCrop(node); },
         slide: (delta) => {
             if (!fb.image || !from) return;
-            const shift = (delta * picturePerCss(node) / (axis === "x" ? fb.image.width : fb.image.height)) * 100;
+            const world = turned(node);
+            const shift = (delta * picturePerCss(node) / (axis === "x" ? world.width : world.height)) * 100;
             setDisplayCrop(node, dragCrop("move", from, axis === "x" ? shift : 0, axis === "y" ? shift : 0));
             fb.card.refresh();
         },
@@ -632,43 +826,101 @@ function cropPairControl(node, first, second) {
         element: field,
         label,
         sync() {
-            const image = fb.image;
-            if (!image) return;
-            const px = cropPixels(displayCrop(node), image.width, image.height);
+            if (!fb.image) return;
+            const world = turned(node);
+            const px = cropPixels(displayCrop(node), world.width, world.height);
             for (const side of [first, second]) scrubs[side].set(px[side]);
         },
     };
 }
 
-// The resets beside the Exact crop / Exact pad headers.
-function cropResetControl(node) {
+// ---------------------------------------------------------------- resets
+
+const ZERO_PAD = { left: 0, right: 0, top: 0, bottom: 0 };
+
+// Whether a tool holds anything to reset (its ratio included).
+function toolEdited(node, name) {
     const fb = node._fb;
-    const reset = button("", { icon: ICONS.reset, small: true, title: "Reset the crop: back to the whole picture", onClick: () => {
+    if (name === "mask") return fb.mask.strokes.length > 0;
+    if (name === "crop") return !isFullCrop(fb.crop) || fb.crop.aspect !== "free";
+    if (name === "pad") return Boolean(fb.pad.left || fb.pad.right || fb.pad.top || fb.pad.bottom) || fb.pad.aspect !== "free";
+    if (name === "rotate") return fb.rotate.degrees !== 0 || fb.rotate.order !== "turn_first";
+    if (name === "scale") return fb.scale.mode !== "megapixels" || fb.scale.factor !== 1 || fb.scale.megapixels !== 1 || fb.scale.method !== SCALE_METHODS[0];
+    return false;
+}
+
+// A tool back to its defaults; it stays on.
+function resetTool(node, name) {
+    const fb = node._fb;
+    if (name === "mask") editMask(node, (mask) => { mask.strokes = []; mask.redo = []; });
+    else if (name === "crop") {
+        fb.crop.aspect = "free";
         setDisplayCrop(node, FULL_CROP);
-        fb.card.refresh();
-        notifyChange();
-    } });
+    } else if (name === "pad") {
+        fb.pad.aspect = "free";
+        setPad(node, ZERO_PAD, "");
+    } else if (name === "rotate") {
+        fb.rotate.order = "turn_first";
+        setRotate(node, 0);
+    }
+    else if (name === "scale") editScale(node, (scale) => Object.assign(scale, { mode: "megapixels", factor: 1, megapixels: 1, method: SCALE_METHODS[0] }));
+    fb.card.refresh();
+    fb.stage.redraw();
+    notifyChange();
+}
+
+const RESET_TITLES = {
+    mask: "Clear the mask",
+    crop: "Reset the crop: the whole picture, ratio free",
+    pad: "Reset the padding: none, ratio free",
+    rotate: "Back to upright, the turn before the crop",
+    scale: "Reset the scale",
+};
+
+// The Options header's reset, for whichever tool is active.
+function toolReset(node) {
+    const fb = node._fb;
+    const reset = button("Reset", { small: true, onClick: () => fb.tool && resetTool(node, fb.tool) });
     return {
         element: reset,
         sync() {
-            reset.disabled = isFullCrop(fb.crop);
+            const tool = fb.tool;
+            reset.hidden = !tool;
+            reset.disabled = !tool || !toolEdited(node, tool);
+            if (tool) reset.title = RESET_TITLES[tool];
         },
     };
 }
 
-function padResetControl(node) {
+// Every edit back to its default and every tool off, after a confirm.
+async function resetAll(node) {
     const fb = node._fb;
-    const reset = button("", { icon: ICONS.reset, small: true, title: "Reset the padding", onClick: () => {
-        setPad(node, { left: 0, right: 0, top: 0, bottom: 0 }, "");
-        notifyChange();
-    } });
-    return {
-        element: reset,
-        sync() {
-            reset.disabled = !(fb.pad.left || fb.pad.right || fb.pad.top || fb.pad.bottom);
-        },
-    };
+    if (!(await confirm({ title: "Reset all edits", message: "Clear the mask and undo the crop, padding, turn, scale, flips and step? The tools turn off and Options closes.", confirmText: "Reset all", danger: true }))) return;
+    for (const name of TOOLS) {
+        resetTool(node, name);
+        fb[name].enabled = false;
+    }
+    setFlip(node, "flip_x", false);
+    setFlip(node, "flip_y", false);
+    findWidget(node, "step").value = 1;
+    fb.tool = null;
+    // The Options fold closes too: the node is back as it first came.
+    node.properties.fbui_open_options = false;
+    syncMaskData(node);
+    syncCropData(node);
+    syncPadData(node);
+    syncRotateData(node);
+    syncScaleData(node);
+    syncOriginalOutput(node);
+    fb.card.refreshByHand();
+    fb.stage.redraw();
+    notifyChange();
 }
+
+const anyEdit = (node) => {
+    const flips = getFlips(node);
+    return TOOLS.some((name) => node._fb[name].enabled || toolEdited(node, name)) || flips.x || flips.y;
+};
 
 // An icon naming the field after it (ratio, feather), its title the field's.
 function fieldIcon(icon, title) {
@@ -694,7 +946,7 @@ function aspectSelect(title, onPick) {
     return select;
 }
 
-// The Crop row: the crop's aspect.
+// The Crop row: the crop's aspect and the Order toggle.
 function cropControl(node) {
     const fb = node._fb;
     const field = el("div", "fbui-field");
@@ -704,11 +956,13 @@ function cropControl(node) {
         setDisplayCrop(node, displayCrop(node), "");
         fb.card.refresh();
     });
-    field.append(fieldIcon(ICONS.ratio, title), aspect);
+    const order = orderToggle(node);
+    field.append(fieldIcon(ICONS.ratio, title), aspect, order.element);
     return {
         element: field,
         sync() {
             aspect.value = fb.crop.aspect;
+            order.sync();
         },
     };
 }
@@ -736,6 +990,123 @@ function padControl(node) {
         sync() {
             aspect.value = fb.pad.aspect;
             feather.set(fb.pad.feather);
+        },
+    };
+}
+
+// The Order toggle, on both the Crop and the Rotate row: lit, the crop comes
+// first and the cropped part turns.
+function orderToggle(node) {
+    const fb = node._fb;
+    const toggle = button("", { icon: ICONS.cropTurn, title: "Turn the crop: crop first, then turn what is left (its corners are filled). Off, the picture turns and the crop is drawn on it.", onClick: () => {
+        fb.rotate.order = cropFirst(node) ? "turn_first" : "crop_first";
+        syncRotateData(node);
+        fb.card.refresh();
+        fb.stage.redraw();
+        notifyChange();
+    } });
+    return {
+        element: toggle,
+        sync() {
+            toggle.classList.toggle("on", cropFirst(node));
+        },
+    };
+}
+
+// The Rotate row: degrees clockwise, quarter turns, and the Order toggle.
+function rotateControl(node) {
+    const fb = node._fb;
+    const field = el("div", "fbui-field");
+    const title = "Degrees, clockwise. Drag on the picture to turn it; Shift snaps to 15°.";
+    const degrees = makeScrub({
+        value: fb.rotate.degrees, min: -180, max: 180, step: 1, fineStep: 0.1, decimals: 1, unit: "°",
+        title,
+        onChange: (value) => setRotate(node, value),
+        onSettle: notifyChange,
+    });
+    const quarter = (delta) => () => {
+        setRotate(node, fb.rotate.degrees + delta);
+        notifyChange();
+    };
+    const left = button("", { icon: ICONS.rotateLeft, title: "Turn 90° counter-clockwise", onClick: quarter(-90) });
+    const right = button("", { icon: ICONS.rotateRight, title: "Turn 90° clockwise", onClick: quarter(90) });
+    const order = orderToggle(node);
+    field.append(fieldIcon(ICONS.rotate, title), degrees.root, left, right, order.element);
+    return {
+        element: field,
+        sync() {
+            degrees.set(fb.rotate.degrees);
+            order.sync();
+        },
+    };
+}
+
+// The Scale row: by a factor or to a megapixel budget (counted on the whole canvas).
+function scaleControl(node) {
+    const fb = node._fb;
+    const field = el("div", "fbui-field");
+    const mode = segmented([
+        { value: "megapixels", label: "Mpx", title: "Scale to a megapixel budget, the whole canvas counted (as core Scale Image To Total Pixels)" },
+        { value: "factor", label: "×", title: "Scale by a factor" },
+    ], { onPick: (value) => { editScale(node, (scale) => { scale.mode = value; }); notifyChange(); } });
+    mode.root.style.cssText = "flex:none;width:84px";
+    const amount = makeScrub({
+        value: 1, min: 0.05, max: 16, step: 0.05, fineStep: 0.01, decimals: 2, unit: "Mpx",
+        title: "How much: a factor, or megapixels",
+        onChange: (value) => editScale(node, (scale) => { scale[scale.mode] = value; }),
+        onSettle: notifyChange,
+    });
+    field.append(mode.root, amount.root);
+    const unit = amount.root.querySelector(".fbui-scrub-unit");
+    let shown = null;
+    return {
+        element: field,
+        sync() {
+            const scale = fb.scale;
+            mode.set(scale.mode);
+            if (shown !== scale.mode) {
+                shown = scale.mode;
+                amount.setRange({ min: 0.05, max: scale.mode === "megapixels" ? 16 : 8 });
+                unit.textContent = scale.mode === "megapixels" ? "Mpx" : "×";
+            }
+            amount.set(scale[scale.mode]);
+        },
+    };
+}
+
+function methodControl(node) {
+    const fb = node._fb;
+    const select = el("select", "fbui-select");
+    select.title = "How the picture is resampled; area is best for shrinking.";
+    for (const method of SCALE_METHODS) {
+        const option = el("option", "", method);
+        option.value = method;
+        select.append(option);
+    }
+    select.addEventListener("change", () => {
+        editScale(node, (scale) => { scale.method = select.value; });
+        notifyChange();
+    });
+    return {
+        element: select,
+        sync() {
+            select.value = fb.scale.method;
+        },
+    };
+}
+
+// The Step row: the output snaps to a multiple; padding takes the leftover,
+// or an unpadded side is trimmed evenly.
+function stepControl(node, card) {
+    const choices = segmented(STEPS.map((value) => ({
+        value,
+        label: value === 1 ? "off" : String(value),
+        title: value === 1 ? "No step: the size as it comes" : `Snap the output to a multiple of ${value} px: padding takes the leftover, an unpadded side is trimmed evenly`,
+    })), { onPick: (value) => card.setWidget("step", value) });
+    return {
+        element: choices.root,
+        sync() {
+            choices.set(stepOf(node));
         },
     };
 }
@@ -878,9 +1249,6 @@ function installShortcuts() {
             const step = Math.max(1, Math.round(fb.mask.brushSize * 0.15));
             editMask(node, (m) => { m.brushSize = Math.max(1, Math.min(BRUSH_MAX, m.brushSize + (event.key === "]" ? step : -step))); });
             handled = true;
-        } else if (fb.tool === "mask" && event.key === " ") {
-            editMask(node, (m) => { m.erasing = !m.erasing; });
-            handled = true;
         }
         if (handled) {
             event.preventDefault();
@@ -910,18 +1278,24 @@ function setupNode(node) {
         mask: restoreMask(node),
         crop: parseCrop(node.properties._cropData || findWidget(node, "crop_data")?.value),
         pad: parsePad(findWidget(node, "pad_data")?.value),
+        rotate: parseRotate(findWidget(node, "rotate_data")?.value),
+        scale: parseScale(findWidget(node, "scale_data")?.value),
         tool: null,
         reload: (value) => showFile(node, value),
     };
     node._fb = fb;
     fb.tool = TOOLS.find((tool) => fb[tool].enabled) ?? null;
-    for (const name of ["source_folder", "frame_position", "mask_data", "crop_data", "flip_x", "flip_y", "pad_data"]) hideWidget(findWidget(node, name));
+    for (const name of ["source_folder", "frame_position", "mask_data", "crop_data", "flip_x", "flip_y", "pad_data", "rotate_data", "scale_data", "step"]) hideWidget(findWidget(node, name));
+    // The prompt gets the painted mask as drawn; the workflow keeps the strokes.
+    const maskWidget = findWidget(node, "mask_data");
+    maskWidget.serializeValue = () => (fb.mask.enabled && fb.mask.strokes.length && fb.image ? maskRaster(node) : maskWidget.value);
 
     const imageWidget = findWidget(node, "image");
     chainCallback(imageWidget, "callback", (value) => {
         // The MaskEditor writes "name.png [input]".
         const clean = stripAnnotation(value);
         if (clean !== value) imageWidget.value = clean;
+        fb.stopPlayback?.();
         const frame = findWidget(node, "frame_position");
         if (frame && isVideoFile(clean)) frame.value = 0;
         showFile(node, clean);
@@ -938,6 +1312,9 @@ function setupNode(node) {
 
     const cropTool = (_values, n) => n._fb.tool === "crop";
     const padTool = (_values, n) => n._fb.tool === "pad";
+    const scaleTool = (_values, n) => n._fb.tool === "scale";
+    // The step snaps what crop, pad and scale make; it shows with them.
+    const sizeTool = (_values, n) => sizeEdited(n);
     fb.card = mountCard(node, {
         minWidth: MIN_WIDTH,
         rows: [
@@ -946,22 +1323,28 @@ function setupNode(node) {
                 button: files.sourceButtons,
             },
             { label: "Edit", control: editControl },
-            { label: "Brush", control: brushControl, when: (_values, n) => n._fb.tool === "mask" },
-            { label: "Crop", control: cropControl, when: cropTool },
-            { label: "Pad", control: padControl, when: padTool },
+            // The active tool's settings, folded away until opened; open, the fold
+            // stays open as the tool changes and shows that tool's settings.
+            { group: "options", label: "Options", tools: toolReset, when: (_values, n) => Boolean(n._fb.tool) },
+            { label: "Brush", control: brushControl, group: "options", when: (_values, n) => n._fb.tool === "mask" },
+            { label: "Crop", control: cropControl, group: "options", when: cropTool },
+            { label: "Left · Right", control: (n) => cropPairControl(n, "left", "right"), group: "options", when: cropTool },
+            { label: "Top · Bottom", control: (n) => cropPairControl(n, "top", "bottom"), group: "options", when: cropTool },
+            { label: "Pad", control: padControl, group: "options", when: padTool },
+            { label: "Left · Right", control: (n) => padPairControl(n, "left", "right"), group: "options", when: padTool },
+            { label: "Top · Bottom", control: (n) => padPairControl(n, "top", "bottom"), group: "options", when: padTool },
+            { label: "Rotate", control: rotateControl, group: "options", when: (_values, n) => n._fb.tool === "rotate" },
+            { label: "Scale", control: scaleControl, group: "options", when: scaleTool },
+            { label: "Method", control: methodControl, group: "options", when: scaleTool },
+            { label: "Step", control: stepControl, widgets: ["step"], group: "options", when: sizeTool },
             { panel: stagePanel, grow: true, height: STAGE_MIN_HEIGHT },
             { panel: framePanel, height: FRAME_PANEL_HEIGHT, when: (values) => isVideoFile(values.image) },
-            { group: "crop", label: "Exact crop", tools: cropResetControl, when: cropTool },
-            { label: "Left · Right", control: (n) => cropPairControl(n, "left", "right"), group: "crop", when: cropTool },
-            { label: "Top · Bottom", control: (n) => cropPairControl(n, "top", "bottom"), group: "crop", when: cropTool },
-            { group: "pad", label: "Exact pad", tools: padResetControl, when: padTool },
-            { label: "Left · Right", control: (n) => padPairControl(n, "left", "right"), group: "pad", when: padTool },
-            { label: "Top · Bottom", control: (n) => padPairControl(n, "top", "bottom"), group: "pad", when: padTool },
             { panel: captionPanel, height: CAPTION_HEIGHT },
         ],
     });
 
     files.track(node);
+    syncOriginalOutput(node);
 
     chainCallback(node, "onConfigure", () => {
         fb.configured = true;
@@ -970,15 +1353,19 @@ function setupNode(node) {
         if (!props._cropData && findWidget(node, "crop_data")?.value) props._cropData = findWidget(node, "crop_data").value;
         fb.crop = parseCrop(props._cropData);
         fb.pad = parsePad(findWidget(node, "pad_data")?.value);
-        // Workflows saved before the canvas output, or while it hid with Pad off.
-        if (node.findOutputSlot("canvas") < 0) node.addOutput("canvas", "IMAGE");
+        fb.rotate = parseRotate(findWidget(node, "rotate_data")?.value);
+        fb.scale = parseScale(findWidget(node, "scale_data")?.value);
+        // Saved on dev-ui-refresh while the third output was canvas (now part of image).
+        if (node.findOutputSlot("canvas") >= 0) node.removeOutput(node.findOutputSlot("canvas"));
         for (const axis of ["flip_x", "flip_y"]) if (props[axis] !== undefined) setFlip(node, axis, Boolean(props[axis]));
         fb.tool = TOOLS.find((tool) => fb[tool].enabled) ?? null;
         syncCropData(node);
+        syncOriginalOutput(node);
         files.refreshOptions(node, imageValue(node));
         showFile(node, imageValue(node)).then(() => { if (fb.mask.enabled) syncMaskData(node); });
     });
     chainCallback(node, "onRemoved", () => {
+        fb.stopPlayback?.();
         fb.stage?.dispose();
     });
 
@@ -1011,7 +1398,7 @@ app.registerExtension({
 
     beforeRegisterNodeDef(nodeType, nodeData) {
         if (nodeData.name !== NODE_NAME) return;
-        hideInputsInDef(nodeData, ["source_folder", "image", "frame_position", "mask_data", "crop_data", "flip_x", "flip_y", "pad_data"]);
+        hideInputsInDef(nodeData, ["source_folder", "image", "frame_position", "mask_data", "crop_data", "flip_x", "flip_y", "pad_data", "rotate_data", "scale_data", "step"]);
         chainCallback(nodeType.prototype, "onNodeCreated", function () {
             setupNode(this);
         });

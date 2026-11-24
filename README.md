@@ -32,14 +32,17 @@ Save images with date-token filenames, output/temp switching, an optional Compar
 - **Input/Output Folder Switching**: Toggle between browsing your input or output folder directly from the node
 - **File Browser**: Same thumbnail browser as Prompt Extractor with subfolder navigation
 - **Previous / Next**: ‹ › beside Source, or ← / → with the pointer over the node
-- **Video Frame Picking**: Load any frame of a video, frame-exact (the frame shown is the frame loaded)
+- **Video Frame Picking**: Load any frame of a video, frame-exact (the frame shown is the frame loaded); ▶ plays it on the node
 - **Drag-and-Drop / Paste**: Drop or paste images or videos onto the node
 - **Large Preview**: Full-screen preview; ‹ › (and ← / → on pictures) step through the folder
 - **Mask Painting**: Paint masks directly in-node; they show live in the preview
 - **Crop + Flip**: In-node crop with an aspect ratio that can be locked (Free, Source or a fixed ratio), exact pixel values, plus Flip X / Flip Y
-- **Slide and centre**: In Exact crop and Exact pad, drag a row's Left · Right or Top · Bottom label to slide the crop (or the canvas) along that axis, or press its centre button
-- **Pad**: The `canvas` output extends the picture for outpainting by dragging any edge outward, moving the canvas around the picture, or typing exact pixels; an aspect ratio can be locked. Same output as core Pad Image for Outpainting: the new area is gray, and the MASK marks it, fading into the picture over the feather (shown on the preview), joined with any painted mask
-- **IMAGE + MASK Output**: Outputs both IMAGE and MASK tensors, with alpha channel extraction from images
+- **Options**: Each tool's settings fold under Options, with a reset for the active tool; a reset beside Edit clears every edit
+- **Slide and centre**: In Crop's and Pad's options, drag a row's Left · Right or Top · Bottom label to slide the crop (or the canvas) along that axis, or press its centre button
+- **Pad**: Extends the picture for outpainting (the `image` output is the padded canvas) by dragging any edge outward, moving the canvas around the picture, or typing exact pixels; an aspect ratio can be locked. Same output as core Pad Image for Outpainting: the new area is gray, and the MASK marks it, fading into the picture over the feather (shown on the preview), joined with any painted mask
+- **Rotate**: Any angle: drag on the picture (Shift snaps to 15°) or turn by 90°; the corners it opens are gray and masked, like padding. the crop is drawn on the turned picture, or with the turn-the-crop toggle lit, the cropped part turns
+- **Scale and Step**: Scale the output to a megapixel budget or by a factor; Step snaps the output size to a multiple (8 to 64): padding takes the leftover, an unpadded side is trimmed evenly
+- **Outputs**: `image` is the result with every edit applied, `mask` its mask (painted, the file's alpha, and what a turn or Pad adds), and `original` the file as loaded (shown while an edit is on)
 
 ### Load Video+
 Video loader with the same file browser and UX as Load Image+, but for videos. Outputs a VIDEO type for use with **Get Video Components+**.
@@ -239,12 +242,12 @@ Display any input as text in-node, with values persisted in the workflow.
 ### Outpaint H3 Prepare / H3 Anchor Latent / Stitch
 Outpaint with MiniMax H3 Image next to the core **MiniMax H3 Image Conditioning**, which stays as it is:
 
-1. **Load Image+** with **Pad** (or core Pad Image for Outpainting) makes the `mask` and `canvas`; they go to the same-named inputs of Outpaint H3 Prepare, which passes them on to the next two.
+1. **Load Image+** with **Pad** (or core Pad Image for Outpainting) makes the padded canvas (its `image` output) and the `mask`; they go to the `canvas` and `mask` inputs of Outpaint H3 Prepare, which passes them on to the next two.
 2. **Outpaint H3 Prepare** cuts the picture out of the canvas for the conditioning's `image_1`, so the model never sees the gray, and gives the canvas's `width` and `height` at the **Megapixels** you set (0 keeps the canvas's own) for the conditioning's width and height.
 3. **Outpaint H3 Anchor Latent** sits between the conditioning and KSampler, on the model path after any LoRAs (`model`, `positive` and the conditioning's latent in; `model`, `positive`, `latent` out to KSampler, denoise 1.0, and `mask`, `canvas` on to Outpaint Stitch). The canvas is VAE-encoded at the latent's resolution (keeping the canvas's aspect) with the pad mask as noise mask. With MiniMax H3 Image, Picture 1's reference also becomes the picture alone, placed where it sits on the canvas, so the model continues it instead of zooming or copying it.
 4. **Outpaint Stitch** takes the decoded image and puts it back on the canvas at full size with AusBoss's **blend in** seam: colour, tone and detail hand over from the result to your picture across its edge, and deeper in, the picture is yours bit for bit. **Tone match** (0 to 1) takes the result's tone drift off first, read from the strip of your picture the model repainted (it needs a feather).
 
-**Qwen Image 2.1** needs only Load Image+ and Outpaint Stitch, with the Qwen Image 2.1 outpaint LoRA: Load Image+'s `canvas` (Pad on) is `image_1` of Text Encode Qwen Image 2.1 (VAE connected, `resolution` about 1024 or more), whose positive, negative and latent go straight to KSampler (denoise 1.0); the decoded image, Load Image+'s `mask` and `canvas` go to Outpaint Stitch (Tone match 1). Qwen places a canvas-sized reference on the output grid by itself, and the LoRA paints the gray.
+**Qwen Image 2.1** needs only Load Image+ and Outpaint Stitch, with the Qwen Image 2.1 outpaint LoRA: Load Image+'s `image` (Pad on: the padded canvas) is `image_1` of Text Encode Qwen Image 2.1 (VAE connected, `resolution` about 1024 or more), whose positive, negative and latent go straight to KSampler (denoise 1.0); the decoded image, Load Image+'s `mask` and its `image` (to Stitch's `canvas`) go to Outpaint Stitch (Tone match 1). Qwen places a canvas-sized reference on the output grid by itself, and the LoRA paints the gray.
 
 Inspired by [ComfyUI-H3VideoOutpaint](https://github.com/TwoAbove/ComfyUI-H3VideoOutpaint) and the Outpaint Anchor / Prepare of [ComfyUI-Aitrepreneur-Image-Tools](https://github.com/aitrepreneur/ComfyUI-Aitrepreneur-Image-Tools) (MIT); the seam and Tone match are adapted from [ComfyUI-AusBoss](https://github.com/ausboss/ComfyUI-AusBoss)' Stitch Inpaint (MIT, see `py/blend_in/LICENSE`).
 

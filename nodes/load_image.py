@@ -11,6 +11,8 @@ import folder_paths
 import torch
 import server
 
+from ..py.image_transform import transform
+
 try:
     import numpy as np
     from PIL import Image
@@ -225,6 +227,8 @@ async def extract_video_frame_api(request):
         filename = request.rel_url.query.get('filename', '')
         source = request.rel_url.query.get('source', 'input')
         position = float(request.rel_url.query.get('position', '0.0'))
+        # A reduced frame (longest side in pixels) for playback and scrubbing; 0 is full size.
+        size = int(request.rel_url.query.get('size', '0') or 0)
 
         if not filename:
             return server.web.json_response({"error": "Missing filename"}, status=400)
@@ -259,6 +263,8 @@ async def extract_video_frame_api(request):
         img = extract_video_frame_av(file_path, position)
         if img is None:
             return server.web.json_response({"error": "Failed to extract frame"}, status=500)
+        if size > 0:
+            img.thumbnail((size, size))
 
         # Return as JPEG image
         buf = io.BytesIO()
@@ -730,131 +736,6 @@ def _coerce_bool(value):
     return bool(value)
 
 
-def _parse_crop_data(crop_data):
-    default = {
-        "enabled": False,
-        "left_pct": 0.0,
-        "right_pct": 100.0,
-        "top_pct": 0.0,
-        "bottom_pct": 100.0,
-    }
-
-    if not crop_data or not isinstance(crop_data, str):
-        return default
-
-    try:
-        parsed = json.loads(crop_data)
-    except Exception:
-        return default
-
-    state = {
-        "enabled": _coerce_bool(parsed.get("enabled")),
-        "left_pct": float(parsed.get("left_pct", 0.0)),
-        "right_pct": float(parsed.get("right_pct", 100.0)),
-        "top_pct": float(parsed.get("top_pct", 0.0)),
-        "bottom_pct": float(parsed.get("bottom_pct", 100.0)),
-    }
-
-    state["left_pct"] = max(0.0, min(100.0, state["left_pct"]))
-    state["right_pct"] = max(0.0, min(100.0, state["right_pct"]))
-    state["top_pct"] = max(0.0, min(100.0, state["top_pct"]))
-    state["bottom_pct"] = max(0.0, min(100.0, state["bottom_pct"]))
-
-    if state["right_pct"] <= state["left_pct"]:
-        state["right_pct"] = min(100.0, state["left_pct"] + 1.0)
-    if state["bottom_pct"] <= state["top_pct"]:
-        state["bottom_pct"] = min(100.0, state["top_pct"] + 1.0)
-
-    return state
-
-
-def _apply_crop_and_flip(image_tensor, mask_tensor, crop_data="", flip_x=False, flip_y=False):
-    if image_tensor is None or not hasattr(image_tensor, 'shape') or len(image_tensor.shape) < 4:
-        return image_tensor, mask_tensor
-
-    crop_state = _parse_crop_data(crop_data)
-    image_height = int(image_tensor.shape[1])
-    image_width = int(image_tensor.shape[2])
-
-    if crop_state.get("enabled"):
-        left = int(round((crop_state["left_pct"] / 100.0) * image_width))
-        right = int(round((crop_state["right_pct"] / 100.0) * image_width))
-        top = int(round((crop_state["top_pct"] / 100.0) * image_height))
-        bottom = int(round((crop_state["bottom_pct"] / 100.0) * image_height))
-
-        left = max(0, min(left, image_width - 1))
-        right = max(left + 1, min(right, image_width))
-        top = max(0, min(top, image_height - 1))
-        bottom = max(top + 1, min(bottom, image_height))
-
-        image_tensor = image_tensor[:, top:bottom, left:right, :]
-
-        if mask_tensor is not None and hasattr(mask_tensor, 'shape') and len(mask_tensor.shape) >= 3:
-            mask_tensor = mask_tensor[:, top:bottom, left:right]
-
-    if _coerce_bool(flip_x):
-        image_tensor = torch.flip(image_tensor, dims=[2])
-        if mask_tensor is not None and hasattr(mask_tensor, 'shape') and len(mask_tensor.shape) >= 3:
-            mask_tensor = torch.flip(mask_tensor, dims=[2])
-
-    if _coerce_bool(flip_y):
-        image_tensor = torch.flip(image_tensor, dims=[1])
-        if mask_tensor is not None and hasattr(mask_tensor, 'shape') and len(mask_tensor.shape) >= 3:
-            mask_tensor = torch.flip(mask_tensor, dims=[1])
-
-    return image_tensor, mask_tensor
-
-
-def _parse_pad_data(pad_data):
-    """Pixels added on each side and the feather, or None when nothing is padded."""
-    try:
-        parsed = json.loads(pad_data) if pad_data else {}
-    except (TypeError, ValueError):
-        return None
-    if not isinstance(parsed, dict) or not _coerce_bool(parsed.get("enabled")):
-        return None
-    pad = {key: max(0, int(parsed.get(key) or 0)) for key in ("left", "right", "top", "bottom", "feather")}
-    if not (pad["left"] or pad["right"] or pad["top"] or pad["bottom"]):
-        return None
-    return pad
-
-
-def _pad_feather(height, width, pad, device):
-    """Core Pad Image for Outpainting's feather: ((feather - d) / feather)^2 at d pixels from the nearest padded
-    edge, none when the feather is half the picture or more."""
-    feather = pad["feather"]
-    if feather <= 0 or feather * 2 >= height or feather * 2 >= width:
-        return torch.zeros((height, width), device=device)
-
-    def edge_distance(size, start, end):
-        index = torch.arange(size, dtype=torch.float32, device=device)
-        far = torch.full_like(index, float(feather))
-        return torch.minimum(index if start else far, size - index if end else far)
-
-    distance = torch.minimum(edge_distance(height, pad["top"], pad["bottom"])[:, None], edge_distance(width, pad["left"], pad["right"])[None, :])
-    return ((feather - distance).clamp(min=0) / feather) ** 2
-
-
-def _apply_pad(image_tensor, mask_tensor, pad_data=""):
-    """Extend the canvas for outpainting as core Pad Image for Outpainting does: the new area is 0.5 gray and
-    the mask is 1 there, fading into the picture over the feather, joined with the painted (or alpha) mask."""
-    pad = _parse_pad_data(pad_data)
-    if pad is None:
-        return image_tensor, mask_tensor
-    batch, height, width, channels = image_tensor.shape
-    left, right, top, bottom = pad["left"], pad["right"], pad["top"], pad["bottom"]
-    padded = torch.full((batch, height + top + bottom, width + left + right, channels), 0.5, dtype=image_tensor.dtype, device=image_tensor.device)
-    padded[:, top:top + height, left:left + width] = image_tensor
-
-    inner = _pad_feather(height, width, pad, image_tensor.device).expand(batch, height, width)
-    # A file without alpha gives an all-ones mask, which marks nothing.
-    if mask_tensor is not None and mask_tensor.shape[-2:] == (height, width) and mask_tensor.min() < 1:
-        inner = torch.maximum(inner, mask_tensor.to(image_tensor.device))
-    mask = torch.ones((batch, height + top + bottom, width + left + right), dtype=torch.float32, device=image_tensor.device)
-    mask[:, top:top + height, left:left + width] = inner
-    return padded, mask
-
-
 def get_placeholder_image_tensor():
     """Return a small black square tensor for missing/failed image loads."""
     return torch.zeros((1, 64, 64, 3), dtype=torch.float32)
@@ -876,7 +757,8 @@ def get_full_mask_tensor(image_tensor=None):
 
 class LoadImagePlus:
     """
-    A streamlined image loader with file browser, preview, and input/output folder switching.
+    A streamlined image loader with file browser, preview, and input/output folder switching; what comes out is
+    what the node shows, every edit applied, and the file as loaded beside it.
     """
 
     def __init__(self):
@@ -917,6 +799,9 @@ class LoadImagePlus:
                 "flip_x": ("BOOLEAN", {"default": False}),
                 "flip_y": ("BOOLEAN", {"default": False}),
                 "pad_data": ("STRING", {"default": "", "multiline": False}),
+                "rotate_data": ("STRING", {"default": "", "multiline": False}),
+                "scale_data": ("STRING", {"default": "", "multiline": False}),
+                "step": ("INT", {"default": 1, "min": 1, "max": 512, "tooltip": "Snap the output size to a multiple of this; 1 is off."}),
             },
             "hidden": {
                 "unique_id": "UNIQUE_ID",
@@ -924,10 +809,14 @@ class LoadImagePlus:
         }
 
     CATEGORY = "FBnodes"
-    DESCRIPTION = "A better image/video loader with file browser, preview, and input/output folder switching."
+    DESCRIPTION = "Load an image or a video frame, then mask, crop, pad, rotate, flip and scale it on the node; image is the result."
     RETURN_TYPES = ("IMAGE", "MASK", "IMAGE")
-    RETURN_NAMES = ("image", "mask", "canvas")
-    OUTPUT_TOOLTIPS = ("The picture (crop and flips applied, never padded).", "The painted mask (or the file's alpha); with Pad on, the canvas's mask: the new area, the feather and anything painted.", "For Pad: the padded canvas to outpaint, for the Outpaint nodes. With Pad off, the picture itself.")
+    RETURN_NAMES = ("image", "mask", "original")
+    OUTPUT_TOOLTIPS = (
+        "The picture with every edit applied: turned, cropped, flipped, scaled and padded.",
+        "The image's mask: what you painted (or the file's alpha), and the areas a turn or Pad adds, to paint in.",
+        "The picture as loaded, before any edit. Shown while an edit is on.",
+    )
     FUNCTION = "load"
     OUTPUT_NODE = False
 
@@ -935,7 +824,8 @@ class LoadImagePlus:
     def VALIDATE_INPUTS(cls, **kwargs):
         return True
 
-    def load(self, image="", source_folder="input", frame_position=0.0, mask_data="", crop_data="", flip_x=False, flip_y=False, pad_data="", unique_id=None):
+    def load(self, image="", source_folder="input", frame_position=0.0, mask_data="", crop_data="", flip_x=False, flip_y=False, pad_data="",
+             rotate_data="", scale_data="", step=1, unique_id=None):
         if frame_position is None:
             frame_position = 0.0
 
@@ -1006,21 +896,18 @@ class LoadImagePlus:
             if rendered_mask is not None:
                 mask_tensor = rendered_mask
 
-        image_tensor, mask_tensor = _apply_crop_and_flip(
-            image_tensor,
-            mask_tensor,
-            crop_data=crop_data,
-            flip_x=flip_x,
-            flip_y=flip_y,
+        source_tensor = image_tensor
+        image_tensor, mask_tensor, canvas_tensor = transform(
+            image_tensor, mask_tensor, crop_data=crop_data, flip_x=_coerce_bool(flip_x), flip_y=_coerce_bool(flip_y),
+            pad_data=pad_data, rotate_data=rotate_data, scale_data=scale_data, step=step,
         )
-        canvas_tensor, mask_tensor = _apply_pad(image_tensor, mask_tensor, pad_data)
 
         if is_blank and not preview_images:
             preview_images = self._save_preview_images(image_tensor, None)
 
         return {
             "ui": {"images": preview_images},
-            "result": (image_tensor, mask_tensor, canvas_tensor)
+            "result": (canvas_tensor, mask_tensor, source_tensor),
         }
 
     def _direct_preview_images(self, resolved_path, source_folder="input"):
