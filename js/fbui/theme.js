@@ -5,9 +5,10 @@
 //
 // No imports: the node:test suites load this file without the ComfyUI app.
 
-// Bump on any change to the CSS below. Two packs shipping the same version
-// inject one stylesheet; different versions both inject and the later wins.
-export const KIT_VERSION = 15;
+// Bump once per release that changes the CSS below (against the last pushed
+// value, not per local edit). Two packs shipping the same version inject one
+// stylesheet; different versions both inject and the later wins.
+export const KIT_VERSION = 13;
 
 export const T = Object.freeze({
   brand: "#4299e1",          // the one accent: picked segment, switch on, focus ring
