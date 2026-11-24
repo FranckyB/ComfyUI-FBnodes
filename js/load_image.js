@@ -670,6 +670,15 @@ function padResetControl(node) {
     };
 }
 
+// An icon naming the field after it (ratio, feather), its title the field's.
+function fieldIcon(icon, title) {
+    const span = el("span");
+    span.innerHTML = icon;
+    span.title = title;
+    span.style.cssText = `flex:none;display:flex;color:${T.label}`;
+    return span;
+}
+
 function aspectSelect(title, onPick) {
     const select = el("select", "fbui-select");
     select.title = title;
@@ -688,13 +697,16 @@ function aspectSelect(title, onPick) {
 // The Crop row: the crop's aspect.
 function cropControl(node) {
     const fb = node._fb;
-    const aspect = aspectSelect("The crop's aspect: free, the picture's own, or a ratio that holds while you drag.", (value) => {
+    const field = el("div", "fbui-field");
+    const title = "Ratio: the crop's aspect, free, the picture's own, or a ratio that holds while you drag.";
+    const aspect = aspectSelect(title, (value) => {
         fb.crop.aspect = value;
         setDisplayCrop(node, displayCrop(node), "");
         fb.card.refresh();
     });
+    field.append(fieldIcon(ICONS.ratio, title), aspect);
     return {
-        element: aspect,
+        element: field,
         sync() {
             aspect.value = fb.crop.aspect;
         },
@@ -705,22 +717,20 @@ function cropControl(node) {
 function padControl(node) {
     const fb = node._fb;
     const tools = el("div", "fbui-field");
-    const aspect = aspectSelect("The padded canvas's aspect: free, the picture's own, or a ratio that holds while you drag.", (value) => {
+    const ratioTitle = "Ratio: the padded canvas's aspect, free, the picture's own, or a ratio that holds while you drag.";
+    const aspect = aspectSelect(ratioTitle, (value) => {
         fb.pad.aspect = value;
         setPad(node, {}, "");
     });
-    const featherIcon = el("span");
-    featherIcon.innerHTML = ICONS.feather;
-    featherIcon.title = "Feather: how far the mask fades into the picture, so the seam is painted over too.";
-    featherIcon.style.cssText = `flex:none;display:flex;color:${T.label}`;
+    const featherTitle = "Feather: how far the mask fades into the picture, so the seam is painted over too.";
     const feather = makeScrub({
         value: fb.pad.feather, min: 0, max: 512, step: 4, fineStep: 1, decimals: 0, unit: "px",
-        title: featherIcon.title,
+        title: featherTitle,
         onChange: (value) => setPad(node, { feather: value }),
         onSettle: notifyChange,
     });
     feather.root.style.cssText = "flex:none;width:76px";
-    tools.append(aspect, featherIcon, feather.root);
+    tools.append(fieldIcon(ICONS.ratio, ratioTitle), aspect, fieldIcon(ICONS.feather, featherTitle), feather.root);
     return {
         element: tools,
         sync() {

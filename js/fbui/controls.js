@@ -297,6 +297,7 @@ export const ICONS = {
   brush: svg('<path d="M10.5 2.5l3 3-6 6-3-3zM4.5 8.5l-2 5 5-2"/>'),
   crop: svg('<path d="M4 1.5V12h10.5M1.5 4H12v10.5"/>'),
   feather: svg('<path d="M13.5 2.5C8 2.5 4.5 6 4.5 11.5h2c5.5 0 7-4 7-9z"/><path d="M2.5 13.5l7-7"/>'),
+  ratio: svg('<rect x="1.5" y="3.5" width="13" height="9" rx="1"/><path d="M4.5 8.5v-2H7M11.5 7.5v2H9"/>'),
   slideX: svg('<path d="M1.5 8h13M4.5 5 1.5 8l3 3M11.5 5l3 3-3 3"/>'),
   slideY: svg('<path d="M8 1.5v13M5 4.5 8 1.5l3 3M5 11.5l3 3 3-3"/>'),
   centerX: svg('<path d="M2 3v10M14 3v10M8 5v6M5 8H4M12 8h-1"/>'),
