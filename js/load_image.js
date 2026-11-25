@@ -18,7 +18,7 @@ import { api } from "../../scripts/api.js";
 import { basenameOf, isAbsolutePath, isImageFile, isVideoFile, previewUrl, stripAnnotation } from "./path_browser.js";
 import { mountCard } from "./fbui/card.js";
 import { notifyChange, toast } from "./fbui/comfy.js";
-import { button, ICONS, rail, segmented, slideLabel } from "./fbui/controls.js";
+import { button, ICONS, rail, segmented, slideHandle } from "./fbui/controls.js";
 import { chainCallback, el } from "./fbui/dom.js";
 import { confirm, modalOpen, openMenu } from "./fbui/modal.js";
 import { makeScrub } from "./fbui/scrub.js";
@@ -756,12 +756,12 @@ function picturePerCss(node) {
 
 const SIDE_HANDLE = { left: "w", right: "e", top: "n", bottom: "s" };
 
-// An Exact row's label slides its region along the row's axis; a button
-// at the end centres it.
+// An X or Y row's handle (first, under the ratio icon) slides its region
+// along the row's axis with a sideways drag; a button at the end centres it.
 function slideAndCenter(axis, what, { start, slide, center, end }) {
-    const label = slideLabel(axis === "x" ? "Left · Right" : "Top · Bottom", {
+    const handle = slideHandle({
         axis,
-        title: `Drag to slide ${what} ${axis === "x" ? "left and right" : "up and down"}.`,
+        title: `Drag sideways to slide ${what} ${axis === "x" ? "left and right" : "up and down"}.`,
         onStart: start,
         onSlide: slide,
         onEnd: end,
@@ -770,7 +770,7 @@ function slideAndCenter(axis, what, { start, slide, center, end }) {
         center();
         end();
     } });
-    return { label, centre };
+    return { handle, centre };
 }
 
 // Exact crop, in pixels of the picture as shown (flips included).
@@ -803,7 +803,7 @@ function cropPairControl(node, first, second) {
         field.append(scrubs[side].root);
     }
     let from = null;
-    const { label, centre } = slideAndCenter(axis, "the crop", {
+    const { handle, centre } = slideAndCenter(axis, "the crop", {
         start: () => { from = displayCrop(node); },
         slide: (delta) => {
             if (!fb.image || !from) return;
@@ -821,10 +821,10 @@ function cropPairControl(node, first, second) {
         },
         end: notifyChange,
     });
+    field.prepend(handle);
     field.append(centre);
     return {
         element: field,
-        label,
         sync() {
             if (!fb.image) return;
             const world = turned(node);
@@ -1128,7 +1128,7 @@ function padPairControl(node, first, second) {
     }
     const axis = first === "left" ? "x" : "y";
     let from = null;
-    const { label, centre } = slideAndCenter(axis, "the canvas", {
+    const { handle, centre } = slideAndCenter(axis, "the canvas", {
         start: () => { from = { ...fb.pad }; },
         slide: (delta) => {
             if (!fb.image || !from) return;
@@ -1141,10 +1141,10 @@ function padPairControl(node, first, second) {
         },
         end: notifyChange,
     });
+    field.prepend(handle);
     field.append(centre);
     return {
         element: field,
-        label,
         sync() {
             for (const side of [first, second]) scrubs[side].set(fb.pad[side]);
         },
@@ -1328,11 +1328,11 @@ function setupNode(node) {
             { group: "options", label: "Options", tools: toolReset, when: (_values, n) => Boolean(n._fb.tool) },
             { label: "Brush", control: brushControl, group: "options", when: (_values, n) => n._fb.tool === "mask" },
             { label: "Crop", control: cropControl, group: "options", when: cropTool },
-            { label: "Left · Right", control: (n) => cropPairControl(n, "left", "right"), group: "options", when: cropTool },
-            { label: "Top · Bottom", control: (n) => cropPairControl(n, "top", "bottom"), group: "options", when: cropTool },
+            { label: "X", control: (n) => cropPairControl(n, "left", "right"), group: "options", when: cropTool },
+            { label: "Y", control: (n) => cropPairControl(n, "top", "bottom"), group: "options", when: cropTool },
             { label: "Pad", control: padControl, group: "options", when: padTool },
-            { label: "Left · Right", control: (n) => padPairControl(n, "left", "right"), group: "options", when: padTool },
-            { label: "Top · Bottom", control: (n) => padPairControl(n, "top", "bottom"), group: "options", when: padTool },
+            { label: "X", control: (n) => padPairControl(n, "left", "right"), group: "options", when: padTool },
+            { label: "Y", control: (n) => padPairControl(n, "top", "bottom"), group: "options", when: padTool },
             { label: "Rotate", control: rotateControl, group: "options", when: (_values, n) => n._fb.tool === "rotate" },
             { label: "Scale", control: scaleControl, group: "options", when: scaleTool },
             { label: "Method", control: methodControl, group: "options", when: scaleTool },
