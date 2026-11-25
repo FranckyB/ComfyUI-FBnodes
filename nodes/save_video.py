@@ -432,8 +432,8 @@ class SaveVideoPlus:
             "required": {
                 "video": ("VIDEO", {"tooltip": "The video to save."}),
                 "filename_prefix": ("STRING", {
-                    "default": "Vids/%yy%-%month%-%day%/vid_%hour%-%minute%-%second%",
-                    "tooltip": "Where to save. / makes subfolders; %yy% (or %year%) %month% %day% %hour% %minute% %second%, %width% %height%, %time% (seconds the run took) and %date:format% are filled in."
+                    "default": "Vids/%date%/vid_%time%",
+                    "tooltip": "Where to save. / makes subfolders; %date% (26-11-22), %time% (14-05-09), %yy% (or %year%) %month% %day% %hour% %minute% %second%, %width% %height%, %elapsed% (seconds the run took) and %date:format% are filled in."
                 }),
                 "codec": (cls.CODECS, {
                     "default": "h264",
@@ -472,7 +472,7 @@ class SaveVideoPlus:
                 "metadata": ("STRING", {"forceInput": True, "tooltip": "Optional metadata JSON string to embed in the video (e.g. from VACE Stitcher)."}),
                 "exec_start": ("STRING", {
                     "default": "",
-                    "tooltip": "Unix timestamp stamped by the UI when Execute is pressed. Enables %time% in filename_prefix (workflow generation seconds, excluding save/encode)."
+                    "tooltip": "Unix timestamp stamped by the UI when Execute is pressed. Enables %elapsed% in filename_prefix (workflow generation seconds, excluding save/encode)."
                 }),
                 "custom_encoding": ("BOOLEAN", {
                     "default": False,

@@ -1,4 +1,4 @@
-// %time% in a save node's filename: the whole seconds from pressing Queue to
+// %elapsed% in a save node's filename: the whole seconds from pressing Queue to
 // the save. The queue time is stamped into the node's hidden `exec_start`
 // input just before the prompt is built; the server's own start event
 // arrives too late to be read by the node.

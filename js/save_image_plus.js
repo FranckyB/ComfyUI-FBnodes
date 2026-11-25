@@ -12,18 +12,20 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { mountCard } from "./fbui/card.js";
-import { toast } from "./fbui/comfy.js";
+import { notifyChange, toast } from "./fbui/comfy.js";
 import { button, ICONS, segmented } from "./fbui/controls.js";
 import { chainCallback, el } from "./fbui/dom.js";
 import { openMenu, openViewer } from "./fbui/modal.js";
+import { makeScrub } from "./fbui/scrub.js";
 import { findWidget, hideInputsInDef, hideWidget, suppressCorePreview } from "./fbui/widgets.js";
+import { chip, chipRow, comboSelect, prefixControl } from "./common/save_rows.js";
 import { CAPTION_HEIGHT, RADIUS, T } from "./fbui/theme.js";
 import { bestGrid } from "./common/grid_math.js";
 import { fitRect } from "./common/stage_math.js";
 import { installExecStart } from "./common/exec_start.js";
 
 const NODE_NAME = "SaveImagePlus";
-const MIN_WIDTH = 300;
+const MIN_WIDTH = 380;
 const STAGE_MIN_HEIGHT = 200;
 // More images than this get ‹ n / N › instead of one button each.
 const MANY = 8;
@@ -31,14 +33,11 @@ const GRID_GAP = 6;
 
 // What the Filename field understands, shown from its (i).
 const FILENAME_HELP = [
-    "The default Pics/%yy%-%month%-%day%/img_%hour%_%minute%_%second% saves Pics/26-11-22/img_14_05_09_00001.png, _00002 … in the output folder.",
-    ["a/b/name", "a / makes subfolders"],
-    ["%yy% %month% %day%", "today's date: 26 11 22"],
-    ["%year%", "the year in four digits: 2026"],
-    ["%hour% %minute% %second%", "the time now"],
-    ["%time%", "the seconds the run took, from pressing Queue"],
+    ["%date%", "today's date: 26-11-22"],
+    ["%time%", "the time now: 14-05-09"],
+    ["%elapsed%", "time in seconds the run took"],
     ["%width% %height%", "the image size"],
-    "With Save off, only the name after the last / is used, in the temp folder.",
+    "ComfyUI's own keywords work too, such as %year% or %date:yyyy-MM-dd%.",
 ];
 
 // What each format can store; the Depth and Color pills follow the format.
@@ -185,6 +184,49 @@ function applyFormat(node) {
 
 // Pick the image shown: a button per image (or ‹ n / N › for many), and
 // for the saved row, Grid and Pair toggles.
+// Save, Review and its timeout on one line; Review and the timeout grey out
+// while they have no effect.
+function outputControl(node, card) {
+    const value = (name) => findWidget(node, name)?.value;
+    const saving = () => value("save") !== false;
+    const save = chip(node, card, "save", { text: "Save", icon: ICONS.save, title: "Lit: save to the output folder. Unlit: a preview only, in temp." });
+    const review = chip(node, card, "review", { text: "Review", icon: ICONS.eye, active: saving, title: "Lit: the run pauses on the images so you pick the ones to keep; only those are saved." });
+    const timeout = makeScrub({
+        value: 120, min: 0, max: 3600, step: 5, fineStep: 1, decimals: 0, unit: "s",
+        title: "Seconds to wait for your pick; then every image is saved. 0 waits until you decide.",
+        onChange: (seconds) => card.setWidget("review_timeout", seconds, { settle: false }),
+        onSettle: notifyChange,
+    });
+    return {
+        element: chipRow(save, review, timeout.root),
+        sync() {
+            save.sync();
+            review.sync();
+            const reviewing = saving() && Boolean(value("review"));
+            timeout.set(Number(value("review_timeout")) || 0);
+            timeout.root.style.opacity = reviewing ? "" : ".4";
+            timeout.root.style.pointerEvents = reviewing ? "" : "none";
+        },
+    };
+}
+
+// Format, depth and colour space as three dropdowns; depth and colour list
+// only what the format takes (FORMAT_OPTIONS). Short names: the format tells
+// float from YUV already.
+function formatControl(node, card) {
+    const selects = [
+        comboSelect(node, card, "format", { title: "File format", labels: { png: "PNG", exr: "EXR", avif: "AVIF" } }),
+        comboSelect(node, card, "bit_depth", { title: "Bit depth", labels: { "16-bit float": "16-bit", "32-bit float": "32-bit", "8-bit YUV420": "8-bit", "10-bit YUV420": "10-bit" } }),
+        comboSelect(node, card, "input_color_space", { title: "Colour space of the images coming in" }),
+    ];
+    return {
+        element: chipRow(...selects),
+        sync() {
+            for (const select of selects) select.sync();
+        },
+    };
+}
+
 function pickerControl(which) {
     return (node) => {
         const fb = node._fb;
@@ -520,14 +562,11 @@ function setupNode(node) {
         minWidth: MIN_WIDTH,
         rows: [
             { group: "options", label: "Options" },
-            { widget: "filename_prefix", label: "Name", kind: "text", info: FILENAME_HELP, group: "options" },
-            { widget: "save", label: "Save", offText: "preview", onText: "save", group: "options" },
-            { widget: "format", label: "Format", kind: "segment", labels: { png: "PNG", exr: "EXR", avif: "AVIF" }, group: "options", when: saving },
-            { widget: "bit_depth", label: "Depth", kind: "segment", group: "options", when: saving },
-            { widget: "input_color_space", label: "Color", kind: "segment", group: "options", when: saving },
+            { label: "Folder", control: prefixControl(0, { help: FILENAME_HELP, name: "img" }), widgets: ["filename_prefix"], group: "options" },
+            { label: "Name", control: prefixControl(1, { help: FILENAME_HELP, name: "img" }), group: "options" },
+            { label: "Output", control: outputControl, widgets: ["save", "review", "review_timeout"], group: "options" },
+            { label: "Format", control: formatControl, widgets: ["format", "bit_depth", "input_color_space"], group: "options", when: saving },
             { widget: "crf", label: "CRF", group: "options", when: (values) => saving(values) && values.format === "avif" },
-            { widget: "review", label: "Review", group: "options", when: saving },
-            { widget: "review_timeout", label: "Timeout", suffix: "s", title: "Seconds to wait for your pick; then every image is saved. 0 waits until you decide.", group: "options", when: (values) => saving(values) && values.review },
             { label: "Image", control: pickerControl("saved"), when: (_values, n) => n._fb.saved.length > 1 },
             { label: "Compare", control: pickerControl("compare"), when: (_values, n) => n._fb.compare.length > 1 && (!n._fb.paired || n._fb.unpaired) },
             { panel: stagePanel, grow: true, height: STAGE_MIN_HEIGHT },

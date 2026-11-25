@@ -103,17 +103,17 @@ def _wait_for_review(item) -> str:
     return "decided"
 
 
-def _expand_time(text: str, exec_start) -> str:
-    """%time%: whole seconds from queueing the run (exec_start, stamped by the
-    UI) until this save, as in Save Video+."""
-    if "%time%" not in text:
+def _expand_elapsed(text: str, exec_start) -> str:
+    """%elapsed%: whole seconds from queueing the run (exec_start, stamped by the
+    UI) until this save."""
+    if "%elapsed%" not in text:
         return text
     try:
         start = float(str(exec_start).strip())
     except (TypeError, ValueError):
         start = 0.0
     elapsed = max(0.0, time.time() - start) if start > 0 else 0.0
-    return text.replace("%time%", str(int(round(elapsed))))
+    return text.replace("%elapsed%", str(int(round(elapsed))))
 
 
 def expand_name_tokens(text: str, width: int, height: int, exec_start) -> str:
@@ -121,9 +121,11 @@ def expand_name_tokens(text: str, width: int, height: int, exec_start) -> str:
     ComfyUI's save path knows
     %year% ... %height% too, but only when saving: expanding them here gives a
     preview (temp) name the same date and size."""
-    text = _expand_time(_expand_date_format(text), exec_start)
+    text = _expand_elapsed(_expand_date_format(text), exec_start)
     now = datetime.now()
     for token, value in (
+        # The short forms: %date% is 26-11-22, %time% 14-05-09.
+        ("%date%", f"{now.year % 100:02}-{now.month:02}-{now.day:02}"), ("%time%", f"{now.hour:02}-{now.minute:02}-{now.second:02}"),
         ("%year%", f"{now.year}"), ("%yy%", f"{now.year % 100:02}"), ("%month%", f"{now.month:02}"), ("%day%", f"{now.day:02}"),
         ("%hour%", f"{now.hour:02}"), ("%minute%", f"{now.minute:02}"), ("%second%", f"{now.second:02}"),
         ("%width%", str(width)), ("%height%", str(height)),
@@ -148,7 +150,7 @@ class SaveImagePlus:
                 "filename_prefix": (
                     "STRING",
                     {
-                        "default": "Pics/%yy%-%month%-%day%/img_%hour%_%minute%_%second%",
+                        "default": "Pics/%date%/img_%time%",
                         "tooltip": "Output path prefix. Supports %date:format% patterns.",
                     },
                 ),
@@ -185,7 +187,7 @@ class SaveImagePlus:
                 ),
                 "exec_start": (
                     "STRING",
-                    {"default": "", "tooltip": "Unix time stamped by the UI when the run is queued; enables %time% in filename_prefix."},
+                    {"default": "", "tooltip": "Unix time stamped by the UI when the run is queued; enables %elapsed% in filename_prefix."},
                 ),
             },
             "hidden": {

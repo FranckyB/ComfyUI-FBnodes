@@ -13,31 +13,78 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { mountCard } from "./fbui/card.js";
-import { toast } from "./fbui/comfy.js";
+import { notifyChange, toast } from "./fbui/comfy.js";
 import { button, ICONS } from "./fbui/controls.js";
 import { chainCallback, el } from "./fbui/dom.js";
+import { makeScrub } from "./fbui/scrub.js";
 import { findWidget, hideInputsInDef, hideWidget, suppressCorePreview } from "./fbui/widgets.js";
+import { chip, chipRow, comboSelect, prefixControl } from "./common/save_rows.js";
 import { CAPTION_HEIGHT } from "./fbui/theme.js";
 import { installExecStart } from "./common/exec_start.js";
 
 const NODE_NAME = "SaveVideoPlus";
 const LAST_RESULT_WIDGET = "_fbSaveVideoLastResult";
-const MIN_WIDTH = 300;
+const MIN_WIDTH = 380;
 const STAGE_MIN_HEIGHT = 200;
 
 // What the Filename field understands, shown from its (i).
 const FILENAME_HELP = [
-    "The default Vids/%yy%-%month%-%day%/vid_%hour%-%minute%-%second% saves Vids/26-11-22/vid_14-05-09.mp4 in the output folder (then _00001, _00002 … if the name is taken).",
-    ["a/b/name", "a / makes subfolders"],
-    ["%yy% %month% %day%", "today's date: 26 11 22"],
-    ["%year%", "the year in four digits: 2026"],
-    ["%hour% %minute% %second%", "the time now"],
-    ["%time%", "the seconds the run took, from pressing Queue"],
+    ["%date%", "today's date: 26-11-22"],
+    ["%time%", "the time now: 14-05-09"],
+    ["%elapsed%", "time in seconds the run took"],
     ["%width% %height%", "the video size"],
-    "With Save off, only the name after the last / is used, in the temp folder.",
+    "ComfyUI's own keywords work too, such as %year% or %date:yyyy-MM-dd%.",
 ];
 
 const first = (value) => (Array.isArray(value) ? value[0] : value);
+
+const saving = (node) => findWidget(node, "save")?.value !== false;
+const customEncoding = (node) => saving(node) && findWidget(node, "custom_encoding")?.value === true;
+
+// Save, Latent and Custom encoding; the last two grey out with Save off.
+function outputControl(node, card) {
+    const chips = [
+        chip(node, card, "save", { text: "Save", icon: ICONS.save, title: "Lit: save to the output folder. Unlit: a preview only, in temp." }),
+        chip(node, card, "save_latent", { text: "Latent", icon: ICONS.tiles, active: () => saving(node), title: "Lit: save the connected latent beside the video (same name, .latent)." }),
+        chip(node, card, "custom_encoding", { text: "Custom", icon: ICONS.film, active: () => saving(node), title: "Lit: encode with the codec, chroma and CRF below. Unlit: ComfyUI's own encoder, with the incoming video's settings." }),
+    ];
+    return { element: chipRow(...chips), sync: () => chips.forEach((item) => item.sync()) };
+}
+
+// Codec, chroma and CRF on one line, as Save Image+'s Format row.
+function encodingControl(node, card) {
+    const codec = comboSelect(node, card, "codec", { title: "Codec", labels: { h264: "H.264", h265: "H.265" } });
+    const chroma = comboSelect(node, card, "chroma", { title: "Chroma subsampling", labels: { yuv420: "4:2:0", yuv422: "4:2:2", yuv444: "4:4:4" } });
+    const options = findWidget(node, "crf")?.options ?? {};
+    const crf = makeScrub({
+        value: 0, min: options.min ?? 0, max: options.max ?? 51, step: 1, decimals: 0, unit: "crf",
+        title: "Quality: lower is better and larger.",
+        onChange: (value) => card.setWidget("crf", value, { settle: false }),
+        onSettle: notifyChange,
+    });
+    return {
+        element: chipRow(codec, chroma, crf.root),
+        sync() {
+            codec.sync();
+            chroma.sync();
+            crf.set(Number(findWidget(node, "crf")?.value) || 0);
+        },
+    };
+}
+
+// The on-node player: Autoplay, and Preview (a browser-playable copy, for
+// what the browser cannot play: the auto encoder's or H.265 output).
+function playerControl(node, card) {
+    const chips = [
+        chip(node, card, "auto_play", { text: "Autoplay", icon: ICONS.play, title: "Lit: the video plays on the node as soon as it is shown." }),
+        chip(node, card, "browser_compat", {
+            text: "Preview", icon: ICONS.eye,
+            active: () => saving(node) && (!customEncoding(node) || findWidget(node, "codec")?.value === "h265"),
+            title: "Lit: a clip the browser cannot play gets an H.264 copy for the node's player.",
+        }),
+    ];
+    return { element: chipRow(...chips), sync: () => chips.forEach((item) => item.sync()) };
+}
 
 // ---------------------------------------------------------------- result
 
@@ -51,6 +98,12 @@ function readResult(node) {
     }
 }
 
+// Runs started since the page loaded. ComfyUI hands a node its last output
+// again when its workflow tab is shown; only a result from a run started
+// since the node last showed one is new (Autoplay plays it).
+let runsStarted = 0;
+api.addEventListener("execution_start", () => { runsStarted += 1; });
+
 function setResult(node, payload) {
     const path = first(payload?.saved_video_path);
     if (typeof path !== "string") return false;
@@ -61,7 +114,9 @@ function setResult(node, payload) {
         preview: preview?.filename ? { filename: preview.filename, subfolder: preview.subfolder || "", type: preview.type || "output" } : null,
     };
     findWidget(node, LAST_RESULT_WIDGET).value = JSON.stringify(result);
-    node._fb.show(result, { fresh: true });
+    const fresh = node._fb.runsSeen !== runsStarted;
+    node._fb.runsSeen = runsStarted;
+    node._fb.show(result, { fresh });
     return true;
 }
 
@@ -206,7 +261,7 @@ const lastResults = new Map();
 function setupNode(node) {
     node.properties ??= {};
     suppressCorePreview(node);
-    const fb = { result: null, gone: false, size: null, duration: 0 };
+    const fb = { result: null, gone: false, size: null, duration: 0, runsSeen: runsStarted };
     node._fb = fb;
 
     // The last result, saved with the workflow; created last so it stays the
@@ -219,21 +274,15 @@ function setupNode(node) {
     hideWidget(lastResult);
     hideWidget(findWidget(node, "exec_start"));
 
-    const saving = (values) => values.save !== false;
-    const custom = (values) => saving(values) && values.custom_encoding === true;
     fb.card = mountCard(node, {
         minWidth: MIN_WIDTH,
         rows: [
             { group: "options", label: "Options" },
-            { widget: "filename_prefix", label: "Name", kind: "text", info: FILENAME_HELP, group: "options" },
-            { widget: "save", label: "Save", offText: "preview", onText: "save", group: "options" },
-            { widget: "custom_encoding", label: "Encoding", offText: "auto", onText: "custom", group: "options", when: saving },
-            { widget: "codec", label: "Codec", kind: "segment", labels: { h264: "H.264", h265: "H.265" }, group: "options", when: custom },
-            { widget: "chroma", label: "Chroma", kind: "segment", labels: { yuv420: "4:2:0", yuv422: "4:2:2", yuv444: "4:4:4" }, group: "options", when: custom },
-            { widget: "crf", label: "CRF", group: "options", when: custom },
-            { widget: "save_latent", label: "Latent", offText: "off", onText: "save", group: "options", when: saving },
-            { widget: "browser_compat", label: "Preview", offText: "off", onText: "on", group: "options", when: (values) => saving(values) && (values.custom_encoding !== true || values.codec === "h265") },
-            { widget: "auto_play", label: "Autoplay", group: "options" },
+            { label: "Folder", control: prefixControl(0, { help: FILENAME_HELP, name: "vid" }), widgets: ["filename_prefix"], group: "options" },
+            { label: "Name", control: prefixControl(1, { help: FILENAME_HELP, name: "vid" }), group: "options" },
+            { label: "Output", control: outputControl, widgets: ["save", "save_latent", "custom_encoding"], group: "options" },
+            { label: "Encoding", control: encodingControl, widgets: ["codec", "chroma", "crf"], group: "options", when: (_values, n) => customEncoding(n) },
+            { label: "Player", control: playerControl, widgets: ["auto_play", "browser_compat"], group: "options" },
             { panel: stagePanel, grow: true, height: STAGE_MIN_HEIGHT },
             { panel: captionPanel, height: CAPTION_HEIGHT },
         ],

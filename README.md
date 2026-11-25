@@ -12,7 +12,7 @@ Save video with workflow metadata, date-token filenames and a player on the node
 - **Preview mode**: Save off writes a quick preview to temp; a video that is already browser-playable is shown as it is, without encoding
 - **Browser preview**: clips the browser cannot play get an H.264 preview copy, or a still frame with an "open in system player" button
 - **Latent saving**: Optionally save the latent alongside the video for easy re-generation
-- **Filename tokens**: `%yy%` `%year%` `%month%` `%day%` `%hour%` `%minute%` `%second%`, `%width%` `%height%`, `%time%` (seconds the run took); the (i) beside Filename lists them
+- **Filename tokens**: `%date%` (26-11-22), `%time%` (14-05-09), `%yy%` `%year%` `%month%` `%day%` `%hour%` `%minute%` `%second%`, `%width%` `%height%`, `%elapsed%` (seconds the run took); the (i) beside Filename lists them
 
 ### Save Image+
 Save images with date-token filenames, output/temp switching, an optional Compare image input and an optional review before saving. Settings sit under **Options**.
