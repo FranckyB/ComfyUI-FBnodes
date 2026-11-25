@@ -48,7 +48,7 @@ const FORMAT_OPTIONS = {
     avif: { bit_depth: ["auto", "8-bit YUV420", "10-bit YUV420"], input_color_space: ["sRGB", "HDR", "HDR PQ"] },
 };
 
-const CSS_ID = "fbnodes-save-image-css-v1";
+const CSS_ID = "fbnodes-save-image-css-v2";
 function ensureCss() {
     if (document.getElementById(CSS_ID)) return;
     const style = document.createElement("style");
@@ -60,7 +60,9 @@ function ensureCss() {
 .fbnodes-save .grid img{width:100%;height:100%;object-fit:contain;border-radius:${RADIUS - 2}px;background:${T.card};outline:1px solid ${T.plateEdge};cursor:pointer;display:block}
 .fbnodes-save .grid img:hover{outline:2px solid ${T.brand}}
 .fbnodes-save-picker{display:flex;align-items:center;gap:6px;min-width:0;width:100%}
-.fbnodes-save-picker .fbui-seg{flex:1;min-width:0}
+.fbnodes-save-picker .fbui-seg{flex:1;min-width:0;gap:4px;padding:0;background:none}
+.fbnodes-save-picker .fbui-seg button:not(.on){background:${T.fill}}
+.fbnodes-save-picker .fbui-seg button:not(.on):hover{background:${T.fillHover}}
 .fbnodes-save-picker .where{flex:1;text-align:center;color:${T.label};font:600 11px system-ui;font-variant-numeric:tabular-nums}
 `;
     document.head.append(style);
@@ -523,6 +525,8 @@ function installKeys() {
     window.addEventListener("keydown", (event) => {
         if (event.defaultPrevented || event.ctrlKey || event.altKey || event.metaKey) return;
         if (/^(INPUT|TEXTAREA|SELECT)$/.test(event.target?.tagName ?? "") || event.target?.isContentEditable) return;
+        // An open review owns the keys (its Esc skips).
+        if (document.querySelector(".fbnodes-review")) return;
         const node = hovered?.graph && !hovered.flags?.collapsed ? hovered : null;
         if (!node) return;
         const fb = node._fb;

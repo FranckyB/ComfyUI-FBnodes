@@ -334,6 +334,9 @@ class SaveImagePlus:
             ui_images, last_file = self._review(
                 ui_images, written_paths, filename_prefix, width, height, ext, review_timeout, unique_id
             )
+            if not ui_images:
+                # Nothing kept: no ui, so the node keeps showing what it showed before.
+                return {"result": ("",)}
 
         if Compare is not None and len(Compare) > 0:
             temp_dir = folder_paths.get_temp_directory()
@@ -392,8 +395,7 @@ class SaveImagePlus:
         # Nobody answered in time: everything is saved.
         selected = (item["selected"] or []) if outcome == "decided" else list(range(len(ui_images)))
         if not selected:
-            # Nothing kept: the node still shows what was made, from temp.
-            return ui_images, ""
+            return [], ""
 
         full_output_folder, filename, counter, subfolder, _ = folder_paths.get_save_image_path(
             filename_prefix, folder_paths.get_output_directory(), width, height

@@ -102,6 +102,13 @@ class SaveImageTests(unittest.TestCase):
         self.assertEqual(self.events[-1], ("fbnodes.save_image.review_done", {"request_id": announced["request_id"], "outcome": "decided"}))
         self.assertEqual(self.env["_PENDING_REVIEWS"], {})
 
+    def test_skipped_review_saves_nothing_and_leaves_the_view(self):
+        self.answer = []
+        result = self.node.save_images(self.images, "prefix", review=True, review_timeout=0)
+        self.assertEqual(list(self.output.iterdir()), [])
+        # No ui: the node keeps showing its last images.
+        self.assertEqual(result, {"result": ("",)})
+
     def test_review_timeout_saves_everything(self):
         result = self.node.save_images(self.images, "prefix", review=True, review_timeout=1)
         self.assertEqual(self.events[-1][1]["outcome"], "timeout")
