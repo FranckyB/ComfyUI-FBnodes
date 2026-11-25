@@ -8,7 +8,7 @@
 // Bump once per release that changes the CSS below (against the last pushed
 // value, not per local edit). Two packs shipping the same version inject one
 // stylesheet; different versions both inject and the later wins.
-export const KIT_VERSION = 15;
+export const KIT_VERSION = 16;
 
 export const T = Object.freeze({
   brand: "#4299e1",          // the one accent: picked segment, switch on, focus ring
@@ -71,7 +71,7 @@ const CHEVRON = `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/sv
 export function kitCss() {
   return `
 .fbui-card{position:relative;box-sizing:border-box;width:100%;height:100%;display:flex;flex-direction:column;gap:${ROW_GAP}px;padding:${CARD_PADDING}px 12px;overflow:hidden;border-radius:${RADIUS_CARD}px;background:${T.card};font:12px/1.3 ${FONT};color:${T.inkSoft};pointer-events:none}
-.fbui-row{display:grid;grid-template-columns:minmax(52px,24%) 1fr;align-items:center;gap:10px;height:${ROW_HEIGHT}px;flex:none;pointer-events:auto}
+.fbui-row{display:grid;grid-template-columns:minmax(0,min(var(--fbui-label-w,24%),40%)) 1fr;align-items:center;gap:10px;height:${ROW_HEIGHT}px;flex:none;pointer-events:auto}
 .fbui-row.wide{grid-template-columns:1fr}
 .fbui-card .hidden{display:none!important}
 .fbui-row.linked{opacity:.5}

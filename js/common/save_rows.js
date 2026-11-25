@@ -2,7 +2,7 @@
 // Folder | Name pair (as AusBoss's savers), lit chips for on/off widgets (as
 // Load Image+'s tools), dropdowns for combo widgets, and three equal columns
 // so the rows line up.
-import { button, info } from "../fbui/controls.js";
+import { button } from "../fbui/controls.js";
 import { el, keepKeyInField } from "../fbui/dom.js";
 import { comboValues, findWidget } from "../fbui/widgets.js";
 
@@ -17,9 +17,8 @@ const splitPrefix = (prefix) => {
 };
 
 // One half of filename_prefix: the folder (before the last /, part 0) or the
-// name (part 1). Both write the one widget, so nothing else changes. The
-// folder's label carries the keyword help.
-export function prefixControl(part, { help, name }) {
+// name (part 1). Both write the one widget, so nothing else changes.
+export function prefixControl(part, { name }) {
     return (node, card) => {
         const input = el("input", "fbui-text");
         input.type = "text";
@@ -35,13 +34,8 @@ export function prefixControl(part, { help, name }) {
             keepKeyInField(event);
             if (event.key === "Enter") input.blur();
         });
-        const label = el("span", "fbui-label");
-        label.style.cssText = "display:flex;align-items:center;gap:6px";
-        label.append(part === 0 ? "Folder" : "Name");
-        if (part === 0) label.append(info(help));
         return {
             element: input,
-            label,
             sync() {
                 if (document.activeElement !== input) input.value = splitPrefix(findWidget(node, "filename_prefix")?.value)[part];
             },

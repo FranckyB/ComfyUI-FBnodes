@@ -14,7 +14,7 @@ import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { mountCard } from "./fbui/card.js";
 import { notifyChange, toast } from "./fbui/comfy.js";
-import { button, ICONS } from "./fbui/controls.js";
+import { button, helpBadge, ICONS } from "./fbui/controls.js";
 import { chainCallback, el } from "./fbui/dom.js";
 import { makeScrub } from "./fbui/scrub.js";
 import { findWidget, hideInputsInDef, hideWidget, suppressCorePreview } from "./fbui/widgets.js";
@@ -27,8 +27,9 @@ const LAST_RESULT_WIDGET = "_fbSaveVideoLastResult";
 const MIN_WIDTH = 380;
 const STAGE_MIN_HEIGHT = 200;
 
-// What the Filename field understands, shown from its (i).
+// What Folder and Name understand, shown from the title bar's "?".
 const FILENAME_HELP = [
+    "Folder and Name understand:",
     ["%date%", "today's date: 26-11-22"],
     ["%time%", "the time now: 14-05-09"],
     ["%elapsed%", "time in seconds the run took"],
@@ -278,8 +279,8 @@ function setupNode(node) {
         minWidth: MIN_WIDTH,
         rows: [
             { group: "options", label: "Options" },
-            { label: "Folder", control: prefixControl(0, { help: FILENAME_HELP, name: "vid" }), widgets: ["filename_prefix"], group: "options" },
-            { label: "Name", control: prefixControl(1, { help: FILENAME_HELP, name: "vid" }), group: "options" },
+            { label: "Folder", control: prefixControl(0, { name: "vid" }), widgets: ["filename_prefix"], group: "options" },
+            { label: "Name", control: prefixControl(1, { name: "vid" }), group: "options" },
             { label: "Output", control: outputControl, widgets: ["save", "save_latent", "custom_encoding"], group: "options" },
             { label: "Encoding", control: encodingControl, widgets: ["codec", "chroma", "crf"], group: "options", when: (_values, n) => customEncoding(n) },
             { label: "Player", control: playerControl, widgets: ["auto_play", "browser_compat"], group: "options" },
@@ -287,6 +288,7 @@ function setupNode(node) {
             { panel: captionPanel, height: CAPTION_HEIGHT },
         ],
     });
+    helpBadge(node, FILENAME_HELP);
 
     chainCallback(node, "onExecuted", (message) => setResult(node, message));
     chainCallback(node, "onConfigure", () => {

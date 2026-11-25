@@ -484,11 +484,6 @@ function editControl(node) {
     const flipX = button("", { icon: ICONS.flipX, title: "Flip horizontally", onClick: flip("flip_x") });
     const flipY = button("", { icon: ICONS.flipY, title: "Flip vertically", onClick: flip("flip_y") });
     tools.append(mask, crop, pad, rotate, scale, flipX, flipY);
-    // "Edit" with a reset for everything beside it, while anything is edited.
-    const label = el("span", "fbui-label");
-    label.style.cssText = "display:flex;align-items:center;gap:6px";
-    const resetEverything = button("", { icon: ICONS.reset, small: true, danger: true, title: "Reset all edits (asks first)", onClick: () => resetAll(node) });
-    label.append("Edit", resetEverything);
     // A narrow node keeps the icons; the words come back when it widens.
     new ResizeObserver(() => {
         const compact = tools.clientWidth < EDIT_LABELS_MIN;
@@ -496,9 +491,7 @@ function editControl(node) {
     }).observe(tools);
     return {
         element: tools,
-        label,
         sync() {
-            resetEverything.hidden = !anyEdit(node);
             const flips = getFlips(node);
             for (const [control, name] of [[mask, "mask"], [crop, "crop"], [pad, "pad"], [rotate, "rotate"], [scale, "scale"]]) {
                 control.classList.toggle("primary", fb.tool === name);
@@ -877,14 +870,20 @@ const RESET_TITLES = {
     scale: "Reset the scale",
 };
 
-// The Options header's reset, for whichever tool is active.
+// The Options header's resets: Reset all while edits other than the active
+// tool's are on, then Reset for whichever tool is active.
 function toolReset(node) {
     const fb = node._fb;
+    const all = button("Reset all", { small: true, danger: true, title: "Reset all edits (asks first)", onClick: () => resetAll(node) });
     const reset = button("Reset", { small: true, onClick: () => fb.tool && resetTool(node, fb.tool) });
+    const element = el("div");
+    element.style.cssText = "display:flex;gap:6px";
+    element.append(all, reset);
     return {
-        element: reset,
+        element,
         sync() {
             const tool = fb.tool;
+            all.hidden = otherEdits(node, tool) === 0;
             reset.hidden = !tool;
             reset.disabled = !tool || !toolEdited(node, tool);
             if (tool) reset.title = RESET_TITLES[tool];
@@ -917,9 +916,10 @@ async function resetAll(node) {
     notifyChange();
 }
 
-const anyEdit = (node) => {
+// Edits on besides `tool`'s: each tool that is on or changed, and each flip.
+const otherEdits = (node, tool) => {
     const flips = getFlips(node);
-    return TOOLS.some((name) => node._fb[name].enabled || toolEdited(node, name)) || flips.x || flips.y;
+    return TOOLS.filter((name) => name !== tool && (node._fb[name].enabled || toolEdited(node, name))).length + flips.x + flips.y;
 };
 
 // An icon naming the field after it (ratio, feather), its title the field's.

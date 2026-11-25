@@ -310,7 +310,7 @@ app.registerExtension({
             mountCard(this, {
                 minWidth: 260,
                 rows: [
-                    { widget: "enable", label: "Review", offText: "off", onText: "on" },
+                    { widget: "enable", label: "Review" },
                     { widget: "fps", label: "FPS", when: reviewing },
                     { widget: "timeout", label: "Timeout", suffix: "s", title: "Seconds to wait for your decision (0 = until you decide)", when: reviewing },
                     { widget: "on_timeout", label: "Then", kind: "segment", labels: { proceed: "proceed", cancel: "cancel" }, title: "What happens when the timer runs out", when: onTimeout },

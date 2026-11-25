@@ -13,7 +13,7 @@ import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { mountCard } from "./fbui/card.js";
 import { notifyChange, toast } from "./fbui/comfy.js";
-import { button, ICONS, segmented } from "./fbui/controls.js";
+import { button, helpBadge, ICONS, segmented } from "./fbui/controls.js";
 import { chainCallback, el } from "./fbui/dom.js";
 import { openMenu, openViewer } from "./fbui/modal.js";
 import { makeScrub } from "./fbui/scrub.js";
@@ -31,8 +31,9 @@ const STAGE_MIN_HEIGHT = 200;
 const MANY = 8;
 const GRID_GAP = 6;
 
-// What the Filename field understands, shown from its (i).
+// What Folder and Name understand, shown from the title bar's "?".
 const FILENAME_HELP = [
+    "Folder and Name understand:",
     ["%date%", "today's date: 26-11-22"],
     ["%time%", "the time now: 14-05-09"],
     ["%elapsed%", "time in seconds the run took"],
@@ -562,8 +563,8 @@ function setupNode(node) {
         minWidth: MIN_WIDTH,
         rows: [
             { group: "options", label: "Options" },
-            { label: "Folder", control: prefixControl(0, { help: FILENAME_HELP, name: "img" }), widgets: ["filename_prefix"], group: "options" },
-            { label: "Name", control: prefixControl(1, { help: FILENAME_HELP, name: "img" }), group: "options" },
+            { label: "Folder", control: prefixControl(0, { name: "img" }), widgets: ["filename_prefix"], group: "options" },
+            { label: "Name", control: prefixControl(1, { name: "img" }), group: "options" },
             { label: "Output", control: outputControl, widgets: ["save", "review", "review_timeout"], group: "options" },
             { label: "Format", control: formatControl, widgets: ["format", "bit_depth", "input_color_space"], group: "options", when: saving },
             { widget: "crf", label: "CRF", group: "options", when: (values) => saving(values) && values.format === "avif" },
@@ -573,6 +574,7 @@ function setupNode(node) {
             { panel: captionPanel, height: CAPTION_HEIGHT },
         ],
     });
+    helpBadge(node, FILENAME_HELP);
 
     const card = fb.card.root;
     card.addEventListener("pointerenter", () => { hovered = node; });
