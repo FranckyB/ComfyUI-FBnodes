@@ -24,7 +24,7 @@
 // Options: minWidth, first (place before the node's other DOM widgets).
 import { chainCallback, el, keepDomWidgetWidthAuto, keepKeyInField } from "./dom.js";
 import { notifyChange } from "./comfy.js";
-import { button as makeButton, info as infoIcon, segmented } from "./controls.js";
+import { button as makeButton, info as infoIcon, segmented, toggleSwitch } from "./controls.js";
 import { cardHeight, choiceLabel, isGroupHeader, rowHeight, rowKind, rowTops, socketWidgetY, visibleRows } from "./card_math.js";
 import { ensureNodeMinHeight, fillNodeHeight, pinHeight, WIDGET_FRAME } from "./layout.js";
 import { makeScrub, scrubSteps } from "./scrub.js";
@@ -106,10 +106,10 @@ export function mountCard(node, { rows, minWidth = 280, first = false } = {}) {
       };
     },
     switch(name, row, into) {
-      const seg = segmented([{ value: false, label: row.offText ?? "off" }, { value: true, label: row.onText ?? "on" }], { bool: true, onPick: (value) => setWidget(name, value) });
-      seg.root.title = row.title ?? widgetTooltip(node, name);
-      into.append(seg.root);
-      return (vals) => seg.set(Boolean(vals[name]));
+      const words = row.offText || row.onText ? [row.offText ?? "off", row.onText ?? "on"] : null;
+      const control = toggleSwitch({ words, title: row.title ?? widgetTooltip(node, name), onPick: (value) => setWidget(name, value) });
+      into.append(control.root);
+      return (vals) => control.set(Boolean(vals[name]));
     },
     select(name, row, into) {
       const widget = findWidget(node, name);
