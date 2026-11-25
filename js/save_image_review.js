@@ -2,7 +2,7 @@
  * Save Image+ review: when the node's `review` is on, the run pauses and the
  * images waiting in temp fill the screen. Click the ones to keep, then Send:
  * the picked ones move to the output folder (none picked sends none). Skip
- * keeps none. When the node's timer runs out, every image is saved.
+ * (or Esc) keeps none. When the node's timer runs out, every image is saved.
  *
  * Space shows one image at the full size of the screen (←/→ step through,
  * a click picks it, Space or Esc go back to all of them). Enter sends.
@@ -91,12 +91,12 @@ function showReview(detail, done) {
         onPause: () => answer(requestId, { action: "pause" }),
         onResume: (seconds) => answer(requestId, { action: "resume", seconds }),
     });
-    const skip = button("Skip", { grow: true, title: "Keep none of them", onClick: () => finish({ action: "skip" }) });
+    const skip = button("Skip", { grow: true, title: "Keep none of them (Esc)", onClick: () => finish({ action: "skip" }) });
     const send = button("Send", { grow: true, primary: true, title: "Save the picked images (Enter)", onClick: () => finish({ action: "save", indices: [...picked].sort((a, b) => a - b) }) });
     const actions = el("div", "actions");
     actions.append(skip, send);
     const hint = el("div", "hint");
-    hint.innerHTML = "Click to pick · <kbd>Space</kbd> one at a time · <kbd>←</kbd><kbd>→</kbd> step · <kbd>Enter</kbd> send";
+    hint.innerHTML = "Click to pick · <kbd>Space</kbd> one at a time · <kbd>←</kbd><kbd>→</kbd> step · <kbd>Enter</kbd> send · <kbd>Esc</kbd> skip";
     panel.append(title, count, timer.pill, timer.bar, actions, hint);
 
     // ---- the pictures
@@ -202,11 +202,14 @@ function showReview(detail, done) {
         if (key === " ") {
             if (single >= 0) showAll();
             else showSingle(hovered);
-        } else if (key === "Escape" && single >= 0) showAll();
+        } else if (key === "Escape") {
+            if (single >= 0) showAll();
+            else skip.click();
+        }
         else if (key === "ArrowLeft" || key === "ArrowRight") showSingle((single >= 0 ? single : hovered) + (key === "ArrowRight" ? 1 : -1));
         else if (key === "Enter") send.click();
         else if (/^[1-9]$/.test(key)) toggle(Number(key) - 1);
-        else handled = key === "Escape";
+        else handled = false;
         // Keys never reach the canvas while the review is up.
         event.stopPropagation();
         if (handled) event.preventDefault();
