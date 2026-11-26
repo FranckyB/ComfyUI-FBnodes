@@ -93,8 +93,10 @@ function showReview(detail, done) {
     });
     const skip = button("Skip", { grow: true, title: "Keep none of them (Esc)", onClick: () => finish({ action: "skip" }) });
     const send = button("Send", { grow: true, primary: true, title: "Save the picked images (Enter)", onClick: () => finish({ action: "save", indices: [...picked].sort((a, b) => a - b) }) });
+    // Send (2/3, big) before Skip (1/3).
+    send.classList.add("major", "accept");
     const actions = el("div", "actions");
-    actions.append(skip, send);
+    actions.append(send, skip);
     const hint = el("div", "hint");
     hint.innerHTML = "Click to pick · <kbd>Space</kbd> one at a time · <kbd>←</kbd><kbd>→</kbd> step · <kbd>Enter</kbd> send · <kbd>Esc</kbd> skip";
     panel.append(title, count, timer.pill, timer.bar, actions, hint);

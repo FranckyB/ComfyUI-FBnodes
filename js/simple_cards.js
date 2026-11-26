@@ -47,6 +47,9 @@ const CARDS = {
     ],
 };
 
+// Cards that only need room for a number, narrower than the default.
+const MIN_WIDTHS = { ApplyLoraPlus: 200, ApplyLTXLoraPlus: 200 };
+
 app.registerExtension({
     name: "FBnodes.SimpleCards",
     beforeRegisterNodeDef(nodeType, nodeData) {
@@ -54,7 +57,7 @@ app.registerExtension({
         if (!rows) return;
         hideInputsInDef(nodeData, rows.flatMap((row) => row.pair ?? (row.widget ? [row.widget] : [])));
         chainCallback(nodeType.prototype, "onNodeCreated", function () {
-            mountCard(this, { minWidth: 260, rows });
+            mountCard(this, { minWidth: MIN_WIDTHS[nodeData.name] ?? 260, rows });
         });
     },
 });

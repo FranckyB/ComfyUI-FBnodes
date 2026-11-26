@@ -28,7 +28,6 @@ function ensureVideoReviewCss() {
     style.id = CSS_ID;
     style.textContent = `
 .fbnodes-review-video{width:100%;height:100%;object-fit:contain;display:block;background:#000}
-.fbnodes-review-panel .wide{width:100%}
 `;
     document.head.append(style);
 }
@@ -206,15 +205,17 @@ function showReview(detail, done) {
         onPause: () => answer(requestId, { action: "pause" }),
         onResume: (seconds) => answer(requestId, { action: "resume", seconds }),
     });
+    // Requeue (2/3) and Cancel (1/3) on one line, Proceed big beneath them.
+    const requeue = button("Requeue", { grow: true, title: "Stop the run and queue the workflow again", onClick: requeueRun });
+    requeue.classList.add("major");
     const cancel = button("Cancel", { grow: true, title: "Stop the run here", onClick: () => decide("cancel") });
-    const proceed = button("Proceed", { grow: true, primary: true, title: "Let the run go on (Enter)", onClick: () => decide("proceed") });
     const actions = el("div", "actions");
-    actions.append(cancel, proceed);
-    const requeue = button("Requeue", { title: "Stop the run and queue the workflow again", onClick: requeueRun });
-    requeue.classList.add("wide");
+    actions.append(requeue, cancel);
+    const proceed = button("Proceed", { primary: true, title: "Let the run go on (Enter)", onClick: () => decide("proceed") });
+    proceed.classList.add("accept");
     const hint = el("div", "hint");
     hint.innerHTML = "<kbd>Space</kbd> play / pause · <kbd>←</kbd><kbd>→</kbd> frame · <kbd>Enter</kbd> proceed";
-    panel.append(title, count, timer.pill, timer.bar, actions, requeue, hint);
+    panel.append(title, count, timer.pill, timer.bar, actions, proceed, hint);
     root.append(area, panel);
     document.body.append(root);
 

@@ -23,6 +23,9 @@ export function ensureReviewCss() {
 .fbnodes-review-panel .count{color:${T.label};font-variant-numeric:tabular-nums}
 .fbnodes-review-panel .count b{color:${T.ink}}
 .fbnodes-review-panel .actions{display:flex;gap:6px}
+.fbnodes-review-panel .actions .major{flex:2 1 0}
+.fbnodes-review-panel .accept{width:100%;height:36px;font-size:13px}
+.fbnodes-review-panel .actions:has(.accept) .fbui-btn{height:36px}
 .fbnodes-review-panel .hint{color:${T.faint};font-size:11px;line-height:1.5}
 .fbnodes-review-panel kbd{padding:0 4px;border-radius:3px;background:${T.fill};color:${T.label};font:600 10px ${FONT}}
 .fbnodes-review-timer{display:flex;align-items:center;justify-content:center;gap:6px;height:26px;border:none;border-radius:999px;background:${T.brandSoft};color:${T.brandInk};font:600 11px ${FONT};font-variant-numeric:tabular-nums;cursor:pointer}
